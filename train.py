@@ -60,6 +60,22 @@ def compute_leadtimes(
 
     raise ValueError(f"Unsupported leadtime_unit={leadtime_unit}")
 
+def add_or_set_leadtime(ds: xr.Dataset, lt: int) -> xr.Dataset:
+    # If leadtime already exists as a dimension, select/squeeze it
+    if "leadtime" in ds.dims:
+        if ds.sizes["leadtime"] == 1:
+            ds = ds.isel(leadtime=0, drop=True)
+        else:
+            raise ValueError(f"Expected one leadtime in saved prediction, got {ds.sizes['leadtime']}")
+
+    # If leadtime exists only as a scalar coordinate or variable, remove it
+    if "leadtime" in ds.coords:
+        ds = ds.drop_vars("leadtime")
+    elif "leadtime" in ds.data_vars:
+        ds = ds.drop_vars("leadtime")
+
+    return ds.expand_dims(leadtime=[lt])
+
 
 def compute_valid_times(
     init_times,
@@ -967,7 +983,7 @@ def train(
 
     # Combine all leadtimes
     preds_ds_list = [
-        open_zarr(path).expand_dims(leadtime=[lt])
+        add_or_set_leadtime(open_zarr(path), lt)
         for lt, path in pred_paths
     ]
     all_preds = xr.concat(
@@ -985,7 +1001,7 @@ def train(
     print(f"Final combined test preds dataset: {all_preds.dims}")
 
     train_ds_list = [
-        open_zarr(path).expand_dims(leadtime=[lt])
+        add_or_set_leadtime(open_zarr(path), lt)
         for lt, path in train_pred_paths
     ]
     all_train_preds = xr.concat(
