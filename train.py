@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from dask.diagnostics.progress import ProgressBar
+
 import torch
 from torch.utils.data import DataLoader
 import lightning as L
@@ -111,6 +113,7 @@ def make_leadtime_pair(
     analysis_vars: Sequence | None = None,
     lat: Sequence | None = None,
     lon: Sequence | None = None,
+    interpolate: bool = True,
 ):
     fc_ds = open_zarr(forecast_ds_path)
     an_ds = open_zarr(analysis_ds_path)
@@ -134,6 +137,7 @@ def make_leadtime_pair(
         an_ds: xr.Dataset,
         start: str,
         end: str,
+        label: str = "",
     ) -> tuple[xr.Dataset, xr.Dataset]:
         # Select forecast starts and the requested leadtime
         fc_ds = fc_ds.sel({
@@ -164,15 +168,24 @@ def make_leadtime_pair(
             time_dim: fc_ds[time_dim].values
         })
 
-        # Regrid analysis into forecast
-        an_ds = an_ds.interp(
-            latitude=fc_ds.latitude,
-            longitude=fc_ds.longitude,
-        )
+        if interpolate:
+            # Regrid analysis into forecast
+            an_ds = an_ds.interp(
+                latitude=fc_ds.latitude,
+                longitude=fc_ds.longitude,
+            )
 
-        return xr.align(fc_ds, an_ds, join="exact")
+        fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
 
-    fc_train_ds, an_train_ds = _gen_fc_an_ds(fc_ds, an_ds, start, end)
+        with ProgressBar():
+            print(f"Materialize {label} input dataset")
+            fc_ds = fc_ds.load()
+            print(f"Materialize {label} target dataset")
+            an_ds = an_ds.load()
+
+        return fc_ds, an_ds
+
+    fc_train_ds, an_train_ds = _gen_fc_an_ds(fc_ds, an_ds, start, end, "train")
 
     if target_mode == "analysis":
         return fc_train_ds, an_train_ds, None, None
@@ -188,7 +201,7 @@ def make_leadtime_pair(
             leadtime_dim: int(leadtime),
         })
 
-        fc_clim_ds, an_clim_ds = _gen_fc_an_ds(fc_ds, an_ds, clim_start, clim_end)
+        fc_clim_ds, an_clim_ds = _gen_fc_an_ds(fc_ds, an_ds, clim_start, clim_end, "test")
 
         fc_clim: xr.Dataset = calculate_climatology(fc_clim_ds, time_dim, clim_period)
         an_clim: xr.Dataset = calculate_climatology(an_clim_ds, time_dim, clim_period)
@@ -233,6 +246,7 @@ def make_train_test_datasets_for_leadtime(
     analysis_vars: Sequence[str] | None = None,
     region: dict | None = None,
     dataset_kwargs: dict | None = None,
+    interpolate: bool = True,
 ) -> LeadtimeDatasets:
     dataset_kwargs = dataset_kwargs or {}
 
@@ -250,6 +264,7 @@ def make_train_test_datasets_for_leadtime(
         analysis_vars=analysis_vars,
         lon=region["lon"] if region is not None else None,
         lat=region["lat"] if region is not None else None,
+        interpolate=interpolate,
     )
 
     x_test, y_test, _, _ = make_leadtime_pair(
@@ -266,6 +281,7 @@ def make_train_test_datasets_for_leadtime(
         analysis_vars=analysis_vars,
         lon=region["lon"] if region is not None else None,
         lat=region["lat"] if region is not None else None,
+        interpolate=interpolate,
     )
 
     train_ds = XarrayDataset(x_train, y_train, **dataset_kwargs)
@@ -277,48 +293,6 @@ def make_train_test_datasets_for_leadtime(
         "x_clim": x_clim,
         "y_clim": y_clim,
     }
-
-
-def make_train_test_datasets_all_leadtimes(
-    forecast_ds_path: str | Path,
-    analysis_ds_path: str | Path,
-    leadtimes: Sequence[int | float],
-    leadtime_unit: LeadtimeUnit,
-    train_start: str,
-    train_end: str,
-    test_start: str,
-    test_end: str,
-    target_mode: Literal[
-        "analysis",
-        "residual",
-        "anomaly",
-        "anomaly_residual",
-    ] = "analysis",
-    forecast_vars: Sequence[str] | None = None,
-    analysis_vars: Sequence[str] | None = None,
-    region: dict | None = None,
-    dataset_kwargs: dict | None = None,
-) -> dict[str, LeadtimeDatasets]:
-    datasets: dict[str, LeadtimeDatasets] = {}
-
-    for leadtime in leadtimes:
-        datasets[str(leadtime)] = make_train_test_datasets_for_leadtime(
-            forecast_ds_path=forecast_ds_path,
-            analysis_ds_path=analysis_ds_path,
-            leadtime=leadtime,
-            leadtime_unit=leadtime_unit,
-            train_start=train_start,
-            train_end=train_end,
-            test_start=test_start,
-            test_end=test_end,
-            target_mode=target_mode,
-            forecast_vars=forecast_vars,
-            analysis_vars=analysis_vars,
-            region=region,
-            dataset_kwargs=dataset_kwargs,
-        )
-
-    return datasets
 
 
 def resolve_accelerator_and_device() -> tuple[str, torch.device]:
@@ -646,15 +620,23 @@ def train(
 ) -> None:
     dry_run = False
     force_retrain = False
+    interpolate = False
+
+    accelerator, device = resolve_accelerator_and_device()
+
+    if accelerator == "gpu":
+        torch.set_float32_matmul_precision("high")
 
     s = Settings(
         root_dir=Path("/Users/jacopodallaglio/ML/seasonal/"),
-        lead_month_offset=-1,
+        lead_period_offset=0,
         var_fc=var,
         var_an=var,
         model_fc="sps4_atmo",
         model_an="era5",
         leadtime_unit="month",
+        leadtimes=[1, 2, 3, 4, 5, 5],
+        leadtime_unit="hour",
         region_name=region_name,
         region=region_location,
         train_start="1993-01-01",
@@ -670,17 +652,20 @@ def train(
         loss_name="MSELoss",
         init_learning_rate=3e-4,
         weight_decay=1e-4,
-        batch_size=32,
+        batch_size=8,
         max_epochs=50,
+        target_realization_avg=False,
+        fill_nan_value=0.0,
+        torch_mask="target",
         training_norm="GroupNorm",
         reduction_ratio=16,
         kernels_per_layer=1,
         base_channels=32,
         train_fraction=0.85,
-        accumulate_grad_batches=2,
+        accumulate_grad_batches=4,
         early_stopping_patience=10,
-        torch_workers=1,
-        trainer_precision="32-true",
+        torch_workers=4,
+        trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
     s.make_dirs()
     s.save_config()
@@ -690,30 +675,6 @@ def train(
 
     L.seed_everything(s.seed)
 
-    datasets_by_lt_d = make_train_test_datasets_all_leadtimes(
-        forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
-        analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
-        leadtimes=[1, 2, 3, 4, 5, 6],
-        leadtime_unit=LeadtimeUnit(s.leadtime_unit),
-        train_start=s.train_start,
-        train_end=s.train_end,
-        test_start=s.test_start,
-        test_end=s.test_end,
-        target_mode=s.target_mode,
-        forecast_vars=[s.var_fc],
-        analysis_vars=[s.var_an],
-        region=s.region,
-        dataset_kwargs={ # see XarrayDataset
-            "target_realization_avg": False,
-            "realization_as_channel": s.realization_as_channel,
-            "output_realizations": s.output_realizations,
-            "torch_mask": "target",
-            "fill_nan_value": 0.0,
-        },
-    )
-
-    accelerator, device = resolve_accelerator_and_device()
-
     base_loss_params = {
         "loss": {},
         "net": {},
@@ -721,7 +682,30 @@ def train(
 
     pred_paths: list[tuple[int, Path]] = []
     train_pred_paths: list[tuple[int, Path]] = []
-    for lt, dataset_d in datasets_by_lt_d.items():
+    for lt in s.leadtimes:
+        dataset_d = make_train_test_datasets_for_leadtime(
+            forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
+            analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
+            leadtime=lt,
+            leadtime_unit=LeadtimeUnit(s.leadtime_unit),
+            train_start=s.train_start,
+            train_end=s.train_end,
+            test_start=s.test_start,
+            test_end=s.test_end,
+            target_mode=s.target_mode,
+            forecast_vars=[s.var_fc],
+            analysis_vars=[s.var_an],
+            region=s.region,
+            dataset_kwargs={
+                "target_realization_avg": s.target_realization_avg,
+                "realization_as_channel": s.realization_as_channel,
+                "output_realizations": s.output_realizations,
+                "torch_mask": s.torch_mask,
+                "fill_nan_value": s.fill_nan_value,
+            },
+            interpolate=interpolate,
+        )
+
         exp_name = f"exp_{lt}_{s.leadtime_unit}"
 
         # Create exp dirs
@@ -794,7 +778,9 @@ def train(
             test_dataset,
             batch_size=1, 
             num_workers=s.torch_workers,
-            shuffle=False
+            shuffle=False,
+            pin_memory = (accelerator == "gpu"),
+            persistent_workers=s.torch_workers > 0,
         )
 
         train_test_dataloader = DataLoader(
@@ -802,6 +788,8 @@ def train(
             batch_size=1,
             num_workers=s.torch_workers,
             shuffle=False,
+            pin_memory = (accelerator == "gpu"),
+            persistent_workers=s.torch_workers > 0,
         )
 
         print_training_recap(
@@ -833,7 +821,7 @@ def train(
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
             log_every_n_steps=1,
             logger=None,
-            # accumulate_grad_batches=s.accumulate_grad_batches,
+            accumulate_grad_batches=s.accumulate_grad_batches,
             # callbacks=[],
             # enable_checkpointing=False,
             callbacks=init_callbacks(
@@ -842,6 +830,7 @@ def train(
                 patience=s.early_stopping_patience,
             ),
             # deterministic=True
+            # num_sanity_val_steps=0,
         )
 
         # Find checkpoints
@@ -887,7 +876,11 @@ def train(
         ) -> Path:
             test_trainer.test(model, dataloaders=dataloader)
 
-            preds_norm = model.test_preds.float()
+            preds_norm = model.test_preds.detach().float().cpu()
+            del model.test_preds
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             months = dataset.months[: preds_norm.shape[0]]
 
             preds = normalize_target.inverse_tensor(preds_norm, months)
@@ -957,6 +950,10 @@ def train(
                 align_chunks=True,
             )
 
+            del preds_norm, preds, preds_ds
+            if hasattr(model, "test_preds"):
+                del model.test_preds
+
             return preds_store
 
         # Predict
@@ -1000,6 +997,9 @@ def train(
     )
     print(f"Final combined test preds dataset: {all_preds.dims}")
 
+    del preds_ds_list, all_preds
+    gc.collect()
+
     train_ds_list = [
         add_or_set_leadtime(open_zarr(path), lt)
         for lt, path in train_pred_paths
@@ -1018,7 +1018,8 @@ def train(
     )
     print(f"Final combined train preds dataset: {all_train_preds.dims}")
 
-    del all_preds, all_train_preds
+    del train_ds_list, all_train_preds
+    gc.collect()
 
 
 def main():
