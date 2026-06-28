@@ -10,6 +10,7 @@ warnings.filterwarnings(
     category=PerformanceWarning,
 )
 
+
 import earthml
 from earthml import Settings
 from earthml.metrics import (
@@ -216,6 +217,7 @@ def main() -> None:
     plot_mode: PlotMode = "maps"
 
     force_clim_recalc = False
+    plot_mlfc = True
 
     metrics = [
         # ==========================================================
@@ -301,14 +303,21 @@ def main() -> None:
     # Europe
     # lat_range = (80, 30)
     # lon_range = (-30, 60)
+    # Pacific
+    # lat_range = (20, -20)
+    # lon_range = (-195, -135)
     # World
     lat_range = None
     lon_range = None
 
     wanted_start_periods = ["05"]
+    period = "hours"
+    clim_period = "month"
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
+
+    leadtime_agg_coord = "leadtime"
 
     print(f"Generate {plot_mode} for {variables} in {regions} (lon={lon_range}, lat={lat_range})")
 
@@ -321,65 +330,69 @@ def main() -> None:
         valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
         fc, an, mlfc = get_and_subset_datasets(
             s,
+            period=period,
             lat_range=lat_range,
             lon_range=lon_range,
             time_range=valid_time_range,
+            interpolate=False,
         )
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
+            period=period,
             force=force_clim_recalc,
+            clim_period=clim_period,
             lat_range=lat_range,
             lon_range=lon_range,
             time_range=(s.train_start, s.test_end),
         )
 
         if plot_mode in {"maps", "all"}:
-            leadtime_agg_coord = "seasonal_leadtime"
-
             deterministic_metrics = [m for m in metrics if is_deterministic(m)]
             probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
 
             metric_maps_det = xr.Dataset()
             metric_maps_prob = xr.Dataset()
             if len(deterministic_metrics) != 0:
+                print("Get deterministic metric maps")
                 metric_maps_det = get_metrics(
                     an=an,
-                    fc=fc,
+                    fc=mlfc if plot_mlfc and mlfc is not None else fc,
                     var=s.var_fc,
                     metric_kind="maps",
-                    leadtime_agg=True,
-                    realization_agg=True,
+                    leadtime_agg=False,
+                    realization_agg=False,
                     an_clim=an_clim,
-                    fc_clim=fc_clim,
+                    fc_clim=mlfc_clim if plot_mlfc and mlfc_clim is not None else fc_clim,
                     metrics=deterministic_metrics,
                     leadtime_windows=s.seasonal_leadtime_windows,
                     leadtime_agg_coord=leadtime_agg_coord,
-                    clim_period="month",
-                    period_dim="start_month",
+                    clim_period=clim_period,
+                    period_dim=f"start_{period}",
                     periods_requested=wanted_start_periods,
+                    align=False,
                 )
             if len(probabilistic_metrics) != 0:
+                print("Get probabilistic metric maps")
                 metric_maps_prob = get_metrics(
                     an=an,
-                    fc=fc,
+                    fc=mlfc if plot_mlfc and mlfc is not None else fc,
                     var=s.var_fc,
                     metric_kind="maps",
                     leadtime_agg=True,
                     realization_agg=False,
                     an_clim=an_clim,
-                    fc_clim=fc_clim,
+                    fc_clim=mlfc_clim if plot_mlfc and mlfc_clim is not None else fc_clim,
                     metrics=probabilistic_metrics,
                     leadtime_windows=s.seasonal_leadtime_windows,
                     leadtime_agg_coord=leadtime_agg_coord,
-                    clim_period="month",
-                    period_dim="start_month",
+                    clim_period=clim_period,
+                    period_dim=f"start_{period}",
                     periods_requested=wanted_start_periods,
+                    align=False,
                 )
 
-            metric_maps = xr.merge(
-                [metric_maps_det, metric_maps_prob]
-            )
+            metric_maps = xr.merge([metric_maps_det, metric_maps_prob])
 
             available_metrics = [
                 str(x) for x in metric_maps.data_vars
@@ -387,7 +400,7 @@ def main() -> None:
             ]
 
             start_periods = [
-                str(x) for x in metric_maps["start_month"].values
+                str(x) for x in metric_maps[f"start_{period}"].values
                 if str(x) in wanted_start_periods
             ]
 
@@ -395,10 +408,7 @@ def main() -> None:
 
             for m in available_metrics:
 
-                dataarrays_to_plot = {
-                    "fc": metric_maps[m],
-                    # "mlfc": mlfc,
-                }
+                dataarrays_to_plot = {"mlfc": metric_maps[m]} if plot_mlfc and mlfc is not None else {"fc": metric_maps[m]}
 
                 # if m in METRIC_IMPROVEMENT:
                 #     datasets_to_plot["mlfc_vs_fc"] = xr.Dataset(
@@ -430,7 +440,7 @@ def main() -> None:
                                 out_file=out_file,
                                 time_range=valid_time_range,
                                 leadtime_dim=leadtime_agg_coord,
-                                period_dim="start_month",
+                                period_dim=f"start_{period}",
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
                             )
