@@ -310,7 +310,7 @@ def main() -> None:
     # Pacific
     # lat_range = (20, -20)
     # lon_range = (-195, -135)
-    # World
+    # World or whole region
     lat_range = None
     lon_range = None
 
@@ -340,7 +340,7 @@ def main() -> None:
             time_range=valid_time_range,
             interpolate=interpolate,
         )
-        mlfc = mlfc.assign_coords(leadtime=[1, 2, 3, 4, 5, 6])
+        mlfc = mlfc.assign_coords(leadtime=s.leadtimes)
 
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
@@ -354,7 +354,7 @@ def main() -> None:
             interpolate=interpolate,
             build_analysis=True,
         )
-        mlfc_clim = mlfc_clim.assign_coords(leadtime=[1, 2, 3, 4, 5, 6])
+        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes)
 
         models = ("fc", "mlfc")
         ds_plot = (fc, mlfc) if plot_mlfc else (fc,)
