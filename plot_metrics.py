@@ -214,7 +214,7 @@ IMPROVEMENT_PLOT_CONFIG = {
 
 
 def main() -> None:
-    experiments_root = Path("/Users/jacopodallaglio/ML/training/experiments")
+    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "maps"
 
@@ -330,7 +330,7 @@ def main() -> None:
     n = 0
     for s in settings:
         valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
-        lat_lon = list(s.region.values())
+        lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
 
