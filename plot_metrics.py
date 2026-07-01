@@ -12,13 +12,15 @@ warnings.filterwarnings(
 
 
 import earthml
-from earthml import Settings
+from earthml import (
+    Settings,
+    get_experiment_configs,
+    get_and_subset_datasets,
+)
 from earthml.metrics import (
     is_deterministic,
     is_probabilistic,
     get_metrics,
-    get_experiment_configs,
-    get_and_subset_datasets,
     calculate_save_and_subset_climatologies,
 )
 from earthml.plots import (
@@ -212,12 +214,14 @@ IMPROVEMENT_PLOT_CONFIG = {
 
 
 def main() -> None:
-    experiments_root = Path("./experiments")
+    experiments_root = Path("/Users/jacopodallaglio/ML/training/experiments")
 
     plot_mode: PlotMode = "maps"
 
-    force_clim_recalc = False
-    plot_mlfc = True
+    plot_mlfc = False
+
+    force_clim_recalc = True
+    interpolate = True
 
     metrics = [
         # ==========================================================
@@ -240,7 +244,7 @@ def main() -> None:
         # "bias_anom",
         # "mae_anom",
         # "mse_anom",
-        # "rmse_anom",
+        "rmse_anom",
         # "nrmse_anom",
         # "acc",
         # "r2_anom",
@@ -251,7 +255,7 @@ def main() -> None:
         # ==========================================================
         # Skill Scores vs Climatology
         # ==========================================================
-        "mse_skill_clim",
+        # "mse_skill_clim",
         # "mae_anom_skill_clim",
         # "mse_anom_skill_clim",
         # "rmse_anom_skill_clim",
@@ -281,9 +285,9 @@ def main() -> None:
         # ==========================================================
         # ROC AUC (Anomaly Terciles)
         # ==========================================================
-        "roc_anom_lower",
-        "roc_anom_middle",
-        "roc_anom_upper",
+        # "roc_anom_lower",
+        # "roc_anom_middle",
+        # "roc_anom_upper",
     ]
 
     variables = [
@@ -311,13 +315,13 @@ def main() -> None:
     lon_range = None
 
     wanted_start_periods = ["05"]
-    period = "hours"
+    period = "months"
     clim_period = "month"
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_coord = "leadtime"
+    leadtime_agg_coord = "leadtime_seasonal"
 
     print(f"Generate {plot_mode} for {variables} in {regions} (lon={lon_range}, lat={lat_range})")
 
@@ -334,8 +338,10 @@ def main() -> None:
             lat_range=lat_range,
             lon_range=lon_range,
             time_range=valid_time_range,
-            interpolate=False,
+            interpolate=interpolate,
         )
+        mlfc = mlfc.assign_coords(leadtime=[1, 2, 3, 4, 5, 6])
+
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
@@ -345,80 +351,87 @@ def main() -> None:
             lat_range=lat_range,
             lon_range=lon_range,
             time_range=(s.train_start, s.test_end),
+            interpolate=interpolate,
+            build_analysis=True,
         )
+        mlfc_clim = mlfc_clim.assign_coords(leadtime=[1, 2, 3, 4, 5, 6])
 
-        if plot_mode in {"maps", "all"}:
-            deterministic_metrics = [m for m in metrics if is_deterministic(m)]
-            probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
+        models = ("fc", "mlfc")
+        ds_plot = (fc, mlfc) if plot_mlfc else (fc,)
+        ds_clim_plot = (fc_clim, mlfc_clim) if plot_mlfc else (fc_clim,)
 
-            metric_maps_det = xr.Dataset()
-            metric_maps_prob = xr.Dataset()
-            if len(deterministic_metrics) != 0:
-                print("Get deterministic metric maps")
-                metric_maps_det = get_metrics(
-                    an=an,
-                    fc=mlfc if plot_mlfc and mlfc is not None else fc,
-                    var=s.var_fc,
-                    metric_kind="maps",
-                    leadtime_agg=False,
-                    realization_agg=False,
-                    an_clim=an_clim,
-                    fc_clim=mlfc_clim if plot_mlfc and mlfc_clim is not None else fc_clim,
-                    metrics=deterministic_metrics,
-                    leadtime_windows=s.seasonal_leadtime_windows,
-                    leadtime_agg_coord=leadtime_agg_coord,
-                    clim_period=clim_period,
-                    period_dim=f"start_{period}",
-                    periods_requested=wanted_start_periods,
-                    align=False,
-                )
-            if len(probabilistic_metrics) != 0:
-                print("Get probabilistic metric maps")
-                metric_maps_prob = get_metrics(
-                    an=an,
-                    fc=mlfc if plot_mlfc and mlfc is not None else fc,
-                    var=s.var_fc,
-                    metric_kind="maps",
-                    leadtime_agg=True,
-                    realization_agg=False,
-                    an_clim=an_clim,
-                    fc_clim=mlfc_clim if plot_mlfc and mlfc_clim is not None else fc_clim,
-                    metrics=probabilistic_metrics,
-                    leadtime_windows=s.seasonal_leadtime_windows,
-                    leadtime_agg_coord=leadtime_agg_coord,
-                    clim_period=clim_period,
-                    period_dim=f"start_{period}",
-                    periods_requested=wanted_start_periods,
-                    align=False,
-                )
+        for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
+            if plot_mode in {"maps", "all"}:
+                deterministic_metrics = [m for m in metrics if is_deterministic(m)]
+                probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
 
-            metric_maps = xr.merge([metric_maps_det, metric_maps_prob])
+                metric_maps_det = xr.Dataset()
+                metric_maps_prob = xr.Dataset()
+                if len(deterministic_metrics) != 0:
+                    print(f"Get {model} deterministic metric maps")
+                    metric_maps_det = get_metrics(
+                        an=an,
+                        fc=ds,
+                        var=s.var_fc,
+                        metric_kind="maps",
+                        leadtime_agg=True,
+                        realization_agg=True,
+                        an_clim=an_clim,
+                        fc_clim=ds_clim,
+                        metrics=deterministic_metrics,
+                        leadtime_windows=s.seasonal_leadtime_windows,
+                        leadtime_agg_coord=leadtime_agg_coord,
+                        clim_period=clim_period,
+                        period_dim=f"start_{period}",
+                        periods_requested=wanted_start_periods,
+                        align=False,
+                    )
+                if len(probabilistic_metrics) != 0:
+                    print(f"Get {model} probabilistic metric maps")
+                    metric_maps_prob = get_metrics(
+                        an=an,
+                        fc=ds,
+                        var=s.var_fc,
+                        metric_kind="maps",
+                        leadtime_agg=True,
+                        realization_agg=False,
+                        an_clim=an_clim,
+                        fc_clim=ds_clim,
+                        metrics=probabilistic_metrics,
+                        leadtime_windows=s.seasonal_leadtime_windows,
+                        leadtime_agg_coord=leadtime_agg_coord,
+                        clim_period=clim_period,
+                        period_dim=f"start_{period}",
+                        periods_requested=wanted_start_periods,
+                        align=False,
+                    )
 
-            available_metrics = [
-                str(x) for x in metric_maps.data_vars
-                if str(x) in metrics and str(x) != "rank_histogram"
-            ]
+                metric_maps = xr.merge([metric_maps_det, metric_maps_prob])
 
-            start_periods = [
-                str(x) for x in metric_maps[f"start_{period}"].values
-                if str(x) in wanted_start_periods
-            ]
+                available_metrics = [
+                    str(x) for x in metric_maps.data_vars
+                    if str(x) in metrics and str(x) != "rank_histogram"
+                ]
 
-            print(f"Plotting metrics {available_metrics} for periods {start_periods} for exp {s.output_name}")
+                start_periods = [
+                    str(x) for x in metric_maps[f"start_{period}"].values
+                    if str(x) in wanted_start_periods
+                ]
 
-            for m in available_metrics:
+                print(f"Plotting {model} metrics {available_metrics} for periods {start_periods} for exp {s.output_name}")
 
-                dataarrays_to_plot = {"mlfc": metric_maps[m]} if plot_mlfc and mlfc is not None else {"fc": metric_maps[m]}
+                for m in available_metrics:
 
-                # if m in METRIC_IMPROVEMENT:
-                #     datasets_to_plot["mlfc_vs_fc"] = xr.Dataset(
-                #         {m: METRIC_IMPROVEMENT[m](fc_ds[m], mlfc_ds[m])}
-                #     )
+                    dataarrays_to_plot = {model: metric_maps[m]}
 
-                for model, da in dataarrays_to_plot.items():
+                    # if m in METRIC_IMPROVEMENT:
+                    #     datasets_to_plot["mlfc_vs_fc"] = xr.Dataset(
+                    #         {m: METRIC_IMPROVEMENT[m](fc_ds[m], mlfc_ds[m])}
+                    #     )
+
                     for start_period in start_periods:
-                        for lead_value in da[leadtime_agg_coord].values:
-                            label = safe_label(lead_label(da, lead_value, leadtime_agg_coord))
+                        for lead_value in metric_maps[m][leadtime_agg_coord].values:
+                            label = safe_label(lead_label(metric_maps[m], lead_value, leadtime_agg_coord))
 
                             out_file = (
                                 s.plot_dir / "maps"
@@ -431,7 +444,7 @@ def main() -> None:
                             print(f"Saving map {out_file}")
 
                             plot_map(
-                                da,
+                                metric_maps[m],
                                 var=s.var_fc,
                                 metric=m,
                                 model=model,
@@ -443,6 +456,7 @@ def main() -> None:
                                 period_dim=f"start_{period}",
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
+                                plot_type="contourf",
                             )
                             n += 1
 
