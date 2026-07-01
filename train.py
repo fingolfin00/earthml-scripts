@@ -196,12 +196,13 @@ def make_leadtime_pair(
         return fc_train_ds, res_train_ds, None, None
 
     if target_mode in {"anomaly", "anomaly_residual"}:
-        fc_clim_ds = fc_ds.sel({
-            time_dim: slice(clim_start, clim_end),
-            leadtime_dim: int(leadtime),
-        })
-
-        fc_clim_ds, an_clim_ds = _gen_fc_an_ds(fc_ds, an_ds, clim_start, clim_end, "test")
+        fc_clim_ds, an_clim_ds = _gen_fc_an_ds(
+            fc_ds,
+            an_ds,
+            clim_start,
+            clim_end,
+            "clim",
+        )
 
         fc_clim: xr.Dataset = calculate_climatology(fc_clim_ds, time_dim, clim_period)
         an_clim: xr.Dataset = calculate_climatology(an_clim_ds, time_dim, clim_period)
@@ -580,10 +581,10 @@ def print_training_recap(
 
         "split.strategy": s.split_strategy,
         "split.train_fraction": s.train_fraction,
-        "split.train_samples": len(train_idx) if train_idx else None,
-        "split.val_samples": len(val_idx) if val_idx else None,
-        "split.train_idx": f"{train_idx[0]} → {train_idx[-1]}" if train_idx else None,
-        "split.val_idx": f"{val_idx[0]} → {val_idx[-1]}" if val_idx else None,
+        "split.train_samples": len(train_idx) if train_idx is not None else None,
+        "split.val_samples": len(val_idx) if val_idx is not None else None,
+        "split.train_idx": f"{train_idx[0]} → {train_idx[-1]}" if train_idx is not None and len(train_idx) else None,
+        "split.val_idx": f"{val_idx[0]} → {val_idx[-1]}" if val_idx is not None and len(val_idx) else None,
 
         "model.network": s.net_name,
         "model.loss": s.loss_name,
@@ -629,7 +630,12 @@ def train(
 
     s = Settings(
         root_dir=Path("/Users/jacopodallaglio/ML/seasonal/"),
+        data_root_dir=None,
+        exp_root_dir=None,
+        plot_root_dir=NOne,
         lead_period_offset=0,
+        var_file_fc=var,
+        var_file_an=var,
         var_fc=var,
         var_an=var,
         model_fc="sps4_atmo",
@@ -975,7 +981,7 @@ def train(
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        if torch.backends.mps.is_available():
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
     # Combine all leadtimes
