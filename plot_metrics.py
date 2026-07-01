@@ -323,8 +323,6 @@ def main() -> None:
 
     leadtime_agg_coord = "leadtime_seasonal"
 
-    print(f"Generate {plot_mode} for {variables} in {regions} (lon={lon_range}, lat={lat_range})")
-
     settings = get_experiment_configs(experiments_root, variables, regions)
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -332,11 +330,17 @@ def main() -> None:
     n = 0
     for s in settings:
         valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
+        lat_lon = list(s.region.values())
+        valid_lat_range = lat_lon[0] if lat_range is None else lat_range
+        valid_lon_range = lat_lon[1] if lon_range is None else lon_range
+
+        print(f"Generate {plot_mode} for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
+
         fc, an, mlfc = get_and_subset_datasets(
             s,
             period=period,
-            lat_range=lat_range,
-            lon_range=lon_range,
+            lat_range=valid_lat_range,
+            lon_range=valid_lon_range,
             time_range=valid_time_range,
             interpolate=interpolate,
         )
@@ -348,8 +352,8 @@ def main() -> None:
             period=period,
             force=force_clim_recalc,
             clim_period=clim_period,
-            lat_range=lat_range,
-            lon_range=lon_range,
+            lat_range=valid_lat_range,
+            lon_range=valid_lon_range,
             time_range=(s.train_start, s.test_end),
             interpolate=interpolate,
             build_analysis=True,
