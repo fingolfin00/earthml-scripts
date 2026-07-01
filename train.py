@@ -621,7 +621,7 @@ def train(
 ) -> None:
     dry_run = False
     force_retrain = False
-    interpolate = False
+    interpolate = True
 
     accelerator, device = resolve_accelerator_and_device()
 
@@ -632,8 +632,8 @@ def train(
         root_dir=Path("/Users/jacopodallaglio/ML/seasonal/"),
         data_root_dir=None,
         exp_root_dir=None,
-        plot_root_dir=NOne,
-        lead_period_offset=0,
+        plot_root_dir=None,
+        lead_period_offset=-1,
         var_file_fc=var,
         var_file_an=var,
         var_fc=var,
@@ -641,8 +641,7 @@ def train(
         model_fc="sps4_atmo",
         model_an="era5",
         leadtime_unit="month",
-        leadtimes=[1, 2, 3, 4, 5, 5],
-        leadtime_unit="hour",
+        leadtimes=[1, 2, 3, 4, 5, 6],
         region_name=region_name,
         region=region_location,
         train_start="1993-01-01",
