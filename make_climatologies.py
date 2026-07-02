@@ -1,0 +1,93 @@
+from pathlib import Path
+
+import xarray as xr
+
+import warnings
+from dask.array import PerformanceWarning
+warnings.simplefilter("ignore", FutureWarning)
+warnings.filterwarnings(
+    "ignore",
+    category=PerformanceWarning,
+)
+
+
+import earthml
+from earthml import (
+    Settings,
+    get_experiment_configs,
+)
+from earthml.metrics import calculate_save_and_subset_climatologies
+
+
+def main() -> None:
+    # Get configs
+
+    experiments_root = Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo")
+
+    variables = [
+        # "t2m",
+        "mslp",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
+        # "tprate",
+    ]
+    regions = ["ConUS",] # World, ConUS, Europe, Pacific or None to accept all # TOD rerun europe and pacific
+
+    settings = get_experiment_configs(experiments_root, variables, regions)
+
+    # Selection settings
+
+    # ConUS
+    # lat_range = (50, 25)
+    # lon_range = (-130, -60)
+    # Europe
+    # lat_range = (80, 30)
+    # lon_range = (-30, 60)
+    # Pacific
+    # lat_range = (20, -20)
+    # lon_range = (-195, -135)
+    # World or whole region
+    lat_range = None
+    lon_range = None
+
+    period = "hours"
+    clim_period = "day"
+
+    time_range = None
+    # time_range = ("2018-01-01", "2022-12-31")
+
+    interpolate = False
+    build_analysis = True
+    force_clim_recalc = True
+
+    print(f"Found {len(settings)} matching experiment(s).")
+
+    for s in settings:
+        clim_time_range = (s.train_start, s.train_end)
+        lat_lon = list(s.region.values()) if s.region is not None else [None, None]
+        valid_lat_range = lat_lon[0] if lat_range is None else lat_range
+        valid_lon_range = lat_lon[1] if lon_range is None else lon_range
+
+        print(f"Generate climatologies for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
+
+        fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
+            s,
+            period=period,
+            force=force_clim_recalc,
+            clim_period=clim_period,
+            lat_range=valid_lat_range,
+            lon_range=valid_lon_range,
+            time_range=clim_time_range,
+            interpolate=interpolate,
+            build_analysis=build_analysis,
+        )
+        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes)
+
+        print(fc_clim)
+
+
+
+if __name__ == "__main__":
+    main()
