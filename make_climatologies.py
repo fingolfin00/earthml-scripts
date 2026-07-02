@@ -100,7 +100,7 @@ def main() -> None:
             coord_rename_fc=None,
             coord_rename_an=None,
         )
-        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes)
+        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes) if mlfc_clim is not None else None
 
         print(fc_clim)
 
