@@ -315,8 +315,8 @@ def main() -> None:
     lon_range = None
 
     wanted_start_periods = ["05"]
-    period = "months"
-    clim_period = "month"
+    leadtime_units = "months"
+    clim_period = "month" # "dayofyear", "day", "month", "year", "month_hour", "day_hour"
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
@@ -339,7 +339,7 @@ def main() -> None:
 
         fc, an, mlfc = get_and_subset_datasets(
             s,
-            period=period,
+            leadtime_units=leadtime_units,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
             time_range=valid_time_range,
@@ -347,10 +347,9 @@ def main() -> None:
         )
         mlfc = mlfc.assign_coords(leadtime=s.leadtimes)
 
-
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
-            period=period,
+            leadtime_units=leadtime_units,
             force=force_clim_recalc,
             clim_period=clim_period,
             lat_range=valid_lat_range,
@@ -387,7 +386,7 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{period}",
+                        period_dim=f"start_{leadtime_units}",
                         periods_requested=wanted_start_periods,
                         align=False,
                     )
@@ -406,7 +405,7 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{period}",
+                        period_dim=f"start_{leadtime_units}",
                         periods_requested=wanted_start_periods,
                         align=False,
                     )
@@ -419,7 +418,7 @@ def main() -> None:
                 ]
 
                 start_periods = [
-                    str(x) for x in metric_maps[f"start_{period}"].values
+                    str(x) for x in metric_maps[f"start_{leadtime_units}"].values
                     if str(x) in wanted_start_periods
                 ]
 
@@ -458,7 +457,7 @@ def main() -> None:
                                 out_file=out_file,
                                 time_range=valid_time_range,
                                 leadtime_dim=leadtime_agg_coord,
-                                period_dim=f"start_{period}",
+                                period_dim=f"start_{leadtime_units}",
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
                                 plot_type="contourf",
