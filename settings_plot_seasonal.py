@@ -109,7 +109,7 @@ VARIABLE_PLOT_CONFIG = {
         },
     },
 
-    "t2m": {
+    "d2m": {
         "bias": {
             "vmin": -6,
             "vmax": 6,
