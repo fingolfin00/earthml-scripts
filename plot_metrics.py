@@ -329,7 +329,8 @@ def main() -> None:
 
     n = 0
     for s in settings:
-        valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
+        valid_time_range = (s.test_start, s.test_end) if time_range is None else time_range
+        clim_time_range = (s.train_start, s.train_end)
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
@@ -354,7 +355,7 @@ def main() -> None:
             clim_period=clim_period,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
-            time_range=(s.train_start, s.test_end),
+            time_range=clim_time_range,
             interpolate=interpolate,
             build_analysis=True,
         )
@@ -461,6 +462,7 @@ def main() -> None:
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
                                 plot_type="contourf",
+                                title_strftime="%Y",
                             )
                             n += 1
 
