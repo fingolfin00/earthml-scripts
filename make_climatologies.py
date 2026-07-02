@@ -56,7 +56,8 @@ def main() -> None:
     lon_range = None
 
     leadtime_units = "hours"
-    clim_period = "month_hour" # "dayofyear", "day", "month", "year", "month_hour", "day_hour"
+    clim_period = "dayofyear_hour" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    clim_rolling_window = 31
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
@@ -77,7 +78,7 @@ def main() -> None:
             f"[{i}/{len(settings)}] Generating {clim_period} climatology for "
             f"{s.var_an}/{s.var_fc} in {s.region_name} "
             f"(lon={valid_lon_range}, lat={valid_lat_range})\n"
-            f"Period: {clim_time_range[0]} - {clim_time_range[1]}\n"
+            f"Period: {clim_time_range[0]} - {clim_time_range[1]} (rolling={clim_rolling_window})\n"
             f"Experiment: {s.output_name}"
         )
 
@@ -86,11 +87,18 @@ def main() -> None:
             leadtime_units=leadtime_units,
             force=force_clim_recalc,
             clim_period=clim_period,
+            rolling_window=clim_rolling_window,
+            rolling_center=True,
+            rolling_min_periods=1,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
             time_range=clim_time_range,
+            time_start=None,
             interpolate=interpolate,
+            engine="zarr",
             build_analysis=build_analysis,
+            coord_rename_fc=None,
+            coord_rename_an=None,
         )
         mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes)
 
