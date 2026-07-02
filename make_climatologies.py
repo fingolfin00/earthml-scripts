@@ -25,11 +25,12 @@ def main() -> None:
     experiments_root = Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo")
 
     variables = [
-        # "t2m",
+        "t2m",
         "mslp",
-        # "d2m",
-        # "u10",
-        # "v10",
+        "d2m",
+        "u10",
+        "v10",
+        "tcc",
         # "sst",
         # "tprate",
     ]
@@ -52,8 +53,8 @@ def main() -> None:
     lat_range = None
     lon_range = None
 
-    period = "hours"
-    clim_period = "day"
+    leadtime_units = "hours"
+    clim_period = "month_hour" # "dayofyear", "day", "month", "year", "month_hour", "day_hour"
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
@@ -64,17 +65,23 @@ def main() -> None:
 
     print(f"Found {len(settings)} matching experiment(s).")
 
-    for s in settings:
+    for i, s in enumerate(settings, start=1):
         clim_time_range = (s.train_start, s.train_end)
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
 
-        print(f"Generate climatologies for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
+        print(
+            f"[{i}/{len(settings)}] Generating {clim_period} climatology for "
+            f"{s.var_an}/{s.var_fc} in {s.region_name} "
+            f"(lon={valid_lon_range}, lat={valid_lat_range})\n"
+            f"Period: {clim_time_range[0]} - {clim_time_range[1]}\n"
+            f"Experiment: {s.output_name}"
+        )
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
-            period=period,
+            leadtime_units=leadtime_units,
             force=force_clim_recalc,
             clim_period=clim_period,
             lat_range=valid_lat_range,
