@@ -315,8 +315,10 @@ def main() -> None:
     lon_range = None
 
     wanted_start_periods = ["05"]
+
     leadtime_units = "months"
-    clim_period = "month" # "dayofyear", "day", "month", "year", "month_hour", "day_hour"
+    clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    clim_rolling_window = None
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
@@ -345,20 +347,27 @@ def main() -> None:
             time_range=valid_time_range,
             interpolate=interpolate,
         )
-        mlfc = mlfc.assign_coords(leadtime=s.leadtimes)
+        mlfc = mlfc.assign_coords(leadtime=s.leadtimes) if mlfc is not None else None
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
             leadtime_units=leadtime_units,
             force=force_clim_recalc,
             clim_period=clim_period,
+            rolling_window=clim_rolling_window,
+            rolling_center=True,
+            rolling_min_periods=1,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
             time_range=clim_time_range,
+            time_start=None,
             interpolate=interpolate,
-            build_analysis=True,
+            engine="zarr",
+            build_analysis=build_analysis,
+            coord_rename_fc=None,
+            coord_rename_an=None,
         )
-        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes)
+        mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes) if mlfc_clim is not None else None
 
         models = ("fc", "mlfc")
         ds_plot = (fc, mlfc) if plot_mlfc else (fc,)
