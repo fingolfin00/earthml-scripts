@@ -2,6 +2,8 @@ from pathlib import Path
 
 import xarray as xr
 
+from rich import print
+
 import warnings
 from dask.array import PerformanceWarning
 warnings.simplefilter("ignore", FutureWarning)
