@@ -152,8 +152,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "crps": {
             "vmin": 0,
-            "vmax": 8,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8],
+            "vmax": 6,
+            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
         },
         "crps_anom": {
             "vmin": 0,
@@ -205,8 +205,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "crps": {
             "vmin": 0,
-            "vmax": 10,
-            "ticks": 11,
+            "vmax": 5,
+            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
         },
         "crps_anom": {
             "vmin": 0,
@@ -258,8 +258,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "crps": {
             "vmin": 0,
-            "vmax": 10,
-            "ticks": 11,
+            "vmax": 5,
+            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
         },
         "crps_anom": {
             "vmin": 0,
@@ -281,8 +281,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "mae_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 2,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
         },
         "rmse": {
             "vmin": 0,
@@ -291,8 +291,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 3,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
         },
         "ens_member_rmse": {
             "vmin": 0,
@@ -301,31 +301,31 @@ VARIABLE_PLOT_CONFIG = {
         },
         "ens_member_rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 3,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
         },
         "mean_member_rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 3,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
         },
         "crps": {
             "vmin": 0,
-            "vmax": 10,
-            "ticks": 11,
-        },
-        "crps_anom": {
-             "vmin": 0,
             "vmax": 6,
             "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
         },
+        "crps_anom": {
+             "vmin": 0,
+            "vmax": 2,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+        },
     },
 
-    "tprate": {
+    "tprate": { # mm/day
         "bias": {
-            "vmin": -6,
-            "vmax": 6,
-            "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6],
+            "vmin": -10,
+            "vmax": 10,
+            "ticks": [-10, -8, -6, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 6, 8, 10],
         },
         "mae": {
             "vmin": 0,
