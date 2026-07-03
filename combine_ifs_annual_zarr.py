@@ -5,8 +5,8 @@ import numpy as np
 import xarray as xr
 from dask.diagnostics.progress import ProgressBar
 
-DATA_DIR = Path("/users_home/cmcc/jd19424/work/ML/MLBC/data/raw")
-OUT_DIR = Path("/users_home/cmcc/jd19424/work/ML/MLBC/data/input")
+DATA_DIR = Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo/raw")
+OUT_DIR = Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo/input")
 
 TYPE = "analysis"
 VAR = "v10"
