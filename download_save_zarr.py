@@ -22,7 +22,7 @@ from earthml import Settings
 
 s = Settings()
 
-OUTDIR_ROOT = s.download_dir
+OUTDIR_ROOT = Path("/Users/jacopodallaglio/ML/training/seasonal/data/download")
 OUTDIR_SPS4 = OUTDIR_ROOT / "sps4_seasonal"
 OUTDIR_ERA5 = OUTDIR_ROOT / "era5_monthly"
 OUTDIR_ORAS5 = OUTDIR_ROOT / "oras5_monthly"
@@ -102,11 +102,8 @@ CANONICAL_VARS = {
     "somxl010": "mlotst",
 }
 
-OUTDIR_ZARR = s.input_dir
+OUTDIR_ZARR = Path("/Users/jacopodallaglio/ML/training/seasonal/data/input")
 OUTDIR_ZARR.mkdir(parents=True, exist_ok=True)
-
-LEAD_MONTH_OFFSET = -1  # -1 if forecastMonth=1 means same-month valid time
-
 
 # =============================================================================
 # Download
