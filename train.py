@@ -629,7 +629,7 @@ def train(
         torch.set_float32_matmul_precision("high")
 
     s = Settings(
-        root_dir=Path("/Users/jacopodallaglio/ML/seasonal/"),
+        root_dir=Path("/Users/jacopodallaglio/ML/training/seasonal"),
         data_root_dir=None,
         exp_root_dir=None,
         plot_root_dir=None,
@@ -1045,8 +1045,15 @@ def main():
 
     }
     for region_name, region_location in regions.items():
-        for var in ["mslp", "t2m", "d2m", "u10", "v10", "sst", "tprate"]:
-        # for var in ["d2m", "u10", "v10", "sst", "tprate"]:
+        for var in [
+            # "mslp",
+            # "t2m",
+            # "d2m",
+            # "u10",
+            # "v10",
+            # "sst",
+            "tprate",
+        ]:
             print(f"Training for {var}")
             train(
                 var=var,
