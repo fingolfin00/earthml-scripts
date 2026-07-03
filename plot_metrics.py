@@ -45,6 +45,7 @@ def main() -> None:
 
     force_clim_recalc = True
     interpolate = True
+    build_analysis = True
 
     metrics = [
         # ==========================================================
@@ -146,7 +147,7 @@ def main() -> None:
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_coord = "leadtime_seasonal"
+    leadtime_agg_mode = "seasonal_window" # "single", "aggregated", "seasonal_window"
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
@@ -160,7 +161,9 @@ def main() -> None:
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
 
-        print(f"Generate {plot_mode} for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
+        leadtime_agg_coord = "leadtime" if leadtime_agg_mode=="single" else "leadtime_seasonal"
+
+        print(f"Generate {leadtime_agg_mode} {plot_mode} for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
 
         fc, an, mlfc = get_and_subset_datasets(
             s,
@@ -210,7 +213,7 @@ def main() -> None:
                         fc=ds,
                         var=s.var_fc,
                         metric_kind="maps",
-                        leadtime_agg=True,
+                        leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
                         realization_agg=True,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
@@ -229,7 +232,7 @@ def main() -> None:
                         fc=ds,
                         var=s.var_fc,
                         metric_kind="maps",
-                        leadtime_agg=True,
+                        leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
                         realization_agg=False,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
@@ -274,6 +277,7 @@ def main() -> None:
                                 / safe_label(start_period)
                                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                                 / m
+                                / leadtime_agg_mode
                                 / f"{s.var_fc}_{m}_{model}_lead_{label}.png"
                             )
 
