@@ -398,12 +398,13 @@ def tp_to_tprate(da: xr.DataArray) -> xr.DataArray:
         da.attrs["units"] = "m s-1"
         return da
 
-    # Monthly total precipitation depth -> monthly mean precipitation rate
     if "time" not in da.coords:
         raise ValueError("Cannot convert tp to tprate without a time coordinate.")
 
-    seconds_in_month = da["time"].dt.days_in_month * 24 * 60 * 60
-    da = da / seconds_in_month
+    # ERA5 monthly averaged reanalysis tp is monthly mean of daily totals.
+    # Units are m/day, so convert to m/s.
+    da = da / (24 * 60 * 60)
+
     da.attrs["units"] = "m s-1"
     da.attrs["standard_name"] = "precipitation_flux"
     da.attrs["long_name"] = "Time-mean total precipitation rate"
