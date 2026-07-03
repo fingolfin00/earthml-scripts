@@ -200,6 +200,9 @@ def main() -> None:
         ds_clim_plot = (fc_clim, mlfc_clim) if plot_mlfc else (fc_clim,)
 
         for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
+            if ds is None or ds_clim is None:
+                continue
+
             if plot_mode in {"maps", "all"}:
                 deterministic_metrics = [m for m in metrics if is_deterministic(m)]
                 probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
