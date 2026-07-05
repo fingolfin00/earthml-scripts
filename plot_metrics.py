@@ -296,6 +296,7 @@ def main() -> None:
                                 out_file=out_file,
                                 time_range=valid_time_range,
                                 leadtime_dim=leadtime_agg_coord,
+                                leadtime_units=leadtime_units,
                                 period_dim=f"start_{leadtime_units}",
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
