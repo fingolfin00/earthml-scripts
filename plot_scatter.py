@@ -33,7 +33,11 @@ def iter_scalar_points(
     *,
     forecast_metric: str,
     diff_metric: str,
-    metric_agg_mode: Literal["spatial_avg", "global"],
+    metric_agg_mode: Literal[
+        "global",       # sqrt(mean(error^2))
+        "spatial_avg",  # mean(point-wise RMSE)
+        "spatial_rmse", # sqrt(mean(point-wise MSE))
+    ],
     leadtime_agg: LeadtimeAgg,
     realization_agg: bool,
     lat_range: tuple[float, float] | None = None,
@@ -89,10 +93,21 @@ def iter_scalar_points(
 
         if metric_agg_mode == "global":
             metric_kind = "scalar"
-        elif metric_agg_mode == "spatial_avg":
+        elif metric_agg_mode in ("spatial_avg", "spatial_rmse"):
             metric_kind = "maps"
+            if metric_agg_mode == "spatial_rmse":
+                if diff_metric == "rmse":
+                    diff_metric = "mse"
+                elif diff_metric == "rmse_anom":
+                    diff_metric = "mse_anom"
+                elif diff_metric == "nrmse":
+                    diff_metric = "nmse"
+                elif diff_metric == "nrmse_anom":
+                    diff_metric = "nmse_anom"
+                else:
+                    raise ValueError(f"metric_agg_mode={metric_agg_mode} only supports RMSE metrics.")
         else:
-            raise ValueError(f"metric_agg_mode={metric_agg_mode} not available. Choose between: 'spatial_avg', 'global'")
+            raise ValueError(f"metric_agg_mode={metric_agg_mode} not available. Choose between: 'spatial_avg', 'global'.")
 
         metric_scalar_fc = get_metrics(
             an=an,
@@ -139,18 +154,27 @@ def iter_scalar_points(
         if metric_agg_mode == "global":
             y_da = metric_scalar_fc[forecast_metric]
             x_da = metric_improvement(metric_scalar_fc[diff_metric], metric_scalar_mlfc[diff_metric], diff_metric)
-        else:
+
+        if metric_agg_mode in ("spatial_avg", "spatial_rmse"):
             lat_dim = fc.earthml.guessed_dims.latitude
             lon_dim = fc.earthml.guessed_dims.longitude
             weights = np.cos(np.deg2rad(fc[lat_dim]))
 
             y_da = metric_scalar_fc[forecast_metric].weighted(weights).mean(dim=(lat_dim, lon_dim))
 
-            x_da = metric_improvement(
-                metric_scalar_fc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim)),
-                metric_scalar_mlfc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim)),
-                diff_metric,
-            )
+            if metric_agg_mode == "spatial_rmse":
+                y_da = np.sqrt(y_da)
+                x_da = metric_improvement(
+                    np.sqrt(metric_scalar_fc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim))),
+                    np.sqrt(metric_scalar_mlfc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim))),
+                    diff_metric,
+                )
+            else:
+                x_da = metric_improvement(
+                    metric_scalar_fc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim)),
+                    metric_scalar_mlfc[diff_metric].weighted(weights).mean(dim=(lat_dim, lon_dim)),
+                    diff_metric,
+                )
 
         common_dims = tuple(dim for dim in y_da.dims if dim in x_da.dims)
         y_da, x_da = xr.align(y_da, x_da, join="inner")
@@ -242,7 +266,7 @@ def main() -> None:
     clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
-    metric_agg_mode = "spatial_avg" # "spatial_avg", "global"
+    metric_agg_mode = "global" # "spatial_avg", "global", "spatial_rmse"
 
     forecast_metric = "r2_anom"
     diff_metric = "nrmse_anom"
