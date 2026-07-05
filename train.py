@@ -660,6 +660,7 @@ def train(
         realization_as_channel=False,
         output_realizations="deterministic",
         split_strategy="time",
+        pretrain_norm="full",
         net_name="SmaAt_UNet",
         loss_name="MSELoss",
         init_learning_rate=3e-4,
@@ -731,8 +732,15 @@ def train(
         train_dataset = dataset_d["train"]
 
         # Normalize
-        normalize_input  = MonthlyNormalize().fit(train_dataset, dim='x')
-        normalize_target = MonthlyNormalize().fit(train_dataset, dim='y')
+        if s.pretrain_norm == "monthly":
+            NormClass = MonthlyNormalize
+        elif s.pretrain_norm == "full":
+            NormClass = Normalize
+        else:
+            raise ValueError(f"pretrain_norm={pratrain_norm} not supported.")
+
+        normalize_input  = NormClass().fit(train_dataset, dim='x')
+        normalize_target = NormClass().fit(train_dataset, dim='y')
         train_dataset.transform_x = normalize_input
         train_dataset.transform_y = normalize_target
 
