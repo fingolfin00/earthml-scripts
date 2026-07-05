@@ -36,7 +36,13 @@ def main() -> None:
         # "sst",
         # "tprate",
     ]
-    regions = ["ConUS",] # World, ConUS, Europe, Pacific or None to accept all # TOD rerun europe and pacific
+    regions = [
+        "ConUS",
+        "Europe",
+        # "Pacific",
+        # "World",
+        # None, # accept all
+    ]
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
