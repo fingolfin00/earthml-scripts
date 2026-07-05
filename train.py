@@ -619,6 +619,13 @@ def train(
     region_name: str,
     region_location: dict[str, tuple[int | float, int | float]] | None,
 ) -> None:
+    if var in {"mlotst", "ssh", "sss", "t20d"}:
+        var_type_fc = "ocean"
+        reanalysis_model = "oras5"
+    else:
+        var_type_fc = "atmo"
+        reanalysis_model = "era5"
+
     dry_run = False
     force_retrain = False
     interpolate = True
@@ -638,8 +645,8 @@ def train(
         var_file_an=var,
         var_fc=var,
         var_an=var,
-        model_fc="sps4_atmo",
-        model_an="era5",
+        model_fc=f"sps4_{var_type_fc}",
+        model_an=reanalysis_model,
         leadtime_unit="month",
         leadtimes=[1, 2, 3, 4, 5, 6],
         region_name=region_name,
@@ -1033,26 +1040,32 @@ def main():
         #     "lon": (-130, -60),
         #     "lat": (50, 25),
         # },
-        "Europe": {
-            "lon": (-30, 60),
-            "lat": (80, 30),
-        },
-        "Pacific": {
-            "lon": (-200, -120),
-            "lat": (30, -30),
-        },
-        # "World": None,
+        # "Europe": {
+        #     "lon": (-30, 60),
+        #     "lat": (80, 30),
+        # },
+        # "Pacific": {
+        #     "lon": (-200, -120),
+        #     "lat": (30, -30),
+        # },
+        "World": None,
 
     }
     for region_name, region_location in regions.items():
         for var in [
-            # "mslp",
-            # "t2m",
-            # "d2m",
-            # "u10",
-            # "v10",
-            # "sst",
+            # Atmo
+            "mslp",
+            "t2m",
+            "d2m",
+            "u10",
+            "v10",
+            "sst",
             "tprate",
+            # Ocean
+            "mlotst",
+            "ssh",
+            "sss",
+            "t20d",
         ]:
             print(f"Training for {var}")
             train(
