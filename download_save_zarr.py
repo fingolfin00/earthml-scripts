@@ -662,6 +662,17 @@ def forecast_var_to_time(
     if "leadtime" not in da.dims:
         raise ValueError(f"{var} has no leadtime/forecastMonth dimension.")
 
+    # Force canonical leadtime labels: 1, 2, 3, ...
+    da = da.assign_coords(
+        leadtime=("leadtime", list(range(1, da.sizes["leadtime"] + 1)))
+    )
+
+    da["leadtime"].attrs.clear()
+    da["leadtime"].attrs["units"] = "months"
+
+    if "leadtime" not in da.dims:
+            raise ValueError(f"{var} has no leadtime/forecastMonth dimension.")
+
     if "time" in da.dims:
         da = da.squeeze("time", drop=True)
 
