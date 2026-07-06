@@ -41,9 +41,9 @@ def main() -> None:
 
     plot_mode: PlotMode = "maps"
 
-    plot_mlfc = False
+    plot_mlfc = True
 
-    force_clim_recalc = True
+    force_clim_recalc = False
     interpolate = True
     build_analysis = True
 
@@ -51,7 +51,7 @@ def main() -> None:
         # ==========================================================
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
-        # "bias",
+        "bias",
         # "mae",
         # "mse",
         # "rmse",
@@ -70,8 +70,8 @@ def main() -> None:
         # "mse_anom",
         "rmse_anom",
         # "nrmse_anom",
-        # "acc",
-        # "r2_anom",
+        "acc",
+        "r2_anom",
         # "fc_anom_std",
         # "an_anom_std",
         # "std_ratio_anom",
@@ -81,7 +81,7 @@ def main() -> None:
         # ==========================================================
         # "mse_skill_clim",
         # "mae_anom_skill_clim",
-        # "mse_anom_skill_clim",
+        "mse_anom_skill_clim",
         # "rmse_anom_skill_clim",
         # "ens_member_mse_anom_skill_clim",
         # "mean_member_mse_anom_skill_clim",
@@ -102,8 +102,8 @@ def main() -> None:
         # "ens_member_rmse_anom",
         # "mean_member_rmse_anom",
         # "spread_anom",
-        # "spread_anom_skill_ratio",
-        # "crps_anom",
+        "spread_anom_skill_ratio",
+        "crps_anom",
         # "rank_histogram_anom",
 
         # ==========================================================
@@ -115,13 +115,19 @@ def main() -> None:
     ]
 
     variables = [
-        # "t2m",
+        # Atmo
         "mslp",
-        # "d2m",
-        # "u10",
+        "t2m",
+        "d2m",
+        "u10",
         # "v10",
         # "sst",
         # "tprate",
+        # Ocean
+        # "mlotst",
+        # "ssh",
+        # "sss",
+        # "t20d",
     ]
     regions = ["World"] # World, ConUS or None to accept all
 
@@ -138,7 +144,13 @@ def main() -> None:
     lat_range = None
     lon_range = None
 
-    wanted_start_periods = ["05"]
+    wanted_start_periods = [
+        # "01",
+        "05",
+        # "08",
+        # "10",
+        "all",
+    ]
 
     leadtime_units = "months"
     clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
@@ -147,7 +159,7 @@ def main() -> None:
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_mode = "seasonal_window" # "single", "aggregated", "seasonal_window"
+    leadtime_agg_mode = "aggregated" # "single", "aggregated", "seasonal_window"
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
@@ -155,8 +167,9 @@ def main() -> None:
 
     n = 0
     for s in settings:
-        valid_time_range = (s.test_start, s.test_end) if time_range is None else time_range
-        clim_time_range = (s.train_start, s.train_end)
+        valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
+        clim_time_range = (s.train_start, s.test_end)
+
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
