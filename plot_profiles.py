@@ -192,8 +192,8 @@ def main() -> None:
             if len(deterministic_metrics) != 0:
                 metrics_fc_det, metrics_mlfc_det = get_scalar_metrics(
                     s=s,
-                    fc_metrics=metrics,
-                    mlfc_metrics=metrics,
+                    fc_metrics=deterministic_metrics,
+                    mlfc_metrics=deterministic_metrics,
                     metric_agg_mode=metric_agg_mode,
                     leadtime_agg=leadtime_agg_mode,
                     realization_agg=True,
@@ -214,8 +214,8 @@ def main() -> None:
                 if plot_members:
                     metrics_fc_ds_members, metrics_mlfc_ds_members = get_scalar_metrics(
                         s=s,
-                        fc_metrics=metrics,
-                        mlfc_metrics=metrics,
+                        fc_metrics=deterministic_metrics,
+                        mlfc_metrics=deterministic_metrics,
                         metric_agg_mode=metric_agg_mode,
                         leadtime_agg=leadtime_agg_mode,
                         realization_agg=False,
@@ -235,8 +235,8 @@ def main() -> None:
             if len(probabilistic_metrics) != 0:
                 metrics_fc_prob, metrics_mlfc_prob = get_scalar_metrics(
                     s=s,
-                    fc_metrics=metrics,
-                    mlfc_metrics=metrics,
+                    fc_metrics=probabilistic_metrics,
+                    mlfc_metrics=probabilistic_metrics,
                     metric_agg_mode=metric_agg_mode,
                     leadtime_agg=leadtime_agg_mode,
                     realization_agg=False,
@@ -280,7 +280,7 @@ def main() -> None:
                         / f"{s.var_fc}_{m}_{leadtime_agg_mode}lt.png"
                     )
 
-                    print(f"Saving map {out_file}")
+                    print(f"Saving profile {out_file}")
 
                     plot_profile(
                         das=[metrics_fc_ds[m], metrics_mlfc_ds[m]],
