@@ -227,6 +227,7 @@ def main() -> None:
                         period_dim=f"start_{leadtime_units}",
                         periods_requested=wanted_start_periods,
                         align=False,
+                        fair_correction=False,
                     )
                 if len(probabilistic_metrics) != 0:
                     print(f"Get {model} probabilistic metric maps")
@@ -246,6 +247,7 @@ def main() -> None:
                         period_dim=f"start_{leadtime_units}",
                         periods_requested=wanted_start_periods,
                         align=False,
+                        fair_correction=False,
                     )
 
                 metric_maps = xr.merge([metric_maps_det, metric_maps_prob])
@@ -305,142 +307,6 @@ def main() -> None:
                             )
                             n += 1
 
-    # if plot_mode in {"profiles", "all"}:
-    #     probabilistic_metrics = ["crps", "spread", "spread_skill_ratio", "ens_member_rmse", "ens_member_rmse_anom"]
-    #     groups = defaultdict(list)
-    #     for s in settings:
-    #         groups[
-    #             s.comparison_key(
-    #                 # ignore={"root_dir", "region_name", "region"}
-    #                 ignore={"root_dir", "region_name", "region", "trainer_precision"}
-    #             )
-    #         ].append(s)
-        
-    #     for group in groups.values():
-    #         metric_scalar_ens_mean_fc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_scalar_ens_mean_mlfc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_scalar_members_fc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_scalar_members_mlfc_by_region: dict[str, xr.Dataset] = {}
-    #         # metric_maps_ens_mean_fc_by_region: dict[str, xr.Dataset] = {}
-    #         # metric_maps_ens_mean_mlfc_by_region: dict[str, xr.Dataset] = {}
-    #         # metric_maps_members_fc_by_region: dict[str, xr.Dataset] = {}
-    #         # metric_maps_members_mlfc_by_region: dict[str, xr.Dataset] = {}
-
-    #         common_s: Settings = next(iter(group))
-    #         time_range = (common_s.train_start, common_s.test_end)
-    #         for s in group:
-    #             print("Get metrics for:", s.var_fc, s.region_name)
-    #             metric_scalar_ens_mean = calculate_metric_kind(
-    #                 s,
-    #                 metric_kind="scalar",
-    #                 leadtime_agg="leadtime_month",
-    #                 realization_agg="ensemble_mean",
-    #                 lat_range=lat_range,
-    #                 lon_range=lon_range,
-    #                 time_range=time_range,
-    #             )["leadtime_month"]["scalar"]
-
-    #             metric_scalar_members = calculate_metric_kind(
-    #                 s,
-    #                 metric_kind="scalar",
-    #                 leadtime_agg="leadtime_month",
-    #                 realization_agg="member",
-    #                 lat_range=lat_range,
-    #                 lon_range=lon_range,
-    #                 time_range=time_range,
-    #             )["leadtime_month"]["scalar"]
-
-    #             # metric_maps_ens_mean = calculate_metric_kind(
-    #             #     s,
-    #             #     metric_kind="maps",
-    #             #     leadtime_agg="leadtime_month",
-    #             #     realization_agg="ensemble_mean",
-    #             #     lat_range=lat_range,
-    #             #     lon_range=lon_range,
-    #             #     time_range=time_range,
-    #             # )["leadtime_month"]["maps"]
-
-    #             # metric_maps_members = calculate_metric_kind(
-    #             #     s,
-    #             #     metric_kind="maps",
-    #             #     leadtime_agg="leadtime_month",
-    #             #     realization_agg="member",
-    #             #     lat_range=lat_range,
-    #             #     lon_range=lon_range,
-    #             #     time_range=time_range,
-    #             # )["leadtime_month"]["maps"]
-
-    #             metric_scalar_ens_mean_fc_by_region[s.region_name] = metric_scalar_ens_mean["fc_ens_mean"]
-    #             metric_scalar_ens_mean_mlfc_by_region[s.region_name] = metric_scalar_ens_mean["mlfc_ens_mean"]
-    #             metric_scalar_members_fc_by_region[s.region_name] = metric_scalar_members["fc"]
-    #             metric_scalar_members_mlfc_by_region[s.region_name] = metric_scalar_members["mlfc"]
-    #             # metric_maps_ens_mean_fc_by_region[s.region_name] = metric_maps_ens_mean["fc_ens_mean"]
-    #             # metric_maps_ens_mean_mlfc_by_region[s.region_name] = metric_maps_ens_mean["mlfc_ens_mean"]
-    #             # metric_maps_members_fc_by_region[s.region_name] = metric_maps_members["fc"]
-    #             # metric_maps_members_mlfc_by_region[s.region_name] = metric_maps_members["mlfc"]
-
-    #         available_metrics = [str(x) for x in next(iter(metric_scalar_members_fc_by_region.values())).data_vars if str(x) in metrics and str(x) != "rank_histogram"]
-    #         print("Available metrics for profiles", available_metrics)
-    #         models = (
-    #             ["fc"]
-    #             # + ["global_fc", "time_avg_fc"]
-    #             + [str(region_name) + "_mlfc" for region_name in regions]
-    #             # + [str(region_name) + "_global_mlfc" for region_name in regions]
-    #             # + [str(region_name) + "_time_avg_mlfc" for region_name in regions]
-    #         )
-    #         print("Models compared in profiles", models)
-    #         # weights = np.cos(np.deg2rad(next(iter(metric_maps_members_fc_by_region.values()))[spatial_dims[0]]))
-
-    #         section = "all_dims"
-    #         kind = "profiles"
-    #         start_period = "all"
-    #         for m in available_metrics:
-    #             if m in probabilistic_metrics:
-    #                 das_ens_mean = (
-    #                     [metric_scalar_members_fc_by_region[regions[0]][m]]
-    #                     # + [metric_maps_members_fc_by_region[regions[0]][m].weighted(weights).mean(spatial_dims)]
-    #                     + [ds[m] for ds in metric_scalar_members_mlfc_by_region.values()]
-    #                     # + [ds[m].weighted(weights).mean(spatial_dims) for ds in metric_maps_members_mlfc_by_region.values()]
-    #                 )
-    #                 das_member = None
-    #             else:
-    #                 das_ens_mean = (
-    #                     [metric_scalar_ens_mean_fc_by_region[regions[0]][m]]
-    #                     # + [metric_maps_ens_mean_fc_by_region[regions[0]][m].weighted(weights).mean(spatial_dims)] 
-    #                     + [ds[m] for ds in metric_scalar_ens_mean_mlfc_by_region.values()]
-    #                     # + [ds[m].weighted(weights).mean(spatial_dims) for ds in metric_maps_ens_mean_mlfc_by_region.values()]
-    #                 )
-    #                 das_member = (
-    #                     [metric_scalar_members_fc_by_region[regions[0]][m]]
-    #                     # + [metric_maps_members_fc_by_region[regions[0]][m].weighted(weights).mean(spatial_dims)]
-    #                     + [ds[m] for ds in metric_scalar_members_mlfc_by_region.values()]
-    #                     # + [ds[m].weighted(weights).mean(spatial_dims) for ds in metric_maps_members_mlfc_by_region.values()]
-    #                 )
-
-    #             print(das_ens_mean)
-    #             out_file = (
-    #                 common_s.plot_dir / "profiles" / common_s.var_fc / "leadtime_month"
-    #                 / safe_label(start_period)
-    #                 / f"time_{safe_label(time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
-    #                 / f"{common_s.var_fc}_{m}_{section}_{kind}_fc-mlfc_startmonth_{safe_label(start_period)}.png"
-    #             )
-
-    #             print(f"Saving profile {out_file}")
-
-    #             plot_profile(
-    #                 das=das_ens_mean,
-    #                 var=common_s.var_fc,
-    #                 metric=m,
-    #                 start_period=start_period,
-    #                 models=models,
-    #                 out_file=out_file,
-    #                 time_range=time_range,
-    #                 das_member=das_member,
-    #                 leadtime_dim=leadtime_dim,
-    #                 realization_dim=realization_dim,
-    #                 spread="std",
-    #             )
-    #             n += 1
 
     # if plot_mode in {"histograms", "all"} and "rank_histogram" in metrics:
     #     for s in settings:
