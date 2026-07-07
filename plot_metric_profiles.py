@@ -299,6 +299,7 @@ def main() -> None:
                         period_dim=f"start_{leadtime_units}",
                         realization_dim="realization",
                         spread="std",
+                        plot_single_members=False,
                     )
 
                     n += 1
