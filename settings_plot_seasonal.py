@@ -58,6 +58,26 @@ VARIABLE_PLOT_CONFIG = {
             "vmax": 9,
             "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 5,
+            "ticks": 11,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 5,
+            "ticks": 11,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 5,
+            "ticks": 11,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 5,
+            "ticks": 11,
+        },
     },
 
     "t2m": {
@@ -84,8 +104,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 5,
+            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
         },
         "ens_member_rmse": {
             "vmin": 0,
@@ -94,13 +114,13 @@ VARIABLE_PLOT_CONFIG = {
         },
         "ens_member_rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 5,
+            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
         },
         "mean_member_rmse_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 5,
+            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
         },
         "crps": {
             "vmin": 0,
@@ -109,8 +129,28 @@ VARIABLE_PLOT_CONFIG = {
         },
         "crps_anom": {
             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+            "vmax": 3,
+            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
+        },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
         },
     },
 
@@ -165,13 +205,33 @@ VARIABLE_PLOT_CONFIG = {
             "vmax": 5,
             "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
         },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 12,
+            "ticks": 7,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 12,
+            "ticks": 7,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 3,
+            "ticks": 7,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 3,
+            "ticks": 7,
+        },
     },
 
     "u10": {
         "bias": {
-            "vmin": -3,
-            "vmax": 3,
-            "ticks": [-3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3],
+            "vmin": -4,
+            "vmax": 4,
+            "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4],
         },
         "mae": {
             "vmin": 0,
@@ -217,14 +277,34 @@ VARIABLE_PLOT_CONFIG = {
             "vmin": 0,
             "vmax": 2,
             "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
+        },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
         },
     },
 
     "v10": {
         "bias": {
-            "vmin": -3,
-            "vmax": 3,
-            "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3],
+            "vmin": -4,
+            "vmax": 4,
+            "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4],
         },
         "mae": {
             "vmin": 0,
@@ -270,6 +350,26 @@ VARIABLE_PLOT_CONFIG = {
             "vmin": 0,
             "vmax": 2,
             "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
+        },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 9,
         },
     },
 
@@ -324,6 +424,26 @@ VARIABLE_PLOT_CONFIG = {
             "vmax": 2,
             "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
         },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
     },
 
     "tprate": { # mm/day
@@ -376,6 +496,26 @@ VARIABLE_PLOT_CONFIG = {
              "vmin": 0,
             "vmax": 6,
             "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
+        },
+        "an_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "an_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
+        },
+        "fc_anom_std": {
+            "vmin": 0,
+            "vmax": 2,
+            "ticks": 11,
         },
     },
 }
