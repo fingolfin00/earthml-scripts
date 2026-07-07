@@ -254,11 +254,11 @@ def main() -> None:
             metrics_fc_ds = xr.merge([metrics_fc_det, metrics_fc_prob])
             metrics_mlfc_ds = xr.merge([metrics_mlfc_det, metrics_mlfc_prob])
 
-            with ProgressBar():
-                metrics_fc_ds = metrics_fc_ds.compute()
-                metrics_mlfc_ds = metrics_mlfc_ds.compute()
-                metrics_fc_ds_members = metrics_fc_ds_members.compute()
-                metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
+            # with ProgressBar():
+            #     metrics_fc_ds = metrics_fc_ds.compute()
+            #     metrics_mlfc_ds = metrics_mlfc_ds.compute()
+            #     metrics_fc_ds_members = metrics_fc_ds_members.compute()
+            #     metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
 
             available_metrics = [
                 str(x) for x in metrics_fc_ds.data_vars
@@ -273,6 +273,8 @@ def main() -> None:
             print(f"Plotting metric profiles {available_metrics} for periods {start_periods} for exp {s.output_name}")
 
             for m in available_metrics:
+                metrics_fc_da_members = metrics_fc_ds_members[s.var_fc] if metrics_fc_ds_members else None
+                metrics_mlfc_da_members = metrics_mlfc_ds_members[s.var_fc] if metrics_mlfc_ds_members else None
                 for start_period in start_periods:
                     out_file = (
                         s.plot_dir / "profiles"
@@ -293,7 +295,7 @@ def main() -> None:
                         models=("fc", "mlfc"),
                         out_file=out_file,
                         time_range=valid_time_range,
-                        das_member=[metrics_fc_ds_members[m], metrics_mlfc_ds_members[m]],
+                        das_member=[metrics_fc_da_members, metrics_mlfc_da_members],
                         leadtime_dim=leadtime_agg_coord,
                         leadtime_unit=leadtime_units,
                         period_dim=f"start_{leadtime_units}",
