@@ -52,10 +52,10 @@ def main() -> None:
         # ==========================================================
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
-        # "bias",
-        # "mae",
+        "bias",
+        "mae",
         # "mse",
-        # "rmse",
+        "rmse",
         # "nrmse",
         # "corr",
         # "r2",
@@ -67,7 +67,7 @@ def main() -> None:
         # Deterministic Metrics (Anomaly Fields)
         # ==========================================================
         # "bias_anom",
-        # "mae_anom",
+        "mae_anom",
         # "mse_anom",
         "rmse_anom",
         # "nrmse_anom",
@@ -121,7 +121,7 @@ def main() -> None:
         "t2m",
         "d2m",
         "u10",
-        # "v10",
+        "v10",
         # "sst",
         # "tprate",
         # Ocean
@@ -147,7 +147,7 @@ def main() -> None:
 
     wanted_start_periods = [
         # "01",
-        "05",
+        # "05",
         # "08",
         # "10",
         "all",
