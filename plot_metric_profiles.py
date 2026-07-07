@@ -261,8 +261,10 @@ def main() -> None:
             #     metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
 
             available_metrics = [
-                str(x) for x in metrics_fc_ds.data_vars
-                if str(x) in metrics and str(x) != "rank_histogram"
+                m for m in metrics
+                if m in metrics_fc_ds.data_vars
+                and m in metrics_mlfc_ds.data_vars
+                and m != "rank_histogram"
             ]
 
             start_periods = [
@@ -273,8 +275,17 @@ def main() -> None:
             print(f"Plotting metric profiles {available_metrics} for periods {start_periods} for exp {s.output_name}")
 
             for m in available_metrics:
-                metrics_fc_da_members = metrics_fc_ds_members[s.var_fc] if metrics_fc_ds_members else None
-                metrics_mlfc_da_members = metrics_mlfc_ds_members[s.var_fc] if metrics_mlfc_ds_members else None
+                metrics_fc_da_members = (
+                    metrics_fc_ds_members[m]
+                    if m in metrics_fc_ds_members.data_vars
+                    else None
+                )
+                metrics_mlfc_da_members = (
+                    metrics_mlfc_ds_members[m]
+                    if m in metrics_mlfc_ds_members.data_vars
+                    else None
+                )
+
                 for start_period in start_periods:
                     out_file = (
                         s.plot_dir / "profiles"
