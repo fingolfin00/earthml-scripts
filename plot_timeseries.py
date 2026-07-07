@@ -19,6 +19,7 @@ from earthml import (
     aggregate_leadtime_ds,
 )
 from earthml.metrics import (
+    stack_hour_clim,
     groupby_period,
     calculate_save_and_subset_climatologies,
 )
@@ -177,9 +178,13 @@ def main() -> None:
         lon_dim = fc.earthml.guessed_dims.longitude
         realization_dim = fc.earthml.guessed_dims.realization
 
-        fc_anom = groupby_period(fc[s.var_fc], time_dim, clim_period) - fc_clim
-        an_anom = groupby_period(an[s.var_an], time_dim, clim_period) - an_clim
-        mlfc_anom = groupby_period(mlfc[s.var_fc], time_dim, clim_period) - mlfc_clim if mlfc is not None and mlfc_clim is not None else None
+        fc_clim_da = stack_hour_clim(fc_clim[s.var_fc], clim_period)
+        an_clim_da = stack_hour_clim(an_clim[s.var_an], clim_period)
+        mlfc_clim_da = stack_hour_clim(mlfc_clim[s.var_fc], clim_period) if mlfc_clim is not None else None
+
+        fc_anom = groupby_period(fc[s.var_fc], time_dim, clim_period) - fc_clim_da
+        an_anom = groupby_period(an[s.var_an], time_dim, clim_period) - an_clim_da
+        mlfc_anom = groupby_period(mlfc[s.var_fc], time_dim, clim_period) - mlfc_clim_da if mlfc is not None and mlfc_clim_da is not None else None
 
         if category == "anomaly":
             fc, an = fc_anom[s.var_fc], an_anom[s.var_an]
@@ -227,7 +232,7 @@ def main() -> None:
                 s.plot_dir / "timeseries" / category
                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                 / leadtime_agg_mode
-                / f"{s.var_fc}_lead_{label}_{category_title}_timeseries.png"
+                / f"{s.var_fc}_lead_{label}_{category}_timeseries.png"
             )
 
             plot_field_timeseries(
