@@ -51,16 +51,16 @@ def main() -> None:
         # ==========================================================
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
-        "bias",
+        # "bias",
         # "mae",
         # "mse",
         # "rmse",
         # "nrmse",
         # "corr",
         # "r2",
-        # "fc_std",
-        # "an_std",
-        # "std_ratio",
+        "fc_std",
+        "an_std",
+        "std_ratio",
 
         # ==========================================================
         # Deterministic Metrics (Anomaly Fields)
@@ -68,20 +68,20 @@ def main() -> None:
         # "bias_anom",
         # "mae_anom",
         # "mse_anom",
-        "rmse_anom",
+        # "rmse_anom",
         # "nrmse_anom",
-        "acc",
-        "r2_anom",
-        # "fc_anom_std",
-        # "an_anom_std",
-        # "std_ratio_anom",
+        # "acc",
+        # "r2_anom",
+        "fc_anom_std",
+        "an_anom_std",
+        "std_ratio_anom",
 
         # ==========================================================
         # Skill Scores vs Climatology
         # ==========================================================
         # "mse_skill_clim",
         # "mae_anom_skill_clim",
-        "mse_anom_skill_clim",
+        # "mse_anom_skill_clim",
         # "rmse_anom_skill_clim",
         # "ens_member_mse_anom_skill_clim",
         # "mean_member_mse_anom_skill_clim",
@@ -102,8 +102,8 @@ def main() -> None:
         # "ens_member_rmse_anom",
         # "mean_member_rmse_anom",
         # "spread_anom",
-        "spread_anom_skill_ratio",
-        "crps_anom",
+        # "spread_anom_skill_ratio",
+        # "crps_anom",
         # "rank_histogram_anom",
 
         # ==========================================================
@@ -120,8 +120,8 @@ def main() -> None:
         "t2m",
         "d2m",
         "u10",
-        # "v10",
-        # "sst",
+        "v10",
+        "sst",
         # "tprate",
         # Ocean
         # "mlotst",
@@ -145,10 +145,10 @@ def main() -> None:
     lon_range = None
 
     wanted_start_periods = [
-        # "01",
+        "01",
         "05",
-        # "08",
-        # "10",
+        "08",
+        "10",
         "all",
     ]
 
