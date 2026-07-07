@@ -421,8 +421,8 @@ VARIABLE_PLOT_CONFIG = {
         },
         "crps_anom": {
              "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+            "vmax": 1,
+            "ticks": 7,
         },
         "an_std": {
             "vmin": 0,
