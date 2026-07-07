@@ -82,7 +82,7 @@ def main() -> None:
 
     leadtime_agg_mode = "aggregated" # "single", "aggregated", "seasonal_window"
     ens_mean = False
-    category = "anomaly_residual" # "raw", "anomaly", "anomaly_residual"
+    category = "raw" # "raw", "residual", "anomaly", "anomaly_residual"
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
@@ -195,6 +195,11 @@ def main() -> None:
             mlfc = mlfc_anom - an_anom if mlfc_anom is not None else None
             an = None
             category_title = " anomaly residual "
+        elif category == "residual":
+            fc = fc[s.var_fc] - an[s.var_an]
+            mlfc = mlfc[s.var_fc] - an[s.var_an] if mlfc is not None else None
+            an = None
+            category_title = " residual "
         else:
             fc, an = fc[s.var_fc], an[s.var_an]
             mlfc = mlfc[s.var_fc] if mlfc is not None else None
@@ -202,14 +207,25 @@ def main() -> None:
 
         for lt in fc[leadtime_agg_coord].values:
             fc_lead = fc.sel({leadtime_agg_coord: lt})
-            fc_lead_ens_mean = fc_lead.mean(realization_dim)
+            if realization_dim is not None:
+                fc_lead_ens_mean = fc_lead.mean(realization_dim) if ens_mean else None
+            else:
+                fc_lead_ens_mean = fc_lead
+
             an_lead = an.sel({leadtime_agg_coord: lt}) if an is not None else None
+
             mlfc_lead = mlfc.sel({leadtime_agg_coord: lt}) if mlfc is not None else None
-            mlfc_lead_ens_mean = mlfc_lead.mean(realization_dim) if mlfc_lead is not None else None
+            if mlfc_lead is not None:
+                if realization_dim is not None:
+                    mlfc_lead_ens_mean = mlfc_lead.mean(realization_dim) if ens_mean else None
+                else:
+                    mlfc_lead_ens_mean = mlfc_lead
+            else:
+                mlfc_lead_ens_mean = None
 
             if mlfc_lead is None:
                 series = {
-                    "Forecast": fc_lead_ens_mean if ens_mean else None,
+                    "Forecast": fc_lead_ens_mean,
                     "Analysis": an_lead if an is not None else None,
                 }
                 member_series = {
@@ -217,8 +233,8 @@ def main() -> None:
                 }
             else:
                 series = {
-                    "Forecast": fc_lead_ens_mean if ens_mean else None,
-                    "Corrected forecast": mlfc_lead_ens_mean if ens_mean else None,
+                    "Forecast": fc_lead_ens_mean,
+                    "Corrected forecast": mlfc_lead_ens_mean,
                     "Analysis": an_lead if an is not None else None,
                 }
                 member_series = {
@@ -243,6 +259,7 @@ def main() -> None:
                 out_file=out_file,
                 time_dim=time_dim,
                 spatial_dims=(lat_dim, lon_dim),
+                realization_dim=realization_dim,
                 train_end=s.train_end,
                 plot_single_members=False,
                 member_linestyle="-",
