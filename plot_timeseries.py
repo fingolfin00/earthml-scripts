@@ -187,12 +187,12 @@ def main() -> None:
         mlfc_anom = groupby_period(mlfc[s.var_fc], time_dim, clim_period) - mlfc_clim_da if mlfc is not None and mlfc_clim_da is not None else None
 
         if category == "anomaly":
-            fc, an = fc_anom[s.var_fc], an_anom[s.var_an]
-            mlfc = mlfc_anom[s.var_fc] if mlfc_anom is not None else None
+            fc, an = fc_anom, an_anom
+            mlfc = mlfc_anom if mlfc_anom is not None else None
             category_title = " anomaly "
         elif category == "anomaly_residual":
-            fc = fc_anom[s.var_fc] - an_anom[s.var_an]
-            mlfc = mlfc_anom[s.var_fc] - an_anom[s.var_an] if mlfc_anom is not None else None
+            fc = fc_anom - an_anom
+            mlfc = mlfc_anom - an_anom if mlfc_anom is not None else None
             an = None
             category_title = " anomaly residual "
         else:
