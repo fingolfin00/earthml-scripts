@@ -85,7 +85,6 @@ def main() -> None:
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
-
     print(f"Found {len(settings)} matching experiment(s).")
 
     n = 0
@@ -228,7 +227,7 @@ def main() -> None:
                 s.plot_dir / "timeseries" / category
                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                 / leadtime_agg_mode
-                / f"{s.var_fc}_lead_{label}_timeseries.png"
+                / f"{s.var_fc}_lead_{label}_{category_title}_timeseries.png"
             )
 
             plot_field_timeseries(
