@@ -10,6 +10,7 @@ warnings.filterwarnings(
     category=PerformanceWarning,
 )
 
+from dask.diagnostics.progress import ProgressBar
 
 import earthml
 from earthml import (
@@ -34,15 +35,11 @@ from earthml.plots import (
 
 from plot_scatter import get_scalar_metrics
 
-from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
-
 
 def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "profiles"
-
-    plot_mlfc = True
 
     force_clim_recalc = False
     interpolate = True
@@ -256,6 +253,12 @@ def main() -> None:
 
             metrics_fc_ds = xr.merge([metrics_fc_det, metrics_fc_prob])
             metrics_mlfc_ds = xr.merge([metrics_mlfc_det, metrics_mlfc_prob])
+
+            with ProgressBar():
+                metrics_fc_ds = metrics_fc_ds.compute()
+                metrics_mlfc_ds = metrics_mlfc_ds.compute()
+                metrics_fc_ds_members = metrics_fc_ds_members.compute()
+                metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
 
             available_metrics = [
                 str(x) for x in metrics_fc_ds.data_vars
