@@ -212,7 +212,7 @@ def main() -> None:
         for lt in fc[leadtime_agg_coord].values:
             fc_lead = fc.sel({leadtime_agg_coord: lt})
 
-            fc_lead = fc_lead.rolling(
+            fc_lead = fc_lead.chunk({time_dim: rolling_mean_window}).rolling(
                 {time_dim: rolling_mean_window},
                 center=rolling_mean_center,
                 min_periods=rolling_mean_min_periods,
@@ -225,7 +225,7 @@ def main() -> None:
 
             an_lead = an.sel({leadtime_agg_coord: lt}) if an is not None else None
 
-            an_lead = an_lead.rolling(
+            an_lead = an_lead.chunk({time_dim: rolling_mean_window}).rolling(
                 {time_dim: rolling_mean_window},
                 center=rolling_mean_center,
                 min_periods=rolling_mean_min_periods,
@@ -234,7 +234,7 @@ def main() -> None:
             mlfc_lead = mlfc.sel({leadtime_agg_coord: lt}) if mlfc is not None else None
 
             if mlfc_lead is not None:
-                mlfc_lead = mlfc_lead.rolling(
+                mlfc_lead = mlfc_lead.chunk({time_dim: rolling_mean_window}).rolling(
                     {time_dim: rolling_mean_window},
                     center=rolling_mean_center,
                     min_periods=rolling_mean_min_periods,
