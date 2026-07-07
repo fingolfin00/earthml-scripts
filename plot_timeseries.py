@@ -84,6 +84,10 @@ def main() -> None:
     ens_mean = False
     category = "raw" # "raw", "residual", "anomaly", "anomaly_residual"
 
+    rolling_mean_window = 15  # e.g. 3, 5, 12; None disables
+    rolling_mean_center = True
+    rolling_mean_min_periods = 1
+
     settings = get_experiment_configs(experiments_root, variables, regions)
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -207,6 +211,13 @@ def main() -> None:
 
         for lt in fc[leadtime_agg_coord].values:
             fc_lead = fc.sel({leadtime_agg_coord: lt})
+
+            fc_lead = fc_lead.rolling(
+                {time_dim: rolling_mean_window},
+                center=rolling_mean_center,
+                min_periods=rolling_mean_min_periods,
+            ).mean() if rolling_mean_window is not None else fc_lead
+
             if realization_dim is not None:
                 fc_lead_ens_mean = fc_lead.mean(realization_dim) if ens_mean else None
             else:
@@ -214,8 +225,21 @@ def main() -> None:
 
             an_lead = an.sel({leadtime_agg_coord: lt}) if an is not None else None
 
+            an_lead = an_lead.rolling(
+                {time_dim: rolling_mean_window},
+                center=rolling_mean_center,
+                min_periods=rolling_mean_min_periods,
+            ).mean() if rolling_mean_window is not None and an_lead is not None else an_lead
+
             mlfc_lead = mlfc.sel({leadtime_agg_coord: lt}) if mlfc is not None else None
+
             if mlfc_lead is not None:
+                mlfc_lead = mlfc_lead.rolling(
+                    {time_dim: rolling_mean_window},
+                    center=rolling_mean_center,
+                    min_periods=rolling_mean_min_periods,
+                ).mean() if rolling_mean_window is not None else mlfc_lead
+
                 if realization_dim is not None:
                     mlfc_lead_ens_mean = mlfc_lead.mean(realization_dim) if ens_mean else None
                 else:
@@ -243,19 +267,20 @@ def main() -> None:
                 }
 
             label = safe_label(lead_label(fc, lt, leadtime_agg_coord))
+            rolling_label = f" roll {rolling_mean_window} " if rolling_mean_window is not None else ""
 
             out_file = (
                 s.plot_dir / "timeseries" / category
                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                 / leadtime_agg_mode
-                / f"{s.var_fc}_lead_{label}_{category}_timeseries.png"
+                / f"{s.var_fc}_lead_{label}_{category}_{safe_label(rolling_label)}_timeseries.png"
             )
 
             plot_field_timeseries(
                 series=series,
                 member_series=member_series,
                 var=s.var_fc,
-                title=f"{VARIABLE_NAMES.get(s.var_fc, s.var_fc.upper())}{category_title}· lead={label}",
+                title=f"{VARIABLE_NAMES.get(s.var_fc, s.var_fc.upper())}{category_title}{rolling_label}· lead={label}",
                 out_file=out_file,
                 time_dim=time_dim,
                 spatial_dims=(lat_dim, lon_dim),
