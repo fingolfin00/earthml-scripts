@@ -1,3 +1,4 @@
+from typing import Literal
 from pathlib import Path
 
 import xarray as xr
@@ -13,12 +14,15 @@ warnings.filterwarnings(
 
 import earthml
 from earthml import (
-    Settings,
+    LeadtimeUnit,
     get_experiment_configs,
     get_and_subset_datasets,
     aggregate_leadtime_ds,
 )
 from earthml.metrics import (
+    LeadtimeAgg,
+    MetricAgg,
+    ClimPeriod,
     stack_hour_clim,
     groupby_period,
     calculate_save_and_subset_climatologies,
@@ -30,8 +34,6 @@ from earthml.plots import (
     plot_field_timeseries,
     VARIABLE_NAMES,
 )
-
-from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 
 def main() -> None:
@@ -52,13 +54,20 @@ def main() -> None:
         "v10",
         "sst",
         # "tprate",
+        # "tcc",
         # Ocean
         # "mlotst",
         # "ssh",
         # "sss",
         # "t20d",
     ]
-    regions = ["World"] # World, ConUS or None to accept all
+    regions = [
+        # "ConUS",
+        # "Europe",
+        # "Pacific",
+        "World",
+        # None, # accept all
+    ]
 
     # ConUS
     # lat_range = (50, 25)
@@ -73,18 +82,23 @@ def main() -> None:
     lat_range = None
     lon_range = None
 
-    leadtime_units = "months"
-    clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    leadtime_units = LeadtimeUnit.MONTHS
+    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_mode = "aggregated" # "single", "aggregated", "seasonal_window"
-    ens_mean = False
-    category = "raw" # "raw", "residual", "anomaly", "anomaly_residual"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
+    plot_ens_mean = False
+    category: Literal[
+        "raw",
+        "residual",
+        "anomaly",
+        "anomaly_residual",
+    ] = "anomaly"
 
-    rolling_mean_window = 15  # e.g. 3, 5, 12; None disables
+    rolling_mean_window = None # e.g. 3, 5, 12, None disables
     rolling_mean_center = True
     rolling_mean_min_periods = 1
 
@@ -182,98 +196,113 @@ def main() -> None:
         lon_dim = fc.earthml.guessed_dims.longitude
         realization_dim = fc.earthml.guessed_dims.realization
 
-        fc_clim_da = stack_hour_clim(fc_clim[s.var_fc], clim_period)
-        an_clim_da = stack_hour_clim(an_clim[s.var_an], clim_period)
-        mlfc_clim_da = stack_hour_clim(mlfc_clim[s.var_fc], clim_period) if mlfc_clim is not None else None
+        fc_da, an_da = fc[s.var_fc], an[s.var_an]
+        fc_clim_da, an_clim_da = fc_clim[s.var_fc], an_clim[s.var_an]
+        mlfc_da = mlfc[s.var_fc] if mlfc is not None else None
+        mlfc_clim_da = mlfc_clim[s.var_fc] if mlfc_clim is not None else None
 
-        fc_anom = groupby_period(fc[s.var_fc], time_dim, clim_period) - fc_clim_da
-        an_anom = groupby_period(an[s.var_an], time_dim, clim_period) - an_clim_da
-        mlfc_anom = groupby_period(mlfc[s.var_fc], time_dim, clim_period) - mlfc_clim_da if mlfc is not None and mlfc_clim_da is not None else None
+        fc_da, fc_clim_da = xr.unify_chunks(fc_da, fc_clim_da)
+        an_da, an_clim_da = xr.unify_chunks(an_da, an_clim_da)
+        if mlfc_da is not None and mlfc_clim_da is not None:
+            mlfc_da, mlfc_clim_da = xr.unify_chunks(mlfc_da, mlfc_clim_da)
+
+        fc_clim_da = stack_hour_clim(fc_clim_da, clim_period)
+        an_clim_da = stack_hour_clim(an_clim_da, clim_period)
+        mlfc_clim_da = stack_hour_clim(mlfc_clim_da, clim_period) if mlfc_clim_da is not None else None
+
+        fc_anom_da = groupby_period(fc_da, time_dim, clim_period) - fc_clim_da
+        an_anom_da = groupby_period(an_da, time_dim, clim_period) - an_clim_da
+        mlfc_anom_da = (
+            groupby_period(mlfc_da, time_dim, clim_period) - mlfc_clim_da
+            if mlfc_da is not None and mlfc_clim_da is not None
+            else None
+        )
 
         if category == "anomaly":
-            fc, an = fc_anom, an_anom
-            mlfc = mlfc_anom if mlfc_anom is not None else None
+            fc_ts_da, an_ts_da = fc_anom_da, an_anom_da
+            mlfc_ts_da = mlfc_anom_da if mlfc_anom_da is not None else None
             category_title = " anomaly "
         elif category == "anomaly_residual":
-            fc = fc_anom - an_anom
-            mlfc = mlfc_anom - an_anom if mlfc_anom is not None else None
-            an = None
+            fc_ts_da = fc_anom_da - an_anom_da
+            mlfc_ts_da = mlfc_anom_da - an_anom_da if mlfc_anom_da is not None else None
+            an_ts_da = None
             category_title = " anomaly residual "
         elif category == "residual":
-            fc = fc[s.var_fc] - an[s.var_an]
-            mlfc = mlfc[s.var_fc] - an[s.var_an] if mlfc is not None else None
-            an = None
+            fc_ts_da = fc_da - an_da
+            mlfc_ts_da = mlfc_da - an_da if mlfc_da is not None else None
+            an_ts_da = None
             category_title = " residual "
         else:
-            fc, an = fc[s.var_fc], an[s.var_an]
-            mlfc = mlfc[s.var_fc] if mlfc is not None else None
+            fc_ts_da, an_ts_da = fc_da, an_da
+            mlfc_ts_da = mlfc_da if mlfc_da is not None else None
             category_title = ""
 
         for lt in fc[leadtime_agg_coord].values:
-            fc_lead = fc.sel({leadtime_agg_coord: lt})
+            fc_ts_lead_da = fc_ts_da.sel({leadtime_agg_coord: lt})
 
-            fc_lead = fc_lead.chunk({time_dim: rolling_mean_window}).rolling(
+            fc_ts_lead_da = fc_ts_lead_da.chunk({time_dim: rolling_mean_window}).rolling(
                 {time_dim: rolling_mean_window},
                 center=rolling_mean_center,
                 min_periods=rolling_mean_min_periods,
-            ).mean() if rolling_mean_window is not None else fc_lead
+            ).mean() if rolling_mean_window is not None else fc_ts_lead_da
 
             if realization_dim is not None:
-                fc_lead_ens_mean = fc_lead.mean(realization_dim) if ens_mean else None
+                fc_ts_lead_da_ens_mean = fc_ts_lead_da.mean(realization_dim) if plot_ens_mean else None
             else:
-                fc_lead_ens_mean = fc_lead
+                fc_ts_lead_da_ens_mean = fc_ts_lead_da
 
-            an_lead = an.sel({leadtime_agg_coord: lt}) if an is not None else None
+            an_ts_lead_da = an_ts_da.sel({leadtime_agg_coord: lt}) if an_ts_da is not None else None
 
-            an_lead = an_lead.chunk({time_dim: rolling_mean_window}).rolling(
+            an_ts_lead_da = an_ts_lead_da.chunk({time_dim: rolling_mean_window}).rolling(
                 {time_dim: rolling_mean_window},
                 center=rolling_mean_center,
                 min_periods=rolling_mean_min_periods,
-            ).mean() if rolling_mean_window is not None and an_lead is not None else an_lead
+            ).mean() if rolling_mean_window is not None and an_ts_lead_da is not None else an_ts_lead_da
 
-            mlfc_lead = mlfc.sel({leadtime_agg_coord: lt}) if mlfc is not None else None
+            mlfc_ts_lead_da = mlfc_ts_da.sel({leadtime_agg_coord: lt}) if mlfc_ts_da is not None else None
 
-            if mlfc_lead is not None:
-                mlfc_lead = mlfc_lead.chunk({time_dim: rolling_mean_window}).rolling(
+            if mlfc_ts_lead_da is not None:
+                mlfc_ts_lead_da = mlfc_ts_lead_da.chunk({time_dim: rolling_mean_window}).rolling(
                     {time_dim: rolling_mean_window},
                     center=rolling_mean_center,
                     min_periods=rolling_mean_min_periods,
-                ).mean() if rolling_mean_window is not None else mlfc_lead
+                ).mean() if rolling_mean_window is not None else mlfc_ts_lead_da
 
                 if realization_dim is not None:
-                    mlfc_lead_ens_mean = mlfc_lead.mean(realization_dim) if ens_mean else None
+                    mlfc_ts_lead_da_ens_mean = mlfc_ts_lead_da.mean(realization_dim) if plot_ens_mean else None
                 else:
-                    mlfc_lead_ens_mean = mlfc_lead
+                    mlfc_ts_lead_da_ens_mean = mlfc_ts_lead_da
             else:
-                mlfc_lead_ens_mean = None
+                mlfc_ts_lead_da_ens_mean = None
 
-            if mlfc_lead is None:
+            if mlfc_ts_lead_da is None:
                 series = {
-                    "Forecast": fc_lead_ens_mean,
-                    "Analysis": an_lead if an is not None else None,
+                    "Forecast": fc_ts_lead_da_ens_mean,
+                    "Analysis": an_ts_lead_da if an_ts_da is not None else None,
                 }
                 member_series = {
-                    "Forecast": fc_lead,
+                    "Forecast": fc_ts_lead_da,
                 }
             else:
                 series = {
-                    "Forecast": fc_lead_ens_mean,
-                    "Corrected forecast": mlfc_lead_ens_mean,
-                    "Analysis": an_lead if an is not None else None,
+                    "Forecast": fc_ts_lead_da_ens_mean,
+                    "Corrected forecast": mlfc_ts_lead_da_ens_mean,
+                    "Analysis": an_ts_lead_da if an_ts_da is not None else None,
                 }
                 member_series = {
-                    "Forecast": fc_lead,
-                    "Corrected forecast": mlfc_lead,
+                    "Forecast": fc_ts_lead_da,
+                    "Corrected forecast": mlfc_ts_lead_da,
                 }
 
-            label = safe_label(lead_label(fc, lt, leadtime_agg_coord))
+            label = safe_label(lead_label(fc_ts_lead_da, lt, leadtime_agg_coord))
             rolling_label = f" roll {rolling_mean_window} " if rolling_mean_window is not None else ""
+            rolling_filename = f"_roll{rolling_mean_window}" if rolling_mean_window is not None else ""
 
             out_file = (
                 s.plot_dir / "timeseries" / category
                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                 / leadtime_agg_mode
-                / f"{s.var_fc}_lead_{label}_{category}_{safe_label(rolling_label)}_timeseries.png"
+                / f"{s.var_fc}_lead_{label}_{category}{rolling_filename}_timeseries.png"
             )
 
             plot_field_timeseries(
@@ -288,7 +317,7 @@ def main() -> None:
                 train_end=s.train_end,
                 plot_single_members=False,
                 member_linestyle="-",
-                series_linestyle="--" if ens_mean else "-",
+                series_linestyle="--" if plot_ens_mean else "-",
             )
             n += 1
 
