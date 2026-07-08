@@ -144,15 +144,29 @@ def main() -> None:
     plot_dir = Path("/Users/jacopodallaglio/ML/training/seasonal/plots/scatter")
 
     variables = [
+        # Atmo
         "mslp",
-        "t2m",
-        "d2m",
-        "u10",
-        "v10",
-        "sst",
+        # "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
+        # "tprate",
+        # "tcc",
+        # Ocean
+        # "mlotst",
+        # "ssh",
+        # "sss",
+        # "t20d",
     ]
 
-    regions = ["World"]
+    regions = [
+        # "ConUS",
+        # "Europe",
+        # "Pacific",
+        "World",
+        # None, # accept all
+    ]
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 

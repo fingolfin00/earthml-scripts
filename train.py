@@ -1059,17 +1059,18 @@ def main():
         for var in [
             # Atmo
             "mslp",
-            "t2m",
-            "d2m",
-            "u10",
-            "v10",
-            "sst",
-            "tprate",
+            # "t2m",
+            # "d2m",
+            # "u10",
+            # "v10",
+            # "sst",
+            # "tprate",
+            # "tcc",
             # Ocean
-            "mlotst",
-            "ssh",
-            "sss",
-            "t20d",
+            # "mlotst",
+            # "ssh",
+            # "sss",
+            # "t20d",
         ]:
             print(f"Training for {var}")
             train(

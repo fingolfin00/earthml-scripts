@@ -45,9 +45,9 @@ def main() -> None:
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
         "bias",
-        "mae",
+        # "mae",
         # "mse",
-        "rmse",
+        # "rmse",
         # "nrmse",
         # "corr",
         # "r2",
@@ -59,9 +59,9 @@ def main() -> None:
         # Deterministic Metrics (Anomaly Fields)
         # ==========================================================
         # "bias_anom",
-        "mae_anom",
+        # "mae_anom",
         # "mse_anom",
-        "rmse_anom",
+        # "rmse_anom",
         # "nrmse_anom",
         # "acc",
         # "r2_anom",
@@ -110,19 +110,26 @@ def main() -> None:
     variables = [
         # Atmo
         "mslp",
-        "t2m",
-        "d2m",
-        "u10",
-        "v10",
+        # "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
         # "sst",
         # "tprate",
+        # "tcc",
         # Ocean
         # "mlotst",
         # "ssh",
         # "sss",
         # "t20d",
     ]
-    regions = ["World"] # World, ConUS or None to accept all
+    regions = [
+        # "ConUS",
+        # "Europe",
+        # "Pacific",
+        "World",
+        # None, # accept all
+    ]
 
     # ConUS
     # lat_range = (50, 25)

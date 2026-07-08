@@ -51,16 +51,16 @@ def main() -> None:
         # ==========================================================
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
-        # "bias",
+        "bias",
         # "mae",
         # "mse",
         # "rmse",
         # "nrmse",
         # "corr",
         # "r2",
-        "fc_std",
-        "an_std",
-        "std_ratio",
+        # "fc_std",
+        # "an_std",
+        # "std_ratio",
 
         # ==========================================================
         # Deterministic Metrics (Anomaly Fields)
@@ -72,9 +72,9 @@ def main() -> None:
         # "nrmse_anom",
         # "acc",
         # "r2_anom",
-        "fc_anom_std",
-        "an_anom_std",
-        "std_ratio_anom",
+        # "fc_anom_std",
+        # "an_anom_std",
+        # "std_ratio_anom",
 
         # ==========================================================
         # Skill Scores vs Climatology
@@ -117,12 +117,13 @@ def main() -> None:
     variables = [
         # Atmo
         "mslp",
-        "t2m",
-        "d2m",
-        "u10",
-        "v10",
-        "sst",
+        # "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
         # "tprate",
+        # "tcc",
         # Ocean
         # "mlotst",
         # "ssh",
