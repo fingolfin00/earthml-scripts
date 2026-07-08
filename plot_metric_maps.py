@@ -13,11 +13,14 @@ warnings.filterwarnings(
 
 import earthml
 from earthml import (
-    Settings,
+    LeadtimeUnit,
     get_experiment_configs,
     get_and_subset_datasets,
 )
 from earthml.metrics import (
+    LeadtimeAgg,
+    MetricAgg,
+    ClimPeriod,
     is_deterministic,
     is_probabilistic,
     get_metrics,
@@ -28,9 +31,6 @@ from earthml.plots import (
     lead_label,
     PlotMode,
     plot_map,
-    plot_profile,
-    plot_rank_histogram,
-    plot_timeseries
 )
 
 from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
@@ -152,14 +152,14 @@ def main() -> None:
         "all",
     ]
 
-    leadtime_units = "months"
-    clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    leadtime_units = LeadtimeUnit.MONTHS
+    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_mode = "aggregated" # "single", "aggregated", "seasonal_window"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
