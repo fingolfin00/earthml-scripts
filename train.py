@@ -691,6 +691,33 @@ def train(
     pred_paths: list[tuple[int, Path]] = []
     train_pred_paths: list[tuple[int, Path]] = []
     for lt in s.leadtimes:
+        exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
+
+        # Create exp dirs
+        exp_dir = s.exp_dir / exp_name
+        weights_dir = exp_dir / "weights"
+        checkpoints_dir = exp_dir / "checkpoints"
+
+        for d in (weights_dir, checkpoints_dir):
+            d.mkdir(exist_ok=True, parents=True)
+
+        def _leadtime_is_complete(exp_dir: Path) -> bool:
+            """Return True if this leadtime has already been fully trained."""
+            weights_ok = (exp_dir / "weights" / "weights.ckpt").exists()
+            test_ok = (exp_dir / "test_preds.zarr").exists()
+            train_ok = (exp_dir / "train_preds.zarr").exists()
+            return weights_ok and test_ok and train_ok
+
+        # Skip completed leadtimes unless forcing a retrain
+        if _leadtime_is_complete(exp_dir) and not force_retrain:
+            print(f"[yellow]Skipping leadtime {lt}: already complete.[/yellow]")
+            pred_paths.append((int(lt), exp_dir / "test_preds.zarr"))
+            train_pred_paths.append((int(lt), exp_dir / "train_preds.zarr"))
+            continue
+
+        if force_retrain:
+            print(f"[yellow]Force retrain enabled for leadtime {lt}.[/yellow]")
+
         dataset_d = make_train_test_datasets_for_leadtime(
             forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
             analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
@@ -714,16 +741,6 @@ def train(
             },
             interpolate=interpolate,
         )
-
-        exp_name = f"exp_{lt}_{s.leadtime_unit}"
-
-        # Create exp dirs
-        exp_dir = s.exp_dir / exp_name
-        weights_dir = exp_dir / "weights"
-        checkpoints_dir = exp_dir / "checkpoints"
-
-        for d in (weights_dir, checkpoints_dir):
-            d.mkdir(exist_ok=True, parents=True)
 
         train_dataset = dataset_d["train"]
 
