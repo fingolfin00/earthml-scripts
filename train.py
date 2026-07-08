@@ -21,6 +21,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from earthml import (
     LeadtimeUnit,
     ClimPeriod,
+    TargetMode,
     XarrayDataset,
     build_loss,
     build_net,
@@ -30,6 +31,7 @@ from earthml import (
     Table,
     Settings,
     calculate_climatology,
+    select_clim_for_time,
     open_zarr,
 )
 
@@ -96,15 +98,10 @@ def make_leadtime_pair(
     end: str,
     clim_start: str,
     clim_end: str,
-    target_mode: Literal[
-        "analysis",
-        "residual",
-        "anomaly",
-        "anomaly_residual",
-    ] = "analysis",
+    target_mode: TargetMode = "analysis",
     time_dim: str = "time",
     leadtime_dim: str = "leadtime",
-    clim_period: ClimPeriod = "month",
+    clim_period: ClimPeriod = ClimPeriod.MONTH,
     forecast_vars: Sequence | None = None,
     analysis_vars: Sequence | None = None,
     lat: Sequence | None = None,
@@ -206,8 +203,11 @@ def make_leadtime_pair(
         fc_train_ds, fc_clim = xr.unify_chunks(fc_train_ds, fc_clim)
         an_train_ds, an_clim = xr.unify_chunks(an_train_ds, an_clim)
 
-        fc_train_anom = fc_train_ds.groupby(f"{time_dim}.{clim_period}") - fc_clim
-        an_train_anom = an_train_ds.groupby(f"{time_dim}.{clim_period}") - an_clim
+        fc_clim_for_train = select_clim_for_time(fc_clim, fc_train_ds[time_dim].values, clim_period)
+        an_clim_for_train = select_clim_for_time(an_clim, an_train_ds[time_dim].values, clim_period)
+
+        fc_train_anom = fc_train_ds - fc_clim_for_train
+        an_train_anom = an_train_ds - an_clim_for_train
 
         if target_mode == "anomaly":
             return fc_train_anom, an_train_anom, fc_clim, an_clim
@@ -233,12 +233,8 @@ def make_train_test_datasets_for_leadtime(
     train_end: str,
     test_start: str,
     test_end: str,
-    target_mode: Literal[
-        "analysis",
-        "residual",
-        "anomaly",
-        "anomaly_residual",
-    ] = "analysis",
+    target_mode: TargetMode = "analysis",
+    clim_period: ClimPeriod = ClimPeriod.MONTH,
     forecast_vars: Sequence[str] | None = None,
     analysis_vars: Sequence[str] | None = None,
     region: dict | None = None,
@@ -257,6 +253,7 @@ def make_train_test_datasets_for_leadtime(
         clim_start=train_start,
         clim_end=train_end,
         target_mode=target_mode,
+        clim_period=clim_period,
         forecast_vars=forecast_vars,
         analysis_vars=analysis_vars,
         lon=region["lon"] if region is not None else None,
@@ -274,6 +271,7 @@ def make_train_test_datasets_for_leadtime(
         clim_start=train_start,
         clim_end=train_end,
         target_mode=target_mode,
+        clim_period=clim_period,
         forecast_vars=forecast_vars,
         analysis_vars=analysis_vars,
         lon=region["lon"] if region is not None else None,
@@ -652,6 +650,7 @@ def train(
         test_start="2021-01-01",
         test_end="2022-12-01",
         target_mode="analysis",
+        clim_period=ClimPeriod.MONTH,
         seed=42,
         realization_as_channel=False,
         output_realizations="deterministic",
@@ -702,6 +701,7 @@ def train(
             test_start=s.test_start,
             test_end=s.test_end,
             target_mode=s.target_mode,
+            clim_period=s.clim_period,
             forecast_vars=[s.var_fc],
             analysis_vars=[s.var_an],
             region=s.region,
@@ -915,12 +915,10 @@ def train(
                 if an_clim is None:
                     raise ValueError("an_clim is required for target_mode='anomaly'.")
 
-                an_clim_for_time = an_clim.sel(
-                    month=xr.DataArray(
-                        pd.DatetimeIndex(preds_ds.time.values).month,
-                        dims="time",
-                        coords={"time": preds_ds.time.values},
-                    )
+                an_clim_for_time = select_clim_for_time(
+                    an_clim,
+                    preds_ds.time.values,
+                    s.clim_period,
                 )
 
                 preds_ds = (preds_ds[s.var_an] + an_clim_for_time[s.var_an]).to_dataset(
@@ -933,20 +931,16 @@ def train(
                         "an_clim and fc_clim are required for residual anomaly reconstruction."
                     )
 
-                an_clim_for_time = an_clim.sel(
-                    month=xr.DataArray(
-                        pd.DatetimeIndex(preds_ds.time.values).month,
-                        dims="time",
-                        coords={"time": preds_ds.time.values},
-                    )
+                an_clim_for_time = select_clim_for_time(
+                    an_clim,
+                    preds_ds.time.values,
+                    s.clim_period,
                 )
 
-                fc_clim_for_time = fc_clim.sel(
-                    month=xr.DataArray(
-                        pd.DatetimeIndex(preds_ds.time.values).month,
-                        dims="time",
-                        coords={"time": preds_ds.time.values},
-                    )
+                fc_clim_for_time = select_clim_for_time(
+                    fc_clim,
+                    preds_ds.time.values,
+                    s.clim_period,
                 )
 
                 fc_base = dataset.input_ds[s.var_fc]
