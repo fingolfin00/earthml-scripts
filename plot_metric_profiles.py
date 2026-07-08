@@ -10,6 +10,8 @@ warnings.filterwarnings(
     category=PerformanceWarning,
 )
 
+from dask.diagnostics.progress import ProgressBar
+
 import earthml
 from earthml import (
     LeadtimeUnit,
@@ -39,6 +41,7 @@ def main() -> None:
     force_clim_recalc = False
     interpolate = True
     build_analysis = True
+    materialize_once = False
 
     metrics = [
         # ==========================================================
@@ -153,7 +156,7 @@ def main() -> None:
     ]
 
     leadtime_units = LeadtimeUnit.MONTHS
-    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None
@@ -256,11 +259,12 @@ def main() -> None:
             metrics_fc_ds = xr.merge([metrics_fc_det, metrics_fc_prob])
             metrics_mlfc_ds = xr.merge([metrics_mlfc_det, metrics_mlfc_prob])
 
-            # with ProgressBar():
-            #     metrics_fc_ds = metrics_fc_ds.compute()
-            #     metrics_mlfc_ds = metrics_mlfc_ds.compute()
-            #     metrics_fc_ds_members = metrics_fc_ds_members.compute()
-            #     metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
+            if materialize_once:
+                with ProgressBar():
+                    metrics_fc_ds = metrics_fc_ds.compute()
+                    metrics_mlfc_ds = metrics_mlfc_ds.compute()
+                    metrics_fc_ds_members = metrics_fc_ds_members.compute()
+                    metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
 
             available_metrics = [
                 m for m in metrics
@@ -314,7 +318,7 @@ def main() -> None:
                         period_dim=f"start_{leadtime_units}",
                         realization_dim="realization",
                         spread="std",
-                        plot_single_members=False,
+                        plot_single_members=True,
                     )
 
                     n += 1
