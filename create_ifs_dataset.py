@@ -389,10 +389,12 @@ def main():
 
                 fc_all = fc_all.sortby(["time", "leadtime"])
                 fc_all = fc_all.chunk({
-                    "time": 1,
-                    "leadtime": 1,
-                    "latitude": 300,
-                    "longitude": 600,
+                    "time": 512,
+                    **{
+                        d: -1
+                        for d in fc_all.dims
+                        if d != "time"
+                    }
                 })
 
 
@@ -467,9 +469,12 @@ def main():
                 )
 
                 an_all = an_all.chunk({
-                    "time": 1,
-                    "latitude": 300,
-                    "longitude": 600,
+                    "time": 512,
+                    **{
+                        d: -1
+                        for d in fc_all.dims
+                        if d != "time"
+                    }
                 })
 
                 with ProgressBar():
