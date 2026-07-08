@@ -13,12 +13,12 @@ warnings.filterwarnings(
 import earthml
 from earthml import (
     LeadtimeUnit,
+    ClimPeriod,
     get_experiment_configs,
 )
 from earthml.metrics import (
     LeadtimeAgg,
     MetricAgg,
-    ClimPeriod,
     is_deterministic,
     is_probabilistic,
     get_scalar_metrics,

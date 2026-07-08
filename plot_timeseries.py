@@ -15,6 +15,7 @@ warnings.filterwarnings(
 import earthml
 from earthml import (
     LeadtimeUnit,
+    ClimPeriod,
     get_experiment_configs,
     get_and_subset_datasets,
     aggregate_leadtime_ds,
@@ -22,7 +23,6 @@ from earthml import (
 from earthml.metrics import (
     LeadtimeAgg,
     MetricAgg,
-    ClimPeriod,
     stack_hour_clim,
     groupby_period,
     calculate_save_and_subset_climatologies,

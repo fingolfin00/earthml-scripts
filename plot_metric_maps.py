@@ -10,17 +10,15 @@ warnings.filterwarnings(
     category=PerformanceWarning,
 )
 
-
 import earthml
 from earthml import (
     LeadtimeUnit,
+    ClimPeriod,
     get_experiment_configs,
     get_and_subset_datasets,
 )
 from earthml.metrics import (
     LeadtimeAgg,
-    MetricAgg,
-    ClimPeriod,
     is_deterministic,
     is_probabilistic,
     get_metrics,
@@ -154,7 +152,7 @@ def main() -> None:
     ]
 
     leadtime_units = LeadtimeUnit.MONTHS
-    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None

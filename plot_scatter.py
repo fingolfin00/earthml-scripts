@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 
 from earthml import (
     LeadtimeUnit,
+    ClimPeriod,
     Settings,
     get_experiment_configs,
 )
@@ -17,7 +18,6 @@ from earthml.metrics import (
     get_scalar_metrics,
     LeadtimeAgg,
     MetricAgg,
-    ClimPeriod,
 )
 from earthml.plots import (
     plot_metric_diff_scatter,
