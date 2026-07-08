@@ -41,7 +41,7 @@ def iter_scalar_points(
     lat_range: tuple[float, float] | None = None,
     lon_range: tuple[float, float] | None = None,
     time_range: tuple[str, str] | None = None,
-    clim_period: ClimPeriod = "month",
+    clim_period: ClimPeriod = ClimPeriod.MONTH,
     clim_rolling_window: int | None = None,
     clim_time_range: tuple[str, str] | None = None,
     leadtime_units: LeadtimeUnit = LeadtimeUnit.MONTHS,
