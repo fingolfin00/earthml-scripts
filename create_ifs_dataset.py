@@ -470,7 +470,6 @@ def main():
                     "time": 16,
                     "latitude": 256,
                     "longitude": 256,
-                    "leadtime": 1,
                 })
 
                 with ProgressBar():
