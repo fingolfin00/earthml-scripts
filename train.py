@@ -1,5 +1,4 @@
 from typing import Sequence, Literal, TypedDict
-from enum import StrEnum
 
 from pathlib import Path
 
@@ -20,6 +19,8 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 
 from earthml import (
+    LeadtimeUnit,
+    ClimPeriod,
     XarrayDataset,
     build_loss,
     build_net,
@@ -32,11 +33,6 @@ from earthml import (
     open_zarr,
 )
 
-
-class LeadtimeUnit(StrEnum):
-    MONTH = "month"
-    DAY = "day"
-    HOUR = "hour"
 
 class LeadtimeDatasets(TypedDict):
     train: XarrayDataset
@@ -51,16 +47,16 @@ def compute_leadtimes(
     leadtime_value: int | float,
     leadtime_unit: LeadtimeUnit,
 ):
-    if leadtime_unit == "month":
+    if leadtime_unit == LeadtimeUnit.YEARS:
+        return pd.DateOffset(years=int(leadtime_value))
+    elif leadtime_unit == LeadtimeUnit.MONTHS:
         return pd.DateOffset(months=int(leadtime_value))
-
-    elif leadtime_unit == "day":
+    elif leadtime_unit == LeadtimeUnit.DAYS:
         return pd.Timedelta(days=leadtime_value)
-
-    elif leadtime_unit == "hour":
+    elif leadtime_unit == LeadtimeUnit.HOURS:
         return pd.Timedelta(hours=leadtime_value)
-
     raise ValueError(f"Unsupported leadtime_unit={leadtime_unit}")
+
 
 def add_or_set_leadtime(ds: xr.Dataset, lt: int) -> xr.Dataset:
     # If leadtime already exists as a dimension, select/squeeze it
@@ -108,7 +104,7 @@ def make_leadtime_pair(
     ] = "analysis",
     time_dim: str = "time",
     leadtime_dim: str = "leadtime",
-    clim_period: str = "month",
+    clim_period: ClimPeriod = "month",
     forecast_vars: Sequence | None = None,
     analysis_vars: Sequence | None = None,
     lat: Sequence | None = None,
@@ -565,7 +561,7 @@ def print_training_recap(
 
     flat_recap = {
         "experiment.name": exp_name or s.output_name,
-        "experiment.leadtime": f"{leadtime} {s.leadtime_unit}",
+        "experiment.leadtime": f"{leadtime} {s.leadtime_unit.value}",
         "experiment.force_retrain": force_retrain,
         "experiment.torch_workers": s.torch_workers,
 
@@ -647,7 +643,7 @@ def train(
         var_an=var,
         model_fc=f"sps4_{var_type_fc}",
         model_an=reanalysis_model,
-        leadtime_unit="month",
+        leadtime_unit=LeadtimeUnit.MONTHS,
         leadtimes=[1, 2, 3, 4, 5, 6],
         region_name=region_name,
         region=region_location,
@@ -737,7 +733,7 @@ def train(
         elif s.pretrain_norm == "full":
             NormClass = Normalize
         else:
-            raise ValueError(f"pretrain_norm={pratrain_norm} not supported.")
+            raise ValueError(f"pretrain_norm={s.pretrain_norm} not supported.")
 
         normalize_input  = NormClass().fit(train_dataset, dim='x')
         normalize_target = NormClass().fit(train_dataset, dim='y')
