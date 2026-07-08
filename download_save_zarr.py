@@ -56,7 +56,7 @@ VARIABLES_ORAS5 = {
     "sss": "sea_surface_salinity",
     "t20d": "depth_of_20_c_isotherm",
     "ssh": "sea_surface_height",
-    "mld1": "mixed_layer_depth_0_01",  # verify this name
+    "mld1": "mixed_layer_depth_0_01",
 }
 
 VARIABLES_SPS4_ATMO = {
@@ -73,7 +73,7 @@ VARIABLES_SPS4_OCEAN = {
     "sos": "sea_surface_salinity",
     "t20d": "depth_of_20_c_isotherm",
     "zos": "sea_surface_height_above_geoid",
-    "mlotst": "mixed_layer_depth_0_01",  # verify this name
+    "mlotst": "mixed_layer_depth_0_01",
 }
 
 CANONICAL_VARS = {
@@ -569,9 +569,9 @@ def save_reanalysis_zarrs(
     return datasets
 
 REANALYSIS_CHUNKS = {
-    "time": 12,
-    "latitude": 180,
-    "longitude": 360,
+    "time": 64,
+    "latitude": -1,
+    "longitude": -1,
 }
 
 def save_era5_to_zarr():
@@ -744,11 +744,11 @@ def save_forecast_variable_zarr(
 # SPS4
 # =============================================================================
 SPS4_FORECAST_CHUNKS = {
-    "time": 1,
+    "time": 16,
     "realization": -1,
-    "leadtime": -1,
-    "latitude": 180,
-    "longitude": 360,
+    "leadtime": 1,
+    "latitude": -1,
+    "longitude": -1,
 }
 
 def save_sps4_atmo_to_zarr():
