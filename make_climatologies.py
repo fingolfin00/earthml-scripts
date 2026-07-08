@@ -15,7 +15,8 @@ warnings.filterwarnings(
 
 import earthml
 from earthml import (
-    Settings,
+    LeadtimeUnit,
+    ClimPeriod,
     get_experiment_configs,
 )
 from earthml.metrics import calculate_save_and_subset_climatologies
@@ -24,23 +25,29 @@ from earthml.metrics import calculate_save_and_subset_climatologies
 def main() -> None:
     # Get configs
 
-    experiments_root = Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo")
+    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     variables = [
-        "t2m",
+        # Atmo
         "mslp",
-        "d2m",
-        "u10",
-        "v10",
-        "tcc",
+        # "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
         # "sst",
         # "tprate",
+        # "tcc",
+        # Ocean
+        # "mlotst",
+        # "ssh",
+        # "sss",
+        # "t20d",
     ]
     regions = [
-        "ConUS",
-        "Europe",
+        # "ConUS",
+        # "Europe",
         # "Pacific",
-        # "World",
+        "World",
         # None, # accept all
     ]
 
@@ -61,9 +68,9 @@ def main() -> None:
     lat_range = None
     lon_range = None
 
-    leadtime_units = "hours"
-    clim_period = "dayofyear_hour" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
-    clim_rolling_window = 31
+    leadtime_units = LeadtimeUnit.MONTHS
+    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "dayofyear_hour", "month_hour", "day_hour"
+    clim_rolling_window = None
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
