@@ -128,7 +128,13 @@ def main() -> None:
         # "sss",
         # "t20d",
     ]
-    regions = ["World"] # World, ConUS or None to accept all
+    regions = [
+        # "ConUS",
+        # "Europe",
+        # "Pacific",
+        "World",
+        # None, # accept all
+    ]
 
     # ConUS
     # lat_range = (50, 25)
