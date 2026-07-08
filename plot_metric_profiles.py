@@ -10,30 +10,25 @@ warnings.filterwarnings(
     category=PerformanceWarning,
 )
 
-from dask.diagnostics.progress import ProgressBar
-
 import earthml
 from earthml import (
-    Settings,
+    LeadtimeUnit,
     get_experiment_configs,
 )
 from earthml.metrics import (
+    LeadtimeAgg,
+    MetricAgg,
+    ClimPeriod,
     is_deterministic,
     is_probabilistic,
-    get_metrics,
-    LeadtimeAgg,
+    get_scalar_metrics,
 )
 from earthml.plots import (
     safe_label,
     lead_label,
     PlotMode,
-    plot_map,
     plot_profile,
-    plot_rank_histogram,
-    plot_timeseries
 )
-
-from plot_scatter import get_scalar_metrics
 
 
 def main() -> None:
@@ -150,15 +145,15 @@ def main() -> None:
         "all",
     ]
 
-    leadtime_units = "months"
-    clim_period = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    leadtime_units = LeadtimeUnit.MONTHS
+    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    metric_agg_mode = "spatial_avg" # "spatial_avg", "global", "spatial_rmse"
-    leadtime_agg_mode = "single" # "single", "aggregated", "seasonal_window"
+    metric_agg_mode: MetricAgg = "spatial_avg" # "spatial_avg", "global", "spatial_rmse"
+    leadtime_agg_mode: LeadtimeAgg = "single" # "single", "aggregated", "seasonal_window"
     plot_members = True
 
     settings = get_experiment_configs(experiments_root, variables, regions)
