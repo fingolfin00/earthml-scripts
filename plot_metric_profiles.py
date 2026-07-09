@@ -37,6 +37,7 @@ def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "profiles"
+    regenerate_plots = False
 
     force_clim_recalc = False
     interpolate = True
@@ -166,7 +167,14 @@ def main() -> None:
     leadtime_agg_mode: LeadtimeAgg = "single" # "single", "aggregated", "seasonal_window"
     plot_members = True
 
-    settings = get_experiment_configs(experiments_root, variables, regions)
+    settings = get_experiment_configs(
+        experiments_root,
+        var_fc=variables,
+        region_name=regions,
+        net_name="SmaAt_UNet",
+        target_mode="anomaly_residual",
+        extra_suffix_folder="random_split",
+    )
 
     print(f"Found {len(settings)} matching experiment(s).")
 
@@ -301,6 +309,9 @@ def main() -> None:
                         / metric_agg_mode
                         / f"{s.var_fc}_{m}_{leadtime_agg_mode}lt.png"
                     )
+
+                    if out_file.exists() and regenerate_plots == False:
+                        continue
 
                     print(f"Saving profile {out_file}")
 
