@@ -45,7 +45,7 @@ VAR_FILTERS = {
 forecast_dir = Path("/data/inputs/METOCEAN/rolling/model/atmos/ECMWF/IFS_010/1.0forecast/1h/grib/")
 analysis_dir = Path("/data/inputs/METOCEAN/historical/model/atmos/ECMWF/IFS_010/analysis/6h/grib/")
 
-out_dir = Path("./ifs_data")
+out_dir = Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo/raw")
 out_dir.mkdir(exist_ok=True)
 
 start = pd.Timestamp("2019-10-14 00:00")
