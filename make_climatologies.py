@@ -51,7 +51,14 @@ def main() -> None:
         # None, # accept all
     ]
 
-    settings = get_experiment_configs(experiments_root, variables, regions)
+    settings = get_experiment_configs(
+        experiments_root,
+        var_fc=variables,
+        region_name=regions,
+        net_name="SmaAt_UNet",
+        target_mode="anomaly_residual",
+        extra_suffix_folder="random_split",
+    )
 
     # Selection settings
 
@@ -69,7 +76,7 @@ def main() -> None:
     lon_range = None
 
     leadtime_units = LeadtimeUnit.MONTHS
-    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "dayofyear_hour", "month_hour", "day_hour"
+    clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "dayofyear_hour", "month_hour", "day_hour"
     clim_rolling_window = None
 
     time_range = None
