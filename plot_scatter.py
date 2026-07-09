@@ -168,7 +168,14 @@ def main() -> None:
         # None, # accept all
     ]
 
-    settings = get_experiment_configs(experiments_root, variables, regions)
+    settings = get_experiment_configs(
+        experiments_root,
+        var_fc=variables,
+        region_name=regions,
+        net_name="SmaAt_UNet",
+        target_mode="anomaly_residual",
+        extra_suffix_folder="random_split",
+    )
 
     # ConUS
     # lat_range = (50, 25)
