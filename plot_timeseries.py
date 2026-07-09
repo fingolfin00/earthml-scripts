@@ -124,7 +124,7 @@ def main() -> None:
     n = 0
     for s in settings:
         valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
-        clim_time_range = (s.train_start, s.test_end)
+        clim_time_range = (s.train_start, s.train_end)
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
