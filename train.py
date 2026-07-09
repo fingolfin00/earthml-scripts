@@ -951,10 +951,8 @@ def train(
                 )
 
             elif s.target_mode == "anomaly_residual":
-                if an_clim is None or fc_clim is None:
-                    raise ValueError(
-                        "an_clim and fc_clim are required for residual anomaly reconstruction."
-                    )
+                if an_clim is None:
+                    raise ValueError("an_clim is required for residual anomaly reconstruction.")
 
                 an_clim_for_time = select_clim_for_time(
                     an_clim,
@@ -962,14 +960,7 @@ def train(
                     s.clim_period,
                 )
 
-                fc_clim_for_time = select_clim_for_time(
-                    fc_clim,
-                    preds_ds.time.values,
-                    s.clim_period,
-                )
-
-                fc_base = dataset.input_ds[s.var_fc]
-                fc_anom = fc_base - fc_clim_for_time[s.var_fc]
+                fc_anom = dataset.input_ds[s.var_fc] # already anomaly
 
                 if "realization" in fc_anom.dims:
                     fc_anom = fc_anom.mean("realization")
