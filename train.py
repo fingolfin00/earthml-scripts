@@ -34,6 +34,7 @@ from earthml import (
     select_clim_for_time,
     open_zarr,
     save_zarr,
+    safe_chunk_spec,
 )
 
 
@@ -171,11 +172,11 @@ def make_leadtime_pair(
 
         fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
 
-        with ProgressBar():
-            print(f"Materialize {label} input dataset")
-            fc_ds = fc_ds.load()
-            print(f"Materialize {label} target dataset")
-            an_ds = an_ds.load()
+        # with ProgressBar():
+        #     print(f"Materialize {label} input dataset")
+        #     fc_ds = fc_ds.load()
+        #     print(f"Materialize {label} target dataset")
+        #     an_ds = an_ds.load()
 
         return fc_ds, an_ds
 
@@ -189,7 +190,7 @@ def make_leadtime_pair(
         res_train_ds = an_train_ds - fc_train_ens_mean
         return fc_train_ds, res_train_ds, None, None
 
-    if target_mode in {"anomaly", "anomaly_residual"}:
+    if target_mode in {"anomaly", "anomaly_residual", "anomaly_residual_realization"}:
         fc_clim_ds, an_clim_ds = _gen_fc_an_ds(
             fc_ds,
             an_ds,
@@ -201,25 +202,30 @@ def make_leadtime_pair(
         fc_clim: xr.Dataset = calculate_climatology(fc_clim_ds, time_dim, clim_period)
         an_clim: xr.Dataset = calculate_climatology(an_clim_ds, time_dim, clim_period)
 
-        fc_train_ds, fc_clim = xr.unify_chunks(fc_train_ds, fc_clim)
-        an_train_ds, an_clim = xr.unify_chunks(an_train_ds, an_clim)
-
         fc_clim_for_train = select_clim_for_time(fc_clim, fc_train_ds[time_dim].values, clim_period)
         an_clim_for_train = select_clim_for_time(an_clim, an_train_ds[time_dim].values, clim_period)
 
-        fc_train_anom = fc_train_ds - fc_clim_for_train
-        an_train_anom = an_train_ds - an_clim_for_train
+        fc_clim_for_train = fc_clim_for_train.chunk(safe_chunk_spec(fc_clim_for_train, fc_clim))
+        an_clim_for_train = an_clim_for_train.chunk(safe_chunk_spec(an_clim_for_train, an_clim))
+
+        an_train_anom = (an_train_ds - an_clim_for_train).unify_chunks()
+        fc_train_anom = (fc_train_ds - fc_clim_for_train).unify_chunks()
 
         if target_mode == "anomaly":
             return fc_train_anom, an_train_anom, fc_clim, an_clim
 
-        fc_anom_mean = (
-            fc_train_anom.mean("realization")
-            if "realization" in fc_train_anom.dims
-            else fc_train_anom
-        )
+        elif target_mode == "anomaly_residual":
+            fc_anom_mean = (
+                fc_train_anom.mean("realization")
+                if "realization" in fc_train_anom.dims
+                else fc_train_anom
+            )
 
-        res_train_anom_ds = an_train_anom - fc_anom_mean
+            res_train_anom_ds = an_train_anom - fc_anom_mean
+
+        elif target_mode == "anomaly_residual_realization":
+            res_train_anom_ds = an_train_anom - fc_train_anom
+
         return fc_train_anom, res_train_anom_ds, fc_clim, an_clim
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
@@ -928,12 +934,15 @@ def train(
             preds_store = exp_dir / f"{zarr_file_name}.zarr"
             preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
+            preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
+
             # Reconstruct
             if s.target_mode == "residual":
                 fc_base = dataset.input_ds[s.var_fc]
                 if "realization" in fc_base.dims:
                     fc_base = fc_base.mean("realization")
 
+                fc_base = fc_base.chunk(safe_chunk_spec(fc_base, dataset.input_ds))
                 preds_ds = (preds_ds[s.var_an] + fc_base).to_dataset(name=s.var_an)
 
             elif s.target_mode == "anomaly":
@@ -945,14 +954,16 @@ def train(
                     preds_ds.time.values,
                     s.clim_period,
                 )
+                an_clim_for_time = an_clim_for_time.chunk(safe_chunk_spec(an_clim_for_time, dataset.target_ds))
 
                 preds_ds = (preds_ds[s.var_an] + an_clim_for_time[s.var_an]).to_dataset(
                     name=s.var_an
                 )
 
-            elif s.target_mode == "anomaly_residual":
+            elif s.target_mode in ("anomaly_residual", "anomaly_residual_realization"):
                 if an_clim is None:
                     raise ValueError("an_clim is required for residual anomaly reconstruction.")
+
 
                 an_clim_for_time = select_clim_for_time(
                     an_clim,
@@ -962,13 +973,20 @@ def train(
 
                 fc_anom = dataset.input_ds[s.var_fc] # already anomaly
 
-                if "realization" in fc_anom.dims:
+                if s.target_mode == "anomaly_residual" and "realization" in fc_anom.dims:
                     fc_anom = fc_anom.mean("realization")
+
+                fc_anom = fc_anom.chunk(safe_chunk_spec(fc_anom, dataset.input_ds))
+                an_clim_for_time = an_clim_for_time.chunk(safe_chunk_spec(an_clim_for_time, an_clim))
 
                 corrected = preds_ds[s.var_an] + fc_anom + an_clim_for_time[s.var_an]
                 preds_ds = corrected.to_dataset(name=s.var_an)
 
-            save_zarr(preds_ds, preds_store, dataset.input_ds)
+            save_zarr(
+                preds_ds,
+                preds_store,
+                safe_chunk_spec(preds_ds, dataset.input_ds),
+                )
 
             del preds_norm, preds, preds_ds
             if hasattr(model, "test_preds"):
