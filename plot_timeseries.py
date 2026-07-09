@@ -41,6 +41,7 @@ def main() -> None:
 
     plot_mode: PlotMode = "timeseries"
     separate_plots = False 
+    regenerate_plots = False
 
     force_clim_recalc = False
     interpolate = True
@@ -48,12 +49,12 @@ def main() -> None:
 
     variables = [
         # Atmo
-        "mslp",
+        # "mslp",
         "t2m",
-        "d2m",
-        "u10",
-        "v10",
-        "sst",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
         # "tprate",
         # "tcc",
         # Ocean
@@ -84,7 +85,7 @@ def main() -> None:
     lon_range = None
 
     leadtime_units = LeadtimeUnit.MONTHS
-    clim_period: ClimPeriod = "month" # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
 
     time_range = None
@@ -109,7 +110,14 @@ def main() -> None:
         "Analysis": 4.0,
     }
 
-    settings = get_experiment_configs(experiments_root, variables, regions)
+    settings = get_experiment_configs(
+        experiments_root,
+        var_fc=variables,
+        region_name=regions,
+        net_name="SmaAt_UNet",
+        target_mode="anomaly_residual",
+        extra_suffix_folder="random_split",
+    )
 
     print(f"Found {len(settings)} matching experiment(s).")
 
@@ -311,6 +319,9 @@ def main() -> None:
                 / leadtime_agg_mode
                 / f"{s.var_fc}_lead_{label}_{category}{rolling_filename}_timeseries.png"
             )
+
+            if out_file.exists() and regenerate_plots == False:
+                continue
 
             plot_field_timeseries(
                 series=series,
