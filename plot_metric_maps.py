@@ -36,10 +36,12 @@ from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
+    fc_plot_dir = Path("/Users/jacopodallaglio/ML/training/seasonal/plots")
 
     plot_mode: PlotMode = "maps"
 
     plot_mlfc = True
+    regenerate_plots = False
 
     force_clim_recalc = False
     interpolate = True
@@ -166,7 +168,15 @@ def main() -> None:
 
     leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
 
-    settings = get_experiment_configs(experiments_root, variables, regions)
+    settings = get_experiment_configs(
+        experiments_root,
+        var_fc=variables,
+        region_name=regions,
+        net_name="SmaAt_UNet",
+        target_mode="anomaly_residual",
+        extra_suffix_folder="time_split",
+        # extra_suffix_folder="random_split",
+    )
 
     print(f"Found {len(settings)} matching experiment(s).")
 
@@ -214,6 +224,10 @@ def main() -> None:
         mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes) if mlfc_clim is not None else None
 
         models = ("fc", "mlfc")
+        model_plot_folders = {
+            "fc": fc_plot_dir,
+            "mlfc": s.plot_dir,
+        }
         ds_plot = (fc, mlfc) if plot_mlfc else (fc,)
         ds_clim_plot = (fc_clim, mlfc_clim) if plot_mlfc else (fc_clim,)
 
@@ -295,14 +309,24 @@ def main() -> None:
                         for lead_value in metric_maps[m][leadtime_agg_coord].values:
                             label = safe_label(lead_label(metric_maps[m], lead_value, leadtime_agg_coord))
 
-                            out_file = (
-                                s.plot_dir / "maps"
+                            common_path = (
+                                Path("maps")
                                 / safe_label(start_period)
                                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                                 / m
                                 / leadtime_agg_mode
-                                / f"{s.var_fc}_{m}_{model}_lead_{label}.png"
                             )
+
+                            filename = f"{s.var_fc}_{m}_{model}_lead_{label}.png"
+
+                            out_file = model_plot_folders[model] / common_path / filename
+                            link = s.plot_dir / common_path / filename
+
+                            if out_file.exists() and not regenerate_plots:
+                                if model == "fc" and not link.exists():
+                                    link.parent.mkdir(parents=True, exist_ok=True)
+                                    link.symlink_to(out_file.resolve())
+                                continue
 
                             print(f"Saving map {out_file}")
 
@@ -323,6 +347,11 @@ def main() -> None:
                                 plot_type="contourf",
                                 title_strftime="%Y",
                             )
+
+                            if model == "fc" and not link.exists():
+                                link.parent.mkdir(parents=True, exist_ok=True)
+                                link.symlink_to(out_file.resolve())
+
                             n += 1
 
 
