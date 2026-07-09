@@ -546,6 +546,7 @@ def print_training_recap(
     n_channels: int,
     n_classes: int,
     force_retrain: bool,
+    force_test: bool,
     train_shape: tuple | None = None,
     target_shape: tuple | None = None,
     test_shape: tuple | None = None,
@@ -562,6 +563,7 @@ def print_training_recap(
         "experiment.name": exp_name or s.output_name,
         "experiment.leadtime": f"{leadtime} {s.leadtime_unit.value}",
         "experiment.force_retrain": force_retrain,
+        "experiment.force_test": force_test,
         "experiment.torch_workers": s.torch_workers,
 
         "data.forecast": f"{s.model_fc}/{s.var_fc}",
@@ -623,6 +625,7 @@ def train(
 
     dry_run = False
     force_retrain = False
+    force_test = True
     interpolate = True
 
     accelerator, device = resolve_accelerator_and_device()
@@ -710,9 +713,10 @@ def train(
             train_ok = (exp_dir / "train_preds.zarr").exists()
             return weights_ok and test_ok and train_ok
 
-        # Skip completed leadtimes unless forcing a retrain
-        if _leadtime_is_complete(exp_dir) and not force_retrain:
-            print(f"[yellow]Skipping leadtime {lt}: already complete.[/yellow]")
+        # Skip completed leadtimes unless forcing a retrain or a test
+        leadtime_complete = _leadtime_is_complete(exp_dir)
+        if leadtime_complete and not force_retrain and not force_test:
+            print(f"Skipping leadtime {lt}: already complete.")
             pred_paths.append((int(lt), exp_dir / "test_preds.zarr"))
             train_pred_paths.append((int(lt), exp_dir / "train_preds.zarr"))
             continue
@@ -836,6 +840,7 @@ def train(
             n_channels=n_channels,
             n_classes=n_classes,
             force_retrain=force_retrain,
+            force_test=force_test,
             train_shape=tuple(train_dataset.x.shape),
             target_shape=tuple(train_dataset.y.shape),
             test_shape=tuple(test_dataset.x.shape),
@@ -877,11 +882,12 @@ def train(
 
         # Train
         train_ckpt_path = None if force_retrain else (Path(ckpt_path) if Path(ckpt_path).exists() else None)
-        train_trainer.fit(
-            model,
-            datamodule=train_datamodule,
-            ckpt_path=train_ckpt_path,
-        )
+        if force_retrain or not leadtime_complete:
+            train_trainer.fit(
+                model,
+                datamodule=train_datamodule,
+                ckpt_path=train_ckpt_path,
+            )
 
         # Load weights from latest checkpoints
         checkpoint = torch.load(ckpt_path, map_location=device)
@@ -980,12 +986,16 @@ def train(
             return preds_store
 
         # Predict
-        test_store = _test(test_dataset, test_dataloader, "test_preds", dataset_d["y_clim"], dataset_d["x_clim"])
-        pred_paths.append((int(lt), test_store))
+        if force_retrain or force_test or not leadtime_complete:
+            test_store = _test(test_dataset, test_dataloader, "test_preds", dataset_d["y_clim"], dataset_d["x_clim"])
+            pred_paths.append((int(lt), test_store))
 
-        # Predict on train period too, for climatology
-        train_store = _test(train_dataset, train_test_dataloader, "train_preds", dataset_d["y_clim"], dataset_d["x_clim"])
-        train_pred_paths.append((int(lt), train_store))
+            # Predict on train period too, for climatology
+            train_store = _test(train_dataset, train_test_dataloader, "train_preds", dataset_d["y_clim"], dataset_d["x_clim"])
+            train_pred_paths.append((int(lt), train_store))
+        else:
+            pred_paths.append((int(lt), exp_dir / "test_preds.zarr"))
+            train_pred_paths.append((int(lt), exp_dir / "train_preds.zarr"))
 
         # Trainer clean-up
         train_trainer.strategy.teardown()
