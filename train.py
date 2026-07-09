@@ -33,6 +33,7 @@ from earthml import (
     calculate_climatology,
     select_clim_for_time,
     open_zarr,
+    save_zarr,
 )
 
 
@@ -634,6 +635,7 @@ def train(
         data_root_dir=None,
         exp_root_dir=None,
         plot_root_dir=None,
+        extra_suffix_folder="",
         lead_period_offset=-1,
         var_file_fc=var,
         var_file_an=var,
@@ -969,13 +971,7 @@ def train(
                 corrected = preds_ds[s.var_an] + fc_anom + an_clim_for_time[s.var_an]
                 preds_ds = corrected.to_dataset(name=s.var_an)
 
-            preds_ds.to_zarr(
-                preds_store,
-                mode="w",
-                consolidated=False,
-                zarr_format=2,
-                align_chunks=True,
-            )
+            save_zarr(preds_ds, preds_store, dataset.input_ds)
 
             del preds_norm, preds, preds_ds
             if hasattr(model, "test_preds"):
@@ -1016,12 +1012,12 @@ def train(
         coords="minimal",
         compat="override",
     )
-    all_preds.to_zarr(
+    save_zarr(
+        all_preds,
         s.output_dir / "test_corrected.zarr",
-        mode="w",
-        consolidated=False,
-        zarr_format=2,
+        chunks={"leadtime": 1},
     )
+
     print(f"Final combined test preds dataset: {all_preds.dims}")
 
     del preds_ds_list, all_preds
@@ -1037,12 +1033,12 @@ def train(
         coords="minimal",
         compat="override",
     )
-    all_train_preds.to_zarr(
+    save_zarr(
+        all_train_preds,
         s.output_dir / f"train_corrected.zarr",
-        mode="w",
-        consolidated=False,
-        zarr_format=2,
+        chunks={"leadtime": 1},
     )
+
     print(f"Final combined train preds dataset: {all_train_preds.dims}")
 
     del train_ds_list, all_train_preds
