@@ -52,6 +52,7 @@ with ProgressBar():
         mode="w",
         zarr_format=2,
         consolidated=False,
+        align_chunks=True,
     )
 
 ds.close()
