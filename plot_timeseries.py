@@ -40,6 +40,7 @@ def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "timeseries"
+    separate_plots = False 
 
     force_clim_recalc = False
     interpolate = True
@@ -101,6 +102,12 @@ def main() -> None:
     rolling_mean_window = None # e.g. 3, 5, 12, None disables
     rolling_mean_center = True
     rolling_mean_min_periods = 1
+
+    series_offsets = {
+        "Forecast": 0.0,
+        "Corrected forecast": 2.0,
+        "Analysis": 4.0,
+    }
 
     settings = get_experiment_configs(experiments_root, variables, regions)
 
@@ -278,7 +285,7 @@ def main() -> None:
             if mlfc_ts_lead_da is None:
                 series = {
                     "Forecast": fc_ts_lead_da_ens_mean,
-                    "Analysis": an_ts_lead_da if an_ts_da is not None else None,
+                    "Analysis": an_ts_lead_da if an_ts_lead_da is not None else None,
                 }
                 member_series = {
                     "Forecast": fc_ts_lead_da,
@@ -287,7 +294,7 @@ def main() -> None:
                 series = {
                     "Forecast": fc_ts_lead_da_ens_mean,
                     "Corrected forecast": mlfc_ts_lead_da_ens_mean,
-                    "Analysis": an_ts_lead_da if an_ts_da is not None else None,
+                    "Analysis": an_ts_lead_da if an_ts_lead_da is not None else None,
                 }
                 member_series = {
                     "Forecast": fc_ts_lead_da,
@@ -318,6 +325,7 @@ def main() -> None:
                 plot_single_members=False,
                 member_linestyle="-",
                 series_linestyle="--" if plot_ens_mean else "-",
+                series_offsets=series_offsets if separate_plots else None
             )
             n += 1
 
