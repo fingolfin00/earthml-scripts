@@ -41,7 +41,7 @@ def main() -> None:
     plot_mode: PlotMode = "maps"
 
     plot_mlfc = True
-    regenerate_plots = False
+    regenerate_plots = ("mlfc",)
 
     force_clim_recalc = False
     interpolate = True
@@ -322,7 +322,7 @@ def main() -> None:
                             out_file = model_plot_folders[model] / common_path / filename
                             link = s.plot_dir / common_path / filename
 
-                            if out_file.exists() and not regenerate_plots:
+                            if out_file.exists() and model in regenerate_plots:
                                 if model == "fc" and not link.exists():
                                     link.parent.mkdir(parents=True, exist_ok=True)
                                     link.symlink_to(out_file.resolve())
