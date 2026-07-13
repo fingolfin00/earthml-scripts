@@ -403,9 +403,10 @@ def init_callbacks(
         every_n_epochs=1,
         save_last=True,
         save_top_k=0,
-        # filename="checkpoint_{epoch:02d}-{val_loss:.2f}"
         filename="checkpoint",
+        enable_version_counter=False,
     )
+
     callbacks.append(periodic_checkpoint_callback)
 
     # Model best weights, MUST be the last ModelCheckpoint. Can append from here since ModelCheckpoint will always be the last callbacks
@@ -414,7 +415,8 @@ def init_callbacks(
         monitor="val_loss",
         save_top_k=1,
         mode="min",
-        filename="weights"
+        filename="weights",
+        enable_version_counter=False,
     )
     callbacks.append(best_weights_callback)
     return callbacks
@@ -799,23 +801,23 @@ def train(
         for d in (weights_dir, checkpoints_dir):
             d.mkdir(exist_ok=True, parents=True)
 
-        def _leadtime_is_complete(exp_dir: Path) -> bool:
-            """Return True if this leadtime has already been fully trained."""
-            weights_ok = (exp_dir / "weights" / "weights.ckpt").exists()
-            test_ok = (exp_dir / "test_preds.zarr").exists()
-            train_ok = (exp_dir / "train_preds.zarr").exists()
-            return weights_ok and test_ok and train_ok
+        weights_file = weights_dir / "weights.ckpt"
+        last_checkpoint = checkpoints_dir / "last.ckpt"
 
-        # Skip completed leadtimes unless forcing a retrain or a test
-        leadtime_complete = _leadtime_is_complete(exp_dir)
-        if leadtime_complete and not force_retrain and not force_test:
-            print(f"Skipping leadtime {lt}: already complete.")
-            pred_paths.append((int(lt), exp_dir / "test_preds.zarr"))
-            train_pred_paths.append((int(lt), exp_dir / "train_preds.zarr"))
-            continue
+        test_store = exp_dir / "test_preds.zarr"
+        train_store = exp_dir / "train_preds.zarr"
+
+        training_complete = weights_file.exists()
+        testing_complete = test_store.exists() and train_store.exists()
+
+        should_train = force_retrain or not training_complete
+        should_test = force_retrain or force_test or not testing_complete
 
         if force_retrain:
             print(f"[yellow]Force retrain enabled for leadtime {lt}.[/yellow]")
+
+            weights_file.unlink(missing_ok=True)
+            last_checkpoint.unlink(missing_ok=True)
 
         explicit_split = s.split_strategy == "explicit"
 
@@ -941,7 +943,11 @@ def train(
         }
 
         n_channels = train_dataset.x.shape[1]
-        n_classes = train_dataset.y.shape[1] if s.output_realizations=="deterministic" else train_dataset.x.shape[1]
+        n_classes = (
+            train_dataset.y.shape[1]
+            if s.output_realizations == "deterministic"
+            else train_dataset.x.shape[1]
+        )
 
         # Initialize model args
         net_kwargs = dict(
@@ -1054,32 +1060,32 @@ def train(
             # num_sanity_val_steps=0,
         )
 
-        # Find checkpoints
-        ckpt_files = list(checkpoints_dir.glob("*.ckpt"))
-        try:
-            ckpt_path = max(ckpt_files, key=lambda p: p.stat().st_ctime) # get most recent
-        except ValueError: # empty sequence
-            ckpt_path = checkpoints_dir / "checkpoint.ckpt"
+        resume_checkpoint: str | None = None
 
-        # Train
-        train_ckpt_path = None if force_retrain else (Path(ckpt_path) if Path(ckpt_path).exists() else None)
-        if force_retrain or not leadtime_complete:
+        if should_train and not force_retrain and last_checkpoint.exists():
+            resume_checkpoint = str(last_checkpoint)
+
+        if should_train:
             train_trainer.fit(
                 model,
                 datamodule=train_datamodule,
-                ckpt_path=train_ckpt_path,
+                ckpt_path=resume_checkpoint,
+            )
+        else:
+            print(
+                f"[green]Skipping training for leadtime {lt}: "
+                f"best weights already exist.[/green]"
             )
 
-        # Load weights from latest checkpoints
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        callbacks = checkpoint["callbacks"]
-        last_key, last_callback = next(reversed(callbacks.items()))
-        old_weights_file = Path(last_callback["best_model_path"])
-        weights_file = weights_dir / old_weights_file.name
+        if not weights_file.exists():
+            raise FileNotFoundError(
+                f"Best model checkpoint was not created: {weights_file}"
+            )
+
         model = type(model).load_from_checkpoint(
             weights_file,
             **net_kwargs,
-        )
+        ).to(device)
 
         test_trainer = L.Trainer(
             accelerator=accelerator,
@@ -1094,10 +1100,10 @@ def train(
         def _test(
             dataset: XarrayDataset,
             dataloader: DataLoader,
-            zarr_file_name: str,
+            preds_store: Path,
             an_clim: xr.Dataset | None = None,
             fc_clim: xr.Dataset | None = None,
-        ) -> Path:
+        ):
             test_trainer.test(model, dataloaders=dataloader)
 
             preds_norm = model.test_preds.detach().float().cpu()
@@ -1108,7 +1114,6 @@ def train(
             months = dataset.months[: preds_norm.shape[0]]
 
             preds = normalize_target.inverse_tensor(preds_norm, months)
-            preds_store = exp_dir / f"{zarr_file_name}.zarr"
             preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
             preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
@@ -1169,19 +1174,28 @@ def train(
             if hasattr(model, "test_preds"):
                 del model.test_preds
 
-            return preds_store
-
         # Predict
-        if force_retrain or force_test or not leadtime_complete:
-            test_store = _test(test_dataset, test_dataloader, "test_preds", dataset_d["y_clim"], dataset_d["x_clim"])
+        if should_test:
+            _test(
+                test_dataset,
+                test_dataloader,
+                test_store,
+                dataset_d["y_clim"],
+                dataset_d["x_clim"],
+            )
             pred_paths.append((int(lt), test_store))
 
-            # Predict on train period too, for climatology
-            train_store = _test(train_dataset, train_test_dataloader, "train_preds", dataset_d["y_clim"], dataset_d["x_clim"])
+            _test(
+                train_dataset,
+                train_test_dataloader,
+                train_store,
+                dataset_d["y_clim"],
+                dataset_d["x_clim"],
+            )
             train_pred_paths.append((int(lt), train_store))
         else:
-            pred_paths.append((int(lt), exp_dir / "test_preds.zarr"))
-            train_pred_paths.append((int(lt), exp_dir / "train_preds.zarr"))
+            pred_paths.append((int(lt), test_store))
+            train_pred_paths.append((int(lt), train_store))
 
         # Trainer clean-up
         train_trainer.strategy.teardown()
