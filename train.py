@@ -1115,7 +1115,7 @@ def train(
 
             months = dataset.months[: preds_norm.shape[0]]
 
-            preds = normalize_target.inverse_tensor(preds_norm, months)
+            preds = normalize_target.inverse_tensor(preds_norm, months=months)
             preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
             preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
