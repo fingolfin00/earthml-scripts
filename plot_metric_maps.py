@@ -41,7 +41,10 @@ def main() -> None:
     plot_mode: PlotMode = "maps"
 
     plot_mlfc = True
-    regenerate_plots = ("mlfc",)
+    regenerate_plots = (
+        # "fc",
+        "mlfc",
+    )
 
     force_clim_recalc = False
     interpolate = True
