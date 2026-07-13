@@ -40,8 +40,8 @@ def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "timeseries"
-    separate_plots = False 
     regenerate_plots = False
+    offset_plots = False
 
     force_clim_recalc = False
     interpolate = True
@@ -336,7 +336,7 @@ def main() -> None:
                 plot_single_members=False,
                 member_linestyle="-",
                 series_linestyle="--" if plot_ens_mean else "-",
-                series_offsets=series_offsets if separate_plots else None
+                series_offsets=series_offsets if offset_plots else None
             )
             n += 1
 
