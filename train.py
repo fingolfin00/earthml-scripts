@@ -40,6 +40,7 @@ from earthml import (
 
 class LeadtimeDatasets(TypedDict):
     train: XarrayDataset
+    val: XarrayDataset | None
     test: XarrayDataset
     x_clim: xr.Dataset | None
     y_clim: xr.Dataset | None
@@ -91,25 +92,191 @@ def compute_valid_times(
     return init_times + leadtime
 
 
+def extract_period_from_ds(
+    fc_ds: xr.Dataset,
+    an_ds: xr.Dataset,
+    start: str,
+    end: str,
+    leadtime: int | float,
+    leadtime_unit: LeadtimeUnit,
+    interpolate: bool = True,
+    materialize: bool = False,
+) -> tuple[xr.Dataset, xr.Dataset]:
+    time_dim = fc_ds.earthml.guessed_dims.time
+    leadtime_dim = fc_ds.earthml.guessed_dims.leadtime
+
+    # Select forecast starts and the requested leadtime
+    fc_ds = fc_ds.sel({
+        time_dim: slice(start, end),
+        leadtime_dim: int(leadtime),
+    })
+
+    # Select valid times
+    valid_times = compute_valid_times(
+        fc_ds[time_dim].values,
+        leadtime_value=leadtime,
+        leadtime_unit=leadtime_unit,
+    )
+
+    valid_times = pd.DatetimeIndex(valid_times)
+    an_ds_times = pd.DatetimeIndex(pd.to_datetime(an_ds[time_dim].values))
+
+    ok_times = valid_times.isin(an_ds_times)
+
+    fc_ds = fc_ds.isel({time_dim: ok_times})
+    valid_times = valid_times[ok_times]
+
+    an_ds = an_ds.sel({time_dim: valid_times})
+
+    # Make an_ds use forecast start time as its sample axis
+    an_ds = an_ds.rename({time_dim: time_dim})
+    an_ds = an_ds.assign_coords({
+        time_dim: fc_ds[time_dim].values
+    })
+
+    if interpolate:
+        # Regrid analysis into forecast
+        an_ds = an_ds.interp(
+            latitude=fc_ds.latitude,
+            longitude=fc_ds.longitude,
+        )
+
+    fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
+
+    if materialize:
+        with ProgressBar():
+            fc_ds = fc_ds.load()
+            an_ds = an_ds.load()
+
+    return fc_ds, an_ds
+
+
 def make_leadtime_pair(
-    forecast_ds_path: str | Path,
-    analysis_ds_path: str | Path,
+    fc_ds: xr.Dataset,
+    an_ds: xr.Dataset,
     leadtime: int | float,
     leadtime_unit: LeadtimeUnit,
     start: str,
     end: str,
-    clim_start: str,
-    clim_end: str,
+    fc_clim: xr.Dataset | None,
+    an_clim: xr.Dataset | None,
     target_mode: TargetMode = "analysis",
-    time_dim: str = "time",
-    leadtime_dim: str = "leadtime",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
-    forecast_vars: Sequence | None = None,
-    analysis_vars: Sequence | None = None,
-    lat: Sequence | None = None,
-    lon: Sequence | None = None,
     interpolate: bool = True,
-):
+    materialize: bool = False,
+) -> tuple[xr.Dataset, xr.Dataset]:
+    fc_period_ds, an_period_ds = extract_period_from_ds(
+        fc_ds=fc_ds,
+        an_ds=an_ds,
+        start=start,
+        end=end,
+        leadtime=leadtime,
+        leadtime_unit=leadtime_unit,
+        interpolate=interpolate,
+        materialize=materialize,
+    )
+
+    if fc_period_ds.sizes.get(fc_ds.earthml.guessed_dims.time, 0) == 0:
+        raise ValueError(
+            f"No forecast samples found for period {start} -> {end}, "
+            f"leadtime={leadtime} {leadtime_unit.value}"
+        )
+
+    if an_period_ds.sizes.get(an_ds.earthml.guessed_dims.time, 0) == 0:
+        raise ValueError(
+            f"No analysis samples found for period {start} -> {end}, "
+            f"leadtime={leadtime} {leadtime_unit.value}"
+        )
+
+    if target_mode == "analysis":
+        return fc_period_ds, an_period_ds
+
+    if target_mode == "residual":
+        fc_base = (
+            fc_period_ds.mean("realization")
+            if "realization" in fc_period_ds.dims
+            else fc_period_ds
+        )
+        return fc_period_ds, an_period_ds - fc_base
+
+    if fc_clim is None or an_clim is None:
+        raise ValueError(
+            f"Climatologies are required for target_mode={target_mode!r}"
+        )
+
+    fc_clim_for_period = select_clim_for_time(
+        fc_clim,
+        fc_period_ds[fc_period_ds.earthml.guessed_dims.time].values,
+        clim_period,
+    )
+
+    an_clim_for_period = select_clim_for_time(
+        an_clim,
+        an_period_ds[an_period_ds.earthml.guessed_dims.time].values,
+        clim_period,
+    )
+
+    fc_clim_for_period = fc_clim_for_period.chunk(
+        safe_chunk_spec(fc_clim_for_period, fc_clim)
+    )
+    an_clim_for_period = an_clim_for_period.chunk(
+        safe_chunk_spec(an_clim_for_period, an_clim)
+    )
+
+    fc_anom = (fc_period_ds - fc_clim_for_period).unify_chunks()
+
+    if fc_anom.sizes.get(fc_anom.earthml.guessed_dims.time, 0) == 0:
+        raise ValueError(
+            "Climatology alignment removed every time sample. "
+            f"Period={start} -> {end}; "
+            f"forecast times={fc_period_ds[fc_anom.earthml.guessed_dims.time].values[:3]}; "
+            f"climatology dims={fc_clim.dims}"
+        )
+
+    an_anom = (an_period_ds - an_clim_for_period).unify_chunks()
+
+    if target_mode == "anomaly":
+        return fc_anom, an_anom
+
+    if target_mode == "anomaly_residual":
+        fc_base = (
+            fc_anom.mean("realization")
+            if "realization" in fc_anom.dims
+            else fc_anom
+        )
+        return fc_anom, an_anom - fc_base
+
+    if target_mode == "anomaly_residual_realization":
+        return fc_anom, an_anom - fc_anom
+
+    raise ValueError(f"Unsupported target_mode={target_mode!r}")
+
+
+def make_train_test_datasets_for_leadtime(
+    forecast_ds_path: str | Path,
+    analysis_ds_path: str | Path,
+    leadtime: int | float,
+    leadtime_unit: LeadtimeUnit,
+    train_start: str,
+    train_end: str,
+    val_start: str | None,
+    val_end: str | None,
+    test_start: str,
+    test_end: str,
+    target_mode: TargetMode = "analysis",
+    clim_period: ClimPeriod = ClimPeriod.MONTH,
+    forecast_vars: Sequence[str] | None = None,
+    analysis_vars: Sequence[str] | None = None,
+    region: dict | None = None,
+    dataset_kwargs: dict | None = None,
+    interpolate: bool = True,
+    materialize: bool = False,
+) -> LeadtimeDatasets:
+    dataset_kwargs = dataset_kwargs or {}
+
+    lon = region["lon"] if region is not None else None,
+    lat = region["lat"] if region is not None else None,
+
     fc_ds = open_zarr(forecast_ds_path)
     an_ds = open_zarr(analysis_ds_path)
 
@@ -127,163 +294,71 @@ def make_leadtime_pair(
         fc_ds = fc_ds.sel(longitude=slice(*lon))
         an_ds = an_ds.sel(longitude=slice(*lon))
 
-    def _gen_fc_an_ds(
-        fc_ds: xr.Dataset,
-        an_ds: xr.Dataset,
-        start: str,
-        end: str,
-        label: str = "",
-    ) -> tuple[xr.Dataset, xr.Dataset]:
-        # Select forecast starts and the requested leadtime
-        fc_ds = fc_ds.sel({
-            time_dim: slice(start, end),
-            leadtime_dim: int(leadtime),
-        })
-
-        # Select valid times
-        valid_times = compute_valid_times(
-            fc_ds[time_dim].values,
-            leadtime_value=leadtime,
-            leadtime_unit=leadtime_unit,
-        )
-
-        valid_times = pd.DatetimeIndex(valid_times)
-        an_ds_times = pd.DatetimeIndex(pd.to_datetime(an_ds[time_dim].values))
-
-        ok_times = valid_times.isin(an_ds_times)
-
-        fc_ds = fc_ds.isel({time_dim: ok_times})
-        valid_times = valid_times[ok_times]
-
-        an_ds = an_ds.sel({time_dim: valid_times})
-
-        # Make an_ds use forecast start time as its sample axis
-        an_ds = an_ds.rename({time_dim: time_dim})
-        an_ds = an_ds.assign_coords({
-            time_dim: fc_ds[time_dim].values
-        })
-
-        if interpolate:
-            # Regrid analysis into forecast
-            an_ds = an_ds.interp(
-                latitude=fc_ds.latitude,
-                longitude=fc_ds.longitude,
-            )
-
-        fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
-
-        # with ProgressBar():
-        #     print(f"Materialize {label} input dataset")
-        #     fc_ds = fc_ds.load()
-        #     print(f"Materialize {label} target dataset")
-        #     an_ds = an_ds.load()
-
-        return fc_ds, an_ds
-
-    fc_train_ds, an_train_ds = _gen_fc_an_ds(fc_ds, an_ds, start, end, "train")
-
-    if target_mode == "analysis":
-        return fc_train_ds, an_train_ds, None, None
-
-    if target_mode == "residual":
-        fc_train_ens_mean = fc_train_ds.mean("realization") if "realization" in fc_train_ds.dims else fc_train_ds
-        res_train_ds = an_train_ds - fc_train_ens_mean
-        return fc_train_ds, res_train_ds, None, None
-
     if target_mode in {"anomaly", "anomaly_residual", "anomaly_residual_realization"}:
-        fc_clim_ds, an_clim_ds = _gen_fc_an_ds(
-            fc_ds,
-            an_ds,
-            clim_start,
-            clim_end,
-            "clim",
+        fc_clim_ds, an_clim_ds = extract_period_from_ds(
+            fc_ds=fc_ds,
+            an_ds=an_ds,
+            start=train_start,
+            end=train_end,
+            leadtime=leadtime,
+            leadtime_unit=leadtime_unit,
+            interpolate=interpolate,
         )
 
-        fc_clim: xr.Dataset = calculate_climatology(fc_clim_ds, time_dim, clim_period)
-        an_clim: xr.Dataset = calculate_climatology(an_clim_ds, time_dim, clim_period)
+        fc_time_dim = fc_ds.earthml.guessed_dims.time
+        an_time_dim = an_ds.earthml.guessed_dims.time
 
-        fc_clim_for_train = select_clim_for_time(fc_clim, fc_train_ds[time_dim].values, clim_period)
-        an_clim_for_train = select_clim_for_time(an_clim, an_train_ds[time_dim].values, clim_period)
+        fc_clim = calculate_climatology(fc_clim_ds, fc_time_dim, clim_period)
+        an_clim = calculate_climatology(an_clim_ds, an_time_dim, clim_period)
 
-        fc_clim_for_train = fc_clim_for_train.chunk(safe_chunk_spec(fc_clim_for_train, fc_clim))
-        an_clim_for_train = an_clim_for_train.chunk(safe_chunk_spec(an_clim_for_train, an_clim))
+    else:
+        fc_clim = None
+        an_clim = None
 
-        an_train_anom = (an_train_ds - an_clim_for_train).unify_chunks()
-        fc_train_anom = (fc_train_ds - fc_clim_for_train).unify_chunks()
-
-        if target_mode == "anomaly":
-            return fc_train_anom, an_train_anom, fc_clim, an_clim
-
-        elif target_mode == "anomaly_residual":
-            fc_anom_mean = (
-                fc_train_anom.mean("realization")
-                if "realization" in fc_train_anom.dims
-                else fc_train_anom
-            )
-
-            res_train_anom_ds = an_train_anom - fc_anom_mean
-
-        elif target_mode == "anomaly_residual_realization":
-            res_train_anom_ds = an_train_anom - fc_train_anom
-
-        return fc_train_anom, res_train_anom_ds, fc_clim, an_clim
-
-    raise ValueError(f"Unsupported target_mode={target_mode!r}")
-
-
-def make_train_test_datasets_for_leadtime(
-    forecast_ds_path: str | Path,
-    analysis_ds_path: str | Path,
-    leadtime: int | float,
-    leadtime_unit: LeadtimeUnit,
-    train_start: str,
-    train_end: str,
-    test_start: str,
-    test_end: str,
-    target_mode: TargetMode = "analysis",
-    clim_period: ClimPeriod = ClimPeriod.MONTH,
-    forecast_vars: Sequence[str] | None = None,
-    analysis_vars: Sequence[str] | None = None,
-    region: dict | None = None,
-    dataset_kwargs: dict | None = None,
-    interpolate: bool = True,
-) -> LeadtimeDatasets:
-    dataset_kwargs = dataset_kwargs or {}
-
-    x_train, y_train, x_clim, y_clim = make_leadtime_pair(
-        forecast_ds_path=forecast_ds_path,
-        analysis_ds_path=analysis_ds_path,
+    x_train, y_train = make_leadtime_pair(
+        fc_ds=fc_ds,
+        an_ds=an_ds,
         leadtime=leadtime,
         leadtime_unit=leadtime_unit,
         start=train_start,
         end=train_end,
-        clim_start=train_start,
-        clim_end=train_end,
+        fc_clim=fc_clim,
+        an_clim=an_clim,
         target_mode=target_mode,
-        clim_period=clim_period,
-        forecast_vars=forecast_vars,
-        analysis_vars=analysis_vars,
-        lon=region["lon"] if region is not None else None,
-        lat=region["lat"] if region is not None else None,
         interpolate=interpolate,
+        materialize=materialize,
     )
 
-    x_test, y_test, _, _ = make_leadtime_pair(
-        forecast_ds_path=forecast_ds_path,
-        analysis_ds_path=analysis_ds_path,
+    if val_start is not None and val_end is not None:
+        x_val, y_val = make_leadtime_pair(
+            fc_ds=fc_ds,
+            an_ds=an_ds,
+            leadtime=leadtime,
+            leadtime_unit=leadtime_unit,
+            start=val_start,
+            end=val_end,
+            fc_clim=fc_clim,
+            an_clim=an_clim,
+            target_mode=target_mode,
+            interpolate=interpolate,
+            materialize=materialize,
+        )
+        val_ds = XarrayDataset(x_val, y_val, **dataset_kwargs)
+    else:
+        val_ds = None
+
+    x_test, y_test = make_leadtime_pair(
+        fc_ds=fc_ds,
+        an_ds=an_ds,
         leadtime=leadtime,
         leadtime_unit=leadtime_unit,
         start=test_start,
         end=test_end,
-        clim_start=train_start,
-        clim_end=train_end,
+        fc_clim=fc_clim,
+        an_clim=an_clim,
         target_mode=target_mode,
-        clim_period=clim_period,
-        forecast_vars=forecast_vars,
-        analysis_vars=analysis_vars,
-        lon=region["lon"] if region is not None else None,
-        lat=region["lat"] if region is not None else None,
         interpolate=interpolate,
+        materialize=materialize,
     )
 
     train_ds = XarrayDataset(x_train, y_train, **dataset_kwargs)
@@ -291,9 +366,10 @@ def make_train_test_datasets_for_leadtime(
 
     return {
         "train": train_ds,
+        "val": val_ds,
         "test": test_ds,
-        "x_clim": x_clim,
-        "y_clim": y_clim,
+        "x_clim": fc_clim,
+        "y_clim": an_clim,
     }
 
 
@@ -325,6 +401,8 @@ def init_callbacks(
     periodic_checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_folder_path,
         every_n_epochs=1,
+        save_last=True,
+        save_top_k=0,
         # filename="checkpoint_{epoch:02d}-{val_loss:.2f}"
         filename="checkpoint",
     )
@@ -553,9 +631,11 @@ def print_training_recap(
     n_classes: int,
     force_retrain: bool,
     force_test: bool,
-    train_shape: tuple | None = None,
-    target_shape: tuple | None = None,
-    test_shape: tuple | None = None,
+    train_input_shape: tuple | None = None,
+    train_target_shape: tuple | None = None,
+    val_input_shape: tuple | None = None,
+    val_target_shape: tuple | None = None,
+    test_input_shape: tuple | None = None,
     test_target_shape: tuple | None = None,
     train_idx: list[int] | None = None,
     val_idx: list[int] | None = None,
@@ -576,10 +656,13 @@ def print_training_recap(
         "data.analysis": f"{s.model_an}/{s.var_an}",
         "data.region": f"{s.region_name} {s.region}",
         "data.train_period": f"{s.train_start} → {s.train_end}",
+        "data.val_period": f"{s.val_start} → {s.val_end}",
         "data.test_period": f"{s.test_start} → {s.test_end}",
-        "data.train_x": train_shape,
-        "data.train_y": target_shape,
-        "data.test_x": test_shape,
+        "data.train_x": train_input_shape,
+        "data.train_y": train_target_shape,
+        "data.val_x": val_input_shape,
+        "data.val_y": val_target_shape,
+        "data.test_x": test_input_shape,
         "data.test_y": test_target_shape,
 
         "split.strategy": s.split_strategy,
@@ -658,7 +741,9 @@ def train(
         region_name=region_name,
         region=region_location,
         train_start="1993-01-01",
-        train_end="2020-12-01",
+        train_end="2016-12-01",
+        val_start="2017-01-01",
+        val_end="2020-12-01",
         test_start="2021-01-01",
         test_end="2022-12-01",
         target_mode="analysis",
@@ -732,13 +817,27 @@ def train(
         if force_retrain:
             print(f"[yellow]Force retrain enabled for leadtime {lt}.[/yellow]")
 
+        explicit_split = s.split_strategy == "explicit"
+
+        # Explicit:
+        #   train dataset = training period only
+        # Percentage:
+        #   source dataset = full pre-test period, later split by the data module
+        train_end = s.train_end if explicit_split else s.val_end
+
         dataset_d = make_train_test_datasets_for_leadtime(
-            forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
-            analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
+            forecast_ds_path=(
+                s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
+            ),
+            analysis_ds_path=(
+                s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
+            ),
             leadtime=lt,
             leadtime_unit=LeadtimeUnit(s.leadtime_unit),
             train_start=s.train_start,
-            train_end=s.train_end,
+            train_end=train_end,
+            val_start=s.val_start if explicit_split else None,
+            val_end=s.val_end if explicit_split else None,
             test_start=s.test_start,
             test_end=s.test_end,
             target_mode=s.target_mode,
@@ -754,9 +853,12 @@ def train(
                 "fill_nan_value": s.fill_nan_value,
             },
             interpolate=interpolate,
+            materialize=False,
         )
 
         train_dataset = dataset_d["train"]
+        val_dataset = dataset_d["val"]
+        test_dataset = dataset_d["test"]
 
         # Normalize
         if s.pretrain_norm == "monthly":
@@ -766,13 +868,77 @@ def train(
         else:
             raise ValueError(f"pretrain_norm={s.pretrain_norm} not supported.")
 
-        normalize_input  = NormClass().fit(train_dataset, dim='x')
-        normalize_target = NormClass().fit(train_dataset, dim='y')
+        normalize_input = NormClass().fit(
+            train_dataset,
+            dim="x",
+        )
+
+        normalize_target = NormClass().fit(
+            train_dataset,
+            dim="y",
+        )
+
         train_dataset.transform_x = normalize_input
         train_dataset.transform_y = normalize_target
 
-        # print("Train dataset input shape:", train_dataset.x.shape)
-        # print("Train dataset target shape:", train_dataset.y.shape)
+        if val_dataset is not None:
+            val_dataset.transform_x = normalize_input
+            val_dataset.transform_y = normalize_target
+
+        # Loss
+        lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
+        latitudes = torch.as_tensor(
+            train_dataset.target_ds[lat_dim].values,
+            dtype=torch.float32,
+        )
+
+        loss_kwargs = {}
+
+        if s.loss_name == "MaskedMSELoss":
+            loss_kwargs = {
+                "eps": 1e-8,
+            }
+
+        elif s.loss_name in {
+            "GeoMSELoss",
+            "GeoMaskedMSELoss",
+        }:
+            loss_kwargs = {
+                "latitudes": latitudes,
+                "eps": 1e-8,
+            }
+
+        elif s.loss_name == "VarNormMaskMSELoss":
+            loss_kwargs = {
+                "variance_type": "channel",
+                "eps": 1e-6,
+                "relative_floor_frac": 1e-3,
+                "min_valid_count": 2,
+            }
+
+        elif s.loss_name == "HeteroBiasCorrectionLoss":
+            loss_kwargs = {
+                "lambda_identity": 0.1,
+                "bias_scale": 0.5,
+                "variance_type": "channel",
+                "eps": 1e-6,
+            }
+
+        elif s.loss_name == "GaussianNLLFromLogits":
+            loss_kwargs = {
+                "eps": 1e-6,
+            }
+
+        elif s.loss_name == "MSELoss":
+            loss_kwargs = {}
+
+        else:
+            raise ValueError(f"Unsupported loss configuration: {s.loss_name!r}")
+
+        base_loss_params = {
+            "loss": loss_kwargs,
+            "net": {},
+        }
 
         n_channels = train_dataset.x.shape[1]
         n_classes = train_dataset.y.shape[1] if s.output_realizations=="deterministic" else train_dataset.x.shape[1]
@@ -801,15 +967,19 @@ def train(
 
         # Create train datamodule and split train dataset into train and validation based on self.config.train_percent
         train_datamodule = SplitDataModule(
-            train_dataset,
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
             train_fraction=s.train_fraction,
+            split_strategy=s.split_strategy,
             batch_size=s.batch_size,
             seed=s.seed,
             num_workers=s.torch_workers,
-            split_strategy=s.split_strategy,
         )
 
-        train_idx, val_idx = train_datamodule._get_indices()
+        if s.split_strategy == "explicit":
+            train_idx, val_idx = None, None
+        else:
+            train_idx, val_idx = train_datamodule._get_indices()
 
         # Test dataloader
         test_dataset = dataset_d["test"]
@@ -850,9 +1020,11 @@ def train(
             n_classes=n_classes,
             force_retrain=force_retrain,
             force_test=force_test,
-            train_shape=tuple(train_dataset.x.shape),
-            target_shape=tuple(train_dataset.y.shape),
-            test_shape=tuple(test_dataset.x.shape),
+            train_input_shape=tuple(train_dataset.x.shape),
+            train_target_shape=tuple(train_dataset.y.shape),
+            val_input_shape=tuple(val_dataset.x.shape) if val_dataset is not None else None,
+            val_target_shape=tuple(val_dataset.y.shape) if val_dataset is not None else None,
+            test_input_shape=tuple(test_dataset.x.shape),
             test_target_shape=tuple(test_dataset.y.shape),
             train_idx=train_idx,
             val_idx=val_idx,
@@ -866,7 +1038,7 @@ def train(
             accelerator=accelerator,
             devices=1,
             precision=s.trainer_precision,
-            # gradient_clip_val=1.0,           # Recommended starting value (e.g., 0.5, 1.0, 5.0)
+            # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
             log_every_n_steps=1,
             logger=None,
@@ -904,14 +1076,16 @@ def train(
         last_key, last_callback = next(reversed(callbacks.items()))
         old_weights_file = Path(last_callback["best_model_path"])
         weights_file = weights_dir / old_weights_file.name
-        weights = torch.load(weights_file, map_location=device)
-        model.load_state_dict(weights['state_dict'])
+        model = type(model).load_from_checkpoint(
+            weights_file,
+            **net_kwargs,
+        )
 
         test_trainer = L.Trainer(
             accelerator=accelerator,
             devices=1,
             precision=s.trainer_precision,
-            # gradient_clip_val=1.0,           # Recommended starting value (e.g., 0.5, 1.0, 5.0)
+            # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
             accumulate_grad_batches=s.accumulate_grad_batches,
             # deterministic=True
