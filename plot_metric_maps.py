@@ -1,3 +1,4 @@
+from typing import Literal
 from pathlib import Path
 
 import xarray as xr
@@ -19,6 +20,7 @@ from earthml import (
 )
 from earthml.metrics import (
     LeadtimeAgg,
+    MetricKind,
     is_deterministic,
     is_probabilistic,
     get_metrics,
@@ -39,6 +41,7 @@ def main() -> None:
     fc_plot_dir = Path("/Users/jacopodallaglio/ML/training/seasonal/plots")
 
     plot_mode: PlotMode = "maps"
+    metric_kind: MetricKind = "maps"
 
     plot_mlfc = True
     regenerate_plots = (
@@ -170,6 +173,7 @@ def main() -> None:
     # time_range = ("2018-01-01", "2022-12-31")
 
     leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
+    hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
 
     settings = get_experiment_configs(
         experiments_root,
@@ -250,7 +254,7 @@ def main() -> None:
                         an=an,
                         fc=ds,
                         var=s.var_fc,
-                        metric_kind="maps",
+                        metric_kind=metric_kind,
                         leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
                         realization_agg=True,
                         an_clim=an_clim,
@@ -270,7 +274,7 @@ def main() -> None:
                         an=an,
                         fc=ds,
                         var=s.var_fc,
-                        metric_kind="maps",
+                        metric_kind=metric_kind,
                         leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
                         realization_agg=False,
                         an_clim=an_clim,
@@ -286,6 +290,18 @@ def main() -> None:
                     )
 
                 metric_maps = xr.merge([metric_maps_det, metric_maps_prob])
+
+                if metric_kind in {"time_lon", "time_lat"}:
+                    time_dim = metric_maps.earthml.guessed_dims.time
+
+                    if time_dim is None or time_dim not in metric_maps.dims:
+                        raise ValueError(
+                            f"Cannot calculate monthly Hovmöller: "
+                            f"no time dimension found in {metric_maps.dims}"
+                        )
+
+                    # TODO support _hour groups
+                    metric_maps = metric_maps.groupby(f"{time_dim}.{hovmoller_time_agg}").mean(time_dim, skipna=True)
 
                 available_metrics = [
                     str(x) for x in metric_maps.data_vars
@@ -313,7 +329,7 @@ def main() -> None:
                             label = safe_label(lead_label(metric_maps[m], lead_value, leadtime_agg_coord))
 
                             common_path = (
-                                Path("maps")
+                                Path(metric_kind)
                                 / safe_label(start_period)
                                 / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
                                 / m
@@ -345,8 +361,10 @@ def main() -> None:
                                 leadtime_dim=leadtime_agg_coord,
                                 leadtime_units=leadtime_units,
                                 period_dim=f"start_{leadtime_units}",
+                                clim_period=None if metric_kind=="map" else hovmoller_time_agg,
                                 var_plot_config=VARIABLE_PLOT_CONFIG,
                                 impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
+                                plot_kind=metric_kind,
                                 plot_type="contourf",
                                 title_strftime="%Y",
                             )
