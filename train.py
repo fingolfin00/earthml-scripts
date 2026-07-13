@@ -274,8 +274,8 @@ def make_train_test_datasets_for_leadtime(
 ) -> LeadtimeDatasets:
     dataset_kwargs = dataset_kwargs or {}
 
-    lon = region["lon"] if region is not None else None,
-    lat = region["lat"] if region is not None else None,
+    lon = region["lon"] if region is not None else None
+    lat = region["lat"] if region is not None else None
 
     fc_ds = open_zarr(forecast_ds_path)
     an_ds = open_zarr(analysis_ds_path)
