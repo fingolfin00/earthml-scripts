@@ -687,6 +687,7 @@ def print_training_recap(
         "model.reduction_ratio": s.reduction_ratio,
 
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
+        "training.normalization_mode": s.normalization_mode,
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
