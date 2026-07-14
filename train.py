@@ -17,6 +17,7 @@ import torch
 from torch.utils.data import DataLoader
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.loggers import TensorBoardLogger
 
 from earthml import (
     LeadtimeUnit,
@@ -1157,6 +1158,35 @@ def train(
             checkpoints_dir=checkpoints_dir,
         )
 
+        # Tensorboard
+        tb_logger = TensorBoardLogger(
+            save_dir=s.exp_dir / "tensorboard",
+            name=f"lead_{lt}",
+            version="",
+            default_hp_metric=False,
+            # log_graph=True,
+        )
+
+        tb_logger.log_hyperparams(
+            {
+                "leadtime": lt,
+                "network": s.net_name,
+                "loss": s.loss_name,
+                "learning_rate": s.init_learning_rate,
+                "weight_decay": s.weight_decay,
+                "batch_size": s.batch_size,
+                "effective_batch_size": (
+                    s.batch_size * s.accumulate_grad_batches
+                ),
+                "depth": s.depth,
+                "base_channels": s.base_channels,
+                "normalization": s.normalization,
+                "normalization_mode": s.normalization_mode,
+                "seasonal_encoding": s.seasonal_encoding,
+                "target_mode": s.target_mode,
+            }
+        )
+
         train_trainer = L.Trainer(
             max_epochs=s.max_epochs,
             accelerator=accelerator,
@@ -1165,7 +1195,7 @@ def train(
             # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
             log_every_n_steps=1,
-            logger=None,
+            logger=tb_logger,
             accumulate_grad_batches=s.accumulate_grad_batches,
             # callbacks=[],
             # enable_checkpointing=False,
