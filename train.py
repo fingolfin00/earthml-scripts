@@ -1223,6 +1223,10 @@ def train(
             )
             train_pred_paths.append((int(lt), train_store))
         else:
+            print(
+                f"[green]Skipping testing for leadtime {lt}: "
+                f"saved preds already exist.[/green]"
+            )
             train_pred_paths.append((int(lt), train_store))
             if val_dataset is not None:
                 val_pred_paths.append((int(lt), val_store))
