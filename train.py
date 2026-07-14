@@ -87,6 +87,54 @@ def add_or_set_leadtime(ds: xr.Dataset, lt: int) -> xr.Dataset:
     return ds.expand_dims(leadtime=[lt])
 
 
+def seasonal_cycle_encoder(
+    ds: xr.Dataset,
+    *,
+    leadtime: int | float,
+    leadtime_unit: LeadtimeUnit,
+    time_dim: str | None = None,
+    prefix: str = "season",
+) -> xr.Dataset:
+    if time_dim is None:
+        time_dim = ds.earthml.guessed_dims.time
+
+    if time_dim is None or time_dim not in ds.dims:
+        raise ValueError("Could not determine dataset time dimension.")
+
+    valid_times = compute_valid_times(
+        ds[time_dim].values,
+        leadtime_value=leadtime,
+        leadtime_unit=leadtime_unit,
+    )
+
+    valid_times = pd.DatetimeIndex(valid_times)
+
+    phase = (valid_times.month.to_numpy() - 1) / 12.0
+    angle = 2.0 * np.pi * phase
+
+    seasonal = xr.Dataset(
+        {
+            f"{prefix}_sin": (
+                (time_dim,),
+                np.sin(angle).astype(np.float32),
+            ),
+            f"{prefix}_cos": (
+                (time_dim,),
+                np.cos(angle).astype(np.float32),
+            ),
+        },
+        coords={
+            time_dim: ds[time_dim],
+        },
+    )
+
+    return xr.merge(
+        [ds, seasonal],
+        compat="equals",
+        join="exact",
+    )
+
+
 def compute_valid_times(
     init_times,
     leadtime_value: int | float,
@@ -168,6 +216,7 @@ def make_leadtime_pair(
     an_clim: xr.Dataset | None,
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
+    seasonal_encoding: bool = False,
     interpolate: bool = True,
     materialize: bool = False,
 ) -> tuple[xr.Dataset, xr.Dataset]:
@@ -195,6 +244,12 @@ def make_leadtime_pair(
         )
 
     if target_mode == "analysis":
+        if seasonal_encoding:
+            fc_period_ds = seasonal_cycle_encoder(
+                fc_period_ds,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
         return fc_period_ds, an_period_ds
 
     if target_mode == "residual":
@@ -203,6 +258,12 @@ def make_leadtime_pair(
             if "realization" in fc_period_ds.dims
             else fc_period_ds
         )
+        if seasonal_encoding:
+            fc_period_ds = seasonal_cycle_encoder(
+                fc_period_ds,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
         return fc_period_ds, an_period_ds - fc_base
 
     if fc_clim is None or an_clim is None:
@@ -242,6 +303,12 @@ def make_leadtime_pair(
     an_anom = (an_period_ds - an_clim_for_period).unify_chunks()
 
     if target_mode == "anomaly":
+        if seasonal_encoding:
+            fc_anom = seasonal_cycle_encoder(
+                fc_anom,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
         return fc_anom, an_anom
 
     if target_mode == "anomaly_residual":
@@ -250,9 +317,21 @@ def make_leadtime_pair(
             if "realization" in fc_anom.dims
             else fc_anom
         )
+        if seasonal_encoding:
+            fc_anom = seasonal_cycle_encoder(
+                fc_anom,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
         return fc_anom, an_anom - fc_base
 
     if target_mode == "anomaly_residual_realization":
+        if seasonal_encoding:
+            fc_anom = seasonal_cycle_encoder(
+                fc_anom,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
         return fc_anom, an_anom - fc_anom
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
@@ -275,6 +354,7 @@ def make_train_test_datasets_for_leadtime(
     analysis_vars: Sequence[str] | None = None,
     region: dict | None = None,
     dataset_kwargs: dict | None = None,
+    seasonal_encoding: bool = False,
     interpolate: bool = True,
     materialize: bool = False,
 ) -> LeadtimeDatasets:
@@ -332,6 +412,7 @@ def make_train_test_datasets_for_leadtime(
         an_clim=an_clim,
         target_mode=target_mode,
         clim_period=clim_period,
+        seasonal_encoding=seasonal_encoding,
         interpolate=interpolate,
         materialize=materialize,
     )
@@ -348,6 +429,7 @@ def make_train_test_datasets_for_leadtime(
             an_clim=an_clim,
             target_mode=target_mode,
             clim_period=clim_period,
+            seasonal_encoding=seasonal_encoding,
             interpolate=interpolate,
             materialize=materialize,
         )
@@ -366,6 +448,7 @@ def make_train_test_datasets_for_leadtime(
         an_clim=an_clim,
         target_mode=target_mode,
         clim_period=clim_period,
+        seasonal_encoding=seasonal_encoding,
         interpolate=interpolate,
         materialize=materialize,
     )
@@ -695,6 +778,7 @@ def print_training_recap(
 
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
         "training.normalization_mode": s.normalization_mode,
+        "training.seasonal_encoding": s.seasonal_encoding,
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
@@ -764,6 +848,7 @@ def train(
         split_strategy="time",
         normalization="full",
         normalization_mode="channel",
+        seasonal_encoding=False,
         net_name="SmaAt_UNet",
         loss_name="MSELoss",
         init_learning_rate=3e-4,
@@ -864,6 +949,7 @@ def train(
                 "torch_mask": s.torch_mask,
                 "fill_nan_value": s.fill_nan_value,
             },
+            seasonal_encoding=s.seasonal_encoding,
             interpolate=interpolate,
             materialize=False,
         )
@@ -880,12 +966,24 @@ def train(
         else:
             raise ValueError(f"normalization={s.normalization} not supported.")
 
-        normalize_input = NormClass(mode=s.normalization_mode).fit(
+        input_excluded_channels = (
+            (-2, -1)
+            if s.seasonal_encoding
+            else None
+        )
+
+        normalize_input = NormClass(
+            mode=s.normalization_mode,
+            exclude_channels=input_excluded_channels,
+        ).fit(
             train_dataset,
             dim="x",
         )
 
-        normalize_target = NormClass(mode=s.normalization_mode).fit(
+        normalize_target = NormClass(
+            mode=s.normalization_mode,
+            exclude_channels=None,
+        ).fit(
             train_dataset,
             dim="y",
         )
