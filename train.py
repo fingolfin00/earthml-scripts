@@ -1020,7 +1020,7 @@ def train(
 
         elif s.loss_name == "VarNormMaskMSELoss":
             loss_kwargs = {
-                "variance_type": "channel",
+                "variance_type": "spatial", # "channel", "geochannel", "spatial", "temporal", "geotemporal"
                 "eps": 1e-6,
                 "relative_floor_frac": 1e-3,
                 "min_valid_count": 2,
