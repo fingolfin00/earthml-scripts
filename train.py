@@ -1052,11 +1052,7 @@ def train(
 
         # Set input channels
         n_channels = train_dataset.x.shape[1]
-        n_classes = (
-            train_dataset.y.shape[1]
-            if s.output_realizations == "deterministic"
-            else train_dataset.x.shape[1]
-        )
+        n_classes = train_dataset.y.shape[1] # TODO not sure this works if realization_as_channel is True
 
         # Initialize model args
         net_kwargs = dict(
