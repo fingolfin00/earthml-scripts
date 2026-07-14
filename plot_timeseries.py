@@ -106,8 +106,9 @@ def main() -> None:
 
     series_offsets = {
         "Forecast": 0.0,
-        "Corrected forecast": 2.0,
-        "Analysis": 4.0,
+        "Clim-corrected forecast": 2.0,
+        "Corrected forecast": 4.0,
+        "Analysis": 6.0,
     }
 
     settings = get_experiment_configs(
@@ -233,26 +234,50 @@ def main() -> None:
             else None
         )
 
+        # Analysis climatology expanded onto the full time axis.
+        an_clim_for_time_da = an_da - an_anom_da
+
+        # Classical grid-point climatological bias correction:
+        # fc_corrected = fc - fc_clim + an_clim
+        fc_clim_corrected_da = fc_anom_da + an_clim_for_time_da
+
         if category == "anomaly":
-            fc_ts_da, an_ts_da = fc_anom_da, an_anom_da
+            fc_ts_da = fc_anom_da
+            fc_ts_clim_corrected_da = fc_anom_da
+            an_ts_da = an_anom_da
             mlfc_ts_da = mlfc_anom_da if mlfc_anom_da is not None else None
             category_title = " anomaly "
+
         elif category == "anomaly_residual":
             fc_ts_da = fc_anom_da - an_anom_da
-            mlfc_ts_da = mlfc_anom_da - an_anom_da if mlfc_anom_da is not None else None
+
+            # The anomaly residual of the climatologically corrected forecast.
+            fc_ts_clim_corrected_da = fc_anom_da - an_anom_da
+
+            mlfc_ts_da = (
+                mlfc_anom_da - an_anom_da
+                if mlfc_anom_da is not None
+                else None
+            )
             an_ts_da = None
             category_title = " anomaly residual "
+
         elif category == "residual":
             fc_ts_da = fc_da - an_da
+            fc_ts_clim_corrected_da = fc_clim_corrected_da - an_da
             mlfc_ts_da = mlfc_da - an_da if mlfc_da is not None else None
             an_ts_da = None
             category_title = " residual "
+
         else:
-            fc_ts_da, an_ts_da = fc_da, an_da
+            fc_ts_da = fc_da
+            fc_ts_clim_corrected_da = fc_clim_corrected_da
+            an_ts_da = an_da
             mlfc_ts_da = mlfc_da if mlfc_da is not None else None
             category_title = ""
 
         for lt in fc[leadtime_agg_coord].values:
+            # Original forecast
             fc_ts_lead_da = fc_ts_da.sel({leadtime_agg_coord: lt})
 
             fc_ts_lead_da = fc_ts_lead_da.chunk({time_dim: rolling_mean_window}).rolling(
@@ -266,6 +291,7 @@ def main() -> None:
             else:
                 fc_ts_lead_da_ens_mean = fc_ts_lead_da
 
+            # Analysis
             an_ts_lead_da = an_ts_da.sel({leadtime_agg_coord: lt}) if an_ts_da is not None else None
 
             an_ts_lead_da = an_ts_lead_da.chunk({time_dim: rolling_mean_window}).rolling(
@@ -274,6 +300,7 @@ def main() -> None:
                 min_periods=rolling_mean_min_periods,
             ).mean() if rolling_mean_window is not None and an_ts_lead_da is not None else an_ts_lead_da
 
+            # ML-corrected forecast
             mlfc_ts_lead_da = mlfc_ts_da.sel({leadtime_agg_coord: lt}) if mlfc_ts_da is not None else None
 
             if mlfc_ts_lead_da is not None:
@@ -290,6 +317,31 @@ def main() -> None:
             else:
                 mlfc_ts_lead_da_ens_mean = None
 
+            # Clim-corrected fc
+            fc_ts_lead_clim_corrected_da = fc_ts_clim_corrected_da.sel({leadtime_agg_coord: lt})
+
+            fc_ts_lead_clim_corrected_da = (
+                fc_ts_lead_clim_corrected_da
+                .chunk({time_dim: rolling_mean_window})
+                .rolling(
+                    {time_dim: rolling_mean_window},
+                    center=rolling_mean_center,
+                    min_periods=rolling_mean_min_periods,
+                )
+                .mean()
+                if rolling_mean_window is not None
+                else fc_ts_lead_clim_corrected_da
+            )
+
+            if realization_dim is not None and realization_dim in fc_ts_lead_clim_corrected_da.dims:
+                fc_ts_lead_clim_corrected_da_ens_mean = (
+                    fc_ts_lead_clim_corrected_da.mean(realization_dim)
+                    if plot_ens_mean
+                    else None
+                )
+            else:
+                fc_ts_lead_clim_corrected_da_ens_mean = fc_ts_lead_clim_corrected_da
+
             if mlfc_ts_lead_da is None:
                 series = {
                     "Forecast": fc_ts_lead_da_ens_mean,
@@ -304,10 +356,15 @@ def main() -> None:
                     "Corrected forecast": mlfc_ts_lead_da_ens_mean,
                     "Analysis": an_ts_lead_da if an_ts_lead_da is not None else None,
                 }
+
                 member_series = {
                     "Forecast": fc_ts_lead_da,
                     "Corrected forecast": mlfc_ts_lead_da,
                 }
+
+            if category in ("raw", "residual"):
+                series["Clim-corrected forecast"] = fc_ts_lead_clim_corrected_da_ens_mean
+                member_series["Clim-corrected forecast"] = fc_ts_lead_clim_corrected_da
 
             label = safe_label(lead_label(fc_ts_lead_da, lt, leadtime_agg_coord))
             rolling_label = f" roll {rolling_mean_window} " if rolling_mean_window is not None else ""
@@ -333,6 +390,7 @@ def main() -> None:
                 spatial_dims=(lat_dim, lon_dim),
                 realization_dim=realization_dim,
                 train_end=s.train_end,
+                val_end=s.val_end,
                 plot_single_members=False,
                 member_linestyle="-",
                 series_linestyle="--" if plot_ens_mean else "-",
