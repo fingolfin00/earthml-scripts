@@ -52,6 +52,13 @@ def compute_leadtimes(
     leadtime_value: int | float,
     leadtime_unit: LeadtimeUnit,
 ):
+    if leadtime_unit in {LeadtimeUnit.MONTHS, LeadtimeUnit.YEARS}:
+        if not float(leadtime_value).is_integer():
+            raise ValueError(
+                f"{leadtime_unit.value} leadtime must be an integer, "
+                f"got {leadtime_value}"
+            )
+
     if leadtime_unit == LeadtimeUnit.YEARS:
         return pd.DateOffset(years=int(leadtime_value))
     elif leadtime_unit == LeadtimeUnit.MONTHS:
@@ -129,7 +136,6 @@ def extract_period_from_ds(
     an_ds = an_ds.sel({time_dim: valid_times})
 
     # Make an_ds use forecast start time as its sample axis
-    an_ds = an_ds.rename({time_dim: time_dim})
     an_ds = an_ds.assign_coords({
         time_dim: fc_ds[time_dim].values
     })
@@ -325,6 +331,7 @@ def make_train_test_datasets_for_leadtime(
         fc_clim=fc_clim,
         an_clim=an_clim,
         target_mode=target_mode,
+        clim_period=clim_period,
         interpolate=interpolate,
         materialize=materialize,
     )
@@ -340,6 +347,7 @@ def make_train_test_datasets_for_leadtime(
             fc_clim=fc_clim,
             an_clim=an_clim,
             target_mode=target_mode,
+            clim_period=clim_period,
             interpolate=interpolate,
             materialize=materialize,
         )
@@ -357,6 +365,7 @@ def make_train_test_datasets_for_leadtime(
         fc_clim=fc_clim,
         an_clim=an_clim,
         target_mode=target_mode,
+        clim_period=clim_period,
         interpolate=interpolate,
         materialize=materialize,
     )
@@ -524,11 +533,6 @@ def convert_to_xarray(
     # Predictions live on the target grid, so keep target metadata/coords.
     meta_ds = dataset.target_ds
 
-    tdim = "time"
-    rdim = "realization"
-    ydim = "latitude"
-    xdim = "longitude"
-
     R_out, T_out = _infer_RT_from_source(dataset)
 
     if getattr(dataset, "realization_as_channel", False):
@@ -541,9 +545,12 @@ def convert_to_xarray(
         realization_as_channel = False
 
     input_ds = dataset.input_ds
+    target_rdim = meta_ds.earthml.guessed_dims.realization
     input_rdim = input_ds.earthml.guessed_dims.realization
-    if R_out > 1 and rdim is None:
-        rdim = input_rdim or "realization"
+    rdim = target_rdim or input_rdim or "realization"
+    tdim = "time"
+    ydim = "latitude"
+    xdim = "longitude"
 
     allowed_dims = {tdim, ydim, xdim, rdim, "missed_time"}
     meta_ds = meta_ds.earthml.remove_dims_and_coords(allowed_dims)
@@ -785,13 +792,9 @@ def train(
 
     L.seed_everything(s.seed)
 
-    base_loss_params = {
-        "loss": {},
-        "net": {},
-    }
-
-    pred_paths: list[tuple[int, Path]] = []
     train_pred_paths: list[tuple[int, Path]] = []
+    val_pred_paths: list[tuple[int, Path]] = []
+    test_pred_paths: list[tuple[int, Path]] = []
     for lt in s.leadtimes:
         exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
 
@@ -806,11 +809,18 @@ def train(
         weights_file = weights_dir / "weights.ckpt"
         last_checkpoint = checkpoints_dir / "last.ckpt"
 
-        test_store = exp_dir / "test_preds.zarr"
         train_store = exp_dir / "train_preds.zarr"
+        val_store = exp_dir / "val_preds.zarr"
+        test_store = exp_dir / "test_preds.zarr"
+
+        explicit_split = s.split_strategy == "explicit"
 
         training_complete = weights_file.exists()
-        testing_complete = test_store.exists() and train_store.exists()
+        testing_complete = (
+            train_store.exists()
+            and test_store.exists()
+            and (not explicit_split or val_store.exists())
+        )
 
         should_train = force_retrain or not training_complete
         should_test = force_retrain or force_test or not testing_complete
@@ -820,8 +830,6 @@ def train(
 
             weights_file.unlink(missing_ok=True)
             last_checkpoint.unlink(missing_ok=True)
-
-        explicit_split = s.split_strategy == "explicit"
 
         # Explicit:
         #   train dataset = training period only
@@ -944,6 +952,7 @@ def train(
             "net": {},
         }
 
+        # Set input channels
         n_channels = train_dataset.x.shape[1]
         n_classes = (
             train_dataset.y.shape[1]
@@ -987,7 +996,9 @@ def train(
         if s.split_strategy == "explicit":
             train_idx, val_idx = None, None
         else:
-            train_idx, val_idx = train_datamodule._get_indices()
+            train_datamodule.setup("fit")
+            train_idx = train_datamodule.train_indices
+            val_idx = train_datamodule.val_indices
 
         # Test dataloader
         test_dataset = dataset_d["test"]
@@ -1008,6 +1019,17 @@ def train(
             pin_memory = (accelerator == "gpu"),
             persistent_workers=s.torch_workers > 0,
         )
+
+        val_test_dataloader = None
+        if val_dataset is not None:
+            val_test_dataloader = DataLoader(
+                val_dataset,
+                batch_size=1,
+                num_workers=s.torch_workers,
+                shuffle=False,
+                pin_memory = (accelerator == "gpu"),
+                persistent_workers=s.torch_workers > 0,
+            )
 
         train_test_dataloader = DataLoader(
             train_dataset,
@@ -1095,7 +1117,6 @@ def train(
             precision=s.trainer_precision,
             # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
-            accumulate_grad_batches=s.accumulate_grad_batches,
             # deterministic=True
         )
 
@@ -1104,7 +1125,6 @@ def train(
             dataloader: DataLoader,
             preds_store: Path,
             an_clim: xr.Dataset | None = None,
-            fc_clim: xr.Dataset | None = None,
         ):
             test_trainer.test(model, dataloaders=dataloader)
 
@@ -1183,29 +1203,38 @@ def train(
                 test_dataloader,
                 test_store,
                 dataset_d["y_clim"],
-                dataset_d["x_clim"],
             )
-            pred_paths.append((int(lt), test_store))
+            test_pred_paths.append((int(lt), test_store))
+
+            if val_test_dataloader is not None and val_dataset is not None:
+                _test(
+                    val_dataset,
+                    val_test_dataloader,
+                    val_store,
+                    dataset_d["y_clim"],
+                )
+                val_pred_paths.append((int(lt), val_store))
 
             _test(
                 train_dataset,
                 train_test_dataloader,
                 train_store,
                 dataset_d["y_clim"],
-                dataset_d["x_clim"],
             )
             train_pred_paths.append((int(lt), train_store))
         else:
-            pred_paths.append((int(lt), test_store))
             train_pred_paths.append((int(lt), train_store))
+            if val_dataset is not None:
+                val_pred_paths.append((int(lt), val_store))
+            test_pred_paths.append((int(lt), test_store))
 
         # Trainer clean-up
         train_trainer.strategy.teardown()
         test_trainer.strategy.teardown()
 
         del model, train_trainer, test_trainer
-        del train_datamodule, test_dataloader, train_test_dataloader
-        del train_dataset, test_dataset, dataset_d
+        del train_datamodule, train_test_dataloader, val_test_dataloader, test_dataloader
+        del train_dataset, val_dataset, test_dataset, dataset_d
 
         gc.collect()
         if torch.cuda.is_available():
@@ -1214,47 +1243,36 @@ def train(
             torch.mps.empty_cache()
 
     # Combine all leadtimes
-    preds_ds_list = [
-        add_or_set_leadtime(open_zarr(path), lt)
-        for lt, path in pred_paths
-    ]
-    all_preds = xr.concat(
-        preds_ds_list,
-        dim="leadtime",
-        coords="minimal",
-        compat="override",
-    )
-    save_zarr(
-        all_preds,
-        s.output_dir / "test_corrected.zarr",
-        chunks={"leadtime": 1},
-    )
+    def _combine_leadtimes(
+        data_type: Literal["train", "val", "test"],
+        pred_paths: list[tuple[int, Path]],
+    ):
+        preds_ds_list = [
+            add_or_set_leadtime(open_zarr(path), lt)
+            for lt, path in pred_paths
+        ]
+        combined_preds = xr.concat(
+            preds_ds_list,
+            dim="leadtime",
+            coords="minimal",
+            compat="equals",
+            join="exact",
+        )
+        save_zarr(
+            combined_preds,
+            s.output_dir / f"{data_type}_corrected.zarr",
+            chunks={"leadtime": 1},
+        )
 
-    print(f"Final combined test preds dataset: {all_preds.dims}")
+        print(f"Final combined {data_type} preds dataset: {combined_preds.dims}")
 
-    del preds_ds_list, all_preds
-    gc.collect()
+        del preds_ds_list, combined_preds
+        gc.collect()
 
-    train_ds_list = [
-        add_or_set_leadtime(open_zarr(path), lt)
-        for lt, path in train_pred_paths
-    ]
-    all_train_preds = xr.concat(
-        train_ds_list,
-        dim="leadtime",
-        coords="minimal",
-        compat="override",
-    )
-    save_zarr(
-        all_train_preds,
-        s.output_dir / f"train_corrected.zarr",
-        chunks={"leadtime": 1},
-    )
-
-    print(f"Final combined train preds dataset: {all_train_preds.dims}")
-
-    del train_ds_list, all_train_preds
-    gc.collect()
+    _combine_leadtimes("train", train_pred_paths)
+    if val_pred_paths:
+        _combine_leadtimes("val", val_pred_paths)
+    _combine_leadtimes("test", test_pred_paths)
 
 
 def main():
