@@ -1507,6 +1507,16 @@ def train(
 
         combined_preds = combined_preds.chunk(safe_chunk_spec(combined_preds))
 
+        combined_preds["leadtime"].attrs.update({
+            "long_name": "forecast lead time",
+            "units": s.leadtime_unit.value,
+        })
+
+        combined_preds["time"].attrs.update({
+            "long_name": "forecast initialization time",
+            "standard_name": "forecast_reference_time",
+        })
+
         save_zarr(
             combined_preds,
             s.output_dir / f"{data_type}_corrected.zarr",
