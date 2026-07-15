@@ -24,7 +24,6 @@ from earthml import (
     ClimPeriod,
     TargetMode,
     XarrayDataset,
-    build_loss,
     build_net,
     Normalize,
     MonthlyNormalize,
@@ -267,6 +266,15 @@ def make_leadtime_pair(
             )
         return fc_period_ds, an_period_ds - fc_base
 
+    if target_mode == "residual_realization":
+        if seasonal_encoding:
+            fc_period_ds = seasonal_cycle_encoder(
+                fc_period_ds,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
+        return fc_period_ds, an_period_ds - fc_period_ds
+
     if fc_clim is None or an_clim is None:
         raise ValueError(
             f"Climatologies are required for target_mode={target_mode!r}"
@@ -313,7 +321,7 @@ def make_leadtime_pair(
         return fc_anom, an_anom
 
     if target_mode == "anomaly_residual":
-        fc_base = (
+        fc_anom_base = (
             fc_anom.mean("realization")
             if "realization" in fc_anom.dims
             else fc_anom
@@ -324,7 +332,7 @@ def make_leadtime_pair(
                 leadtime=leadtime,
                 leadtime_unit=leadtime_unit,
             )
-        return fc_anom, an_anom - fc_base
+        return fc_anom, an_anom - fc_anom_base
 
     if target_mode == "anomaly_residual_realization":
         if seasonal_encoding:
