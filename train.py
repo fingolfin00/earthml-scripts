@@ -426,6 +426,12 @@ def make_train_test_datasets_for_leadtime(
         materialize=materialize,
     )
 
+    x_train, y_train = drop_zero_valid_target_samples(
+        x_train,
+        y_train,
+        label="train",
+    )
+
     if val_start is not None and val_end is not None:
         x_val, y_val = make_leadtime_pair(
             fc_ds=fc_ds,
@@ -442,7 +448,15 @@ def make_train_test_datasets_for_leadtime(
             interpolate=interpolate,
             materialize=materialize,
         )
+
+        x_val, y_val = drop_zero_valid_target_samples(
+            x_val,
+            y_val,
+            label="validation",
+        )
+
         val_ds = XarrayDataset(x_val, y_val, **dataset_kwargs)
+
     else:
         val_ds = None
 
@@ -462,6 +476,12 @@ def make_train_test_datasets_for_leadtime(
         materialize=materialize,
     )
 
+    x_test, y_test = drop_zero_valid_target_samples(
+        x_test,
+        y_test,
+        label="test",
+    )
+
     train_ds = XarrayDataset(x_train, y_train, **dataset_kwargs)
     test_ds = XarrayDataset(x_test, y_test, **dataset_kwargs)
 
@@ -472,6 +492,95 @@ def make_train_test_datasets_for_leadtime(
         "x_clim": fc_clim,
         "y_clim": an_clim,
     }
+
+
+def drop_zero_valid_target_samples(
+    x_ds: xr.Dataset,
+    y_ds: xr.Dataset,
+    *,
+    time_dim: str | None = None,
+    label: str = "dataset",
+) -> tuple[xr.Dataset, xr.Dataset]:
+    """
+    Remove time samples for which every target value is non-finite.
+
+    A sample is retained when at least one target variable contains at least
+    one finite value across all non-time dimensions.
+    """
+    if time_dim is None:
+        time_dim = y_ds.earthml.guessed_dims.time
+
+    if time_dim is None:
+        raise ValueError(f"{label}: could not determine target time dimension")
+
+    if time_dim not in y_ds.dims:
+        raise ValueError(
+            f"{label}: time dimension {time_dim!r} is not present in target"
+        )
+
+    valid_by_variable: list[xr.DataArray] = []
+
+    for name, da in y_ds.data_vars.items():
+        if time_dim not in da.dims:
+            continue
+
+        reduce_dims = tuple(dim for dim in da.dims if dim != time_dim)
+
+        finite = np.isfinite(da)
+
+        if reduce_dims:
+            finite = finite.any(dim=reduce_dims)
+
+        valid_by_variable.append(finite)
+
+    if not valid_by_variable:
+        raise ValueError(
+            f"{label}: no target variables contain time dimension {time_dim!r}"
+        )
+
+    valid_sample = valid_by_variable[0]
+    for valid in valid_by_variable[1:]:
+        valid_sample = valid_sample | valid
+
+    # This is only a one-dimensional boolean vector over time.
+    valid_sample = valid_sample.compute()
+
+    keep_indices = np.flatnonzero(valid_sample.values)
+    dropped_indices = np.flatnonzero(~valid_sample.values)
+
+    if dropped_indices.size:
+        dropped_times = y_ds[time_dim].values[dropped_indices]
+
+        print(
+            f"[yellow]{label}: dropping {dropped_indices.size} "
+            f"zero-valid target samples out of "
+            f"{y_ds.sizes[time_dim]}[/yellow]"
+        )
+
+        for index, timestamp in zip(
+            dropped_indices,
+            dropped_times,
+            strict=False,
+        ):
+            print(
+                f"[yellow]  index={index}, time={timestamp}[/yellow]"
+            )
+
+    if keep_indices.size == 0:
+        raise ValueError(
+            f"{label}: every target sample has zero valid elements"
+        )
+
+    x_ds = x_ds.isel({time_dim: keep_indices})
+    y_ds = y_ds.isel({time_dim: keep_indices})
+
+    x_ds, y_ds = xr.align(
+        x_ds,
+        y_ds,
+        join="exact",
+    )
+
+    return x_ds, y_ds
 
 
 def resolve_accelerator_and_device() -> tuple[str, torch.device]:
