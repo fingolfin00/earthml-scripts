@@ -1496,13 +1496,17 @@ def train(
             add_or_set_leadtime(open_zarr(path), lt)
             for lt, path in pred_paths
         ]
+
         combined_preds = xr.concat(
             preds_ds_list,
             dim="leadtime",
             coords="minimal",
-            compat="equals",
-            join="exact",
+            compat="override",
+            join="outer",
         )
+
+        combined_preds = combined_preds.chunk(safe_chunk_spec(combined_preds))
+
         save_zarr(
             combined_preds,
             s.output_dir / f"{data_type}_corrected.zarr",
