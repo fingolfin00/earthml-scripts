@@ -978,6 +978,7 @@ def train(
         torch_mask="target",
         training_norm="GroupNorm",
         reduction_ratio=16,
+        depth=5,
         kernels_per_layer=1,
         base_channels=32,
         depth=5,
