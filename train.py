@@ -916,7 +916,8 @@ def print_training_recap(
         "model.loss": s.loss_name,
         "model.n_channels": n_channels,
         "model.n_classes": n_classes,
-        "model.realization_as_channel": s.realization_as_channel,
+        "model.channel_representation": s.channel_representation,
+        "model.init_period_dim": s.init_period_dim if s.channel_representation=="init_period" else None,
         "model.output_realizations": s.output_realizations,
         "model.norm_layer": s.training_norm,
         "model.depth": s.depth,
@@ -926,7 +927,7 @@ def print_training_recap(
 
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
         "training.normalization_mode": s.normalization_mode,
-        "training.seasonal_encoding": s.seasonal_encoding,
+        "training.seasonal_encoding": s.seasonal_encoding and s.channel_representation!="init_period",
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
@@ -991,13 +992,13 @@ def train(
         target_mode="analysis",
         clim_period=ClimPeriod.MONTH,
         seed=42,
-        realization_as_channel=False,
+        channel_representation="variable",
         output_realizations="deterministic",
         split_strategy="time",
         normalization="full",
         normalization_mode="channel",
-        seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
-        ensemble_encoding=False,
+        seasonal_encoding=True, # automatically set to False if channel_representation="init_period"
+        ensemble_encoding=True,
         net_name="SmaAt_UNet",
         loss_name="MSELoss",
         init_learning_rate=3e-4,
@@ -1094,12 +1095,13 @@ def train(
             region=s.region,
             dataset_kwargs={
                 "target_realization_avg": s.target_realization_avg,
-                "realization_as_channel": s.realization_as_channel,
+                "channel_representation": s.channel_representation,
+                "init_period_dim": s.init_period_dim,
                 "output_realizations": s.output_realizations,
                 "torch_mask": s.torch_mask,
                 "fill_nan_value": s.fill_nan_value,
             },
-            seasonal_encoding=s.seasonal_encoding,
+            seasonal_encoding=s.seasonal_encoding and s.channel_representation!="init_period",
             ensemble_encoding=s.ensemble_encoding,
             interpolate_analysis=interpolate_analysis,
             materialize=False,
@@ -1119,7 +1121,7 @@ def train(
 
         input_excluded_channels = (
             (-4, -3, -2, -1)
-            if s.seasonal_encoding
+            if s.seasonal_encoding and s.channel_representation!="init_period"
             else None
         )
 
