@@ -135,6 +135,46 @@ def seasonal_cycle_encoder(
     )
 
 
+def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
+    realization_dim = ds.earthml.guessed_dims.realization
+
+    if realization_dim is None:
+        raise ValueError(
+            "Could not determine the realization dimension."
+        )
+
+    encoded: dict[str, xr.DataArray] = {}
+
+    for name, da in ds.data_vars.items():
+        if realization_dim not in da.dims:
+            continue
+
+        encoded[f"{name}_mean"] = da.mean(
+            dim=realization_dim,
+            keep_attrs=True,
+            skipna=True,
+        )
+
+        encoded[f"{name}_spread"] = da.std(
+            dim=realization_dim,
+            keep_attrs=True,
+            skipna=True,
+            ddof=0,
+        )
+
+    if not encoded:
+        raise ValueError(
+            f"No variables contain realization dimension "
+            f"{realization_dim!r}. Variables: {list(ds.data_vars)}"
+        )
+
+    return xr.merge(
+        [ds, xr.Dataset(encoded)],
+        compat="equals",
+        join="exact",
+    )
+
+
 def compute_valid_times(
     init_times,
     leadtime_value: int | float,
@@ -218,8 +258,22 @@ def make_leadtime_pair(
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
     interpolate: bool = True,
+    ensemble_encoding: bool = False,
     materialize: bool = False,
 ) -> tuple[xr.Dataset, xr.Dataset]:
+    def _encode_input(ds: xr.Dataset) -> xr.Dataset:
+        if ensemble_encoding:
+            ds = ensemble_encoder(ds)
+
+        if seasonal_encoding:
+            ds = seasonal_cycle_encoder(
+                ds,
+                leadtime=leadtime,
+                leadtime_unit=leadtime_unit,
+            )
+
+        return ds
+
     fc_period_ds, an_period_ds = extract_period_from_ds(
         fc_ds=fc_ds,
         an_ds=an_ds,
@@ -244,13 +298,7 @@ def make_leadtime_pair(
         )
 
     if target_mode == "analysis":
-        if seasonal_encoding:
-            fc_period_ds = seasonal_cycle_encoder(
-                fc_period_ds,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_period_ds, an_period_ds
+        return _encode_input(fc_period_ds), an_period_ds
 
     if target_mode == "residual":
         fc_base = (
@@ -258,22 +306,12 @@ def make_leadtime_pair(
             if "realization" in fc_period_ds.dims
             else fc_period_ds
         )
-        if seasonal_encoding:
-            fc_period_ds = seasonal_cycle_encoder(
-                fc_period_ds,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_period_ds, an_period_ds - fc_base
+        target_ds = an_period_ds - fc_base
+        return _encode_input(fc_period_ds), target_ds
 
     if target_mode == "residual_realization":
-        if seasonal_encoding:
-            fc_period_ds = seasonal_cycle_encoder(
-                fc_period_ds,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_period_ds, an_period_ds - fc_period_ds
+        target_ds = an_period_ds - fc_period_ds
+        return _encode_input(fc_period_ds), target_ds
 
     if fc_clim is None or an_clim is None:
         raise ValueError(
@@ -312,13 +350,7 @@ def make_leadtime_pair(
     an_anom = (an_period_ds - an_clim_for_period).unify_chunks()
 
     if target_mode == "anomaly":
-        if seasonal_encoding:
-            fc_anom = seasonal_cycle_encoder(
-                fc_anom,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_anom, an_anom
+        return _encode_input(fc_anom), an_anom
 
     if target_mode == "anomaly_residual":
         fc_anom_base = (
@@ -326,22 +358,12 @@ def make_leadtime_pair(
             if "realization" in fc_anom.dims
             else fc_anom
         )
-        if seasonal_encoding:
-            fc_anom = seasonal_cycle_encoder(
-                fc_anom,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_anom, an_anom - fc_anom_base
+        target_anom_ds = an_anom - fc_anom_base
+        return _encode_input(fc_anom), target_anom_ds
 
     if target_mode == "anomaly_residual_realization":
-        if seasonal_encoding:
-            fc_anom = seasonal_cycle_encoder(
-                fc_anom,
-                leadtime=leadtime,
-                leadtime_unit=leadtime_unit,
-            )
-        return fc_anom, an_anom - fc_anom
+        target_anom_ds = an_anom - fc_anom
+        return _encode_input(fc_anom), target_anom_ds
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
 
@@ -365,6 +387,7 @@ def make_train_test_datasets_for_leadtime(
     dataset_kwargs: dict | None = None,
     seasonal_encoding: bool = False,
     interpolate: bool = True,
+    ensemble_encoding: bool = False,
     materialize: bool = False,
 ) -> LeadtimeDatasets:
     dataset_kwargs = dataset_kwargs or {}
@@ -423,6 +446,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         interpolate=interpolate,
+        ensemble_encoding=ensemble_encoding,
         materialize=materialize,
     )
 
@@ -446,6 +470,7 @@ def make_train_test_datasets_for_leadtime(
             clim_period=clim_period,
             seasonal_encoding=seasonal_encoding,
             interpolate=interpolate,
+            ensemble_encoding=ensemble_encoding,
             materialize=materialize,
         )
 
@@ -473,6 +498,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         interpolate=interpolate,
+        ensemble_encoding=ensemble_encoding,
         materialize=materialize,
     )
 
@@ -966,7 +992,8 @@ def train(
         split_strategy="time",
         normalization="full",
         normalization_mode="channel",
-        seasonal_encoding=False,
+        seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
+        ensemble_encoding=False,
         net_name="SmaAt_UNet",
         loss_name="MSELoss",
         init_learning_rate=3e-4,
@@ -1069,6 +1096,7 @@ def train(
                 "fill_nan_value": s.fill_nan_value,
             },
             seasonal_encoding=s.seasonal_encoding,
+            ensemble_encoding=s.ensemble_encoding,
             interpolate=interpolate,
             materialize=False,
         )
@@ -1086,7 +1114,7 @@ def train(
             raise ValueError(f"normalization={s.normalization} not supported.")
 
         input_excluded_channels = (
-            (-2, -1)
+            (-4, -3, -2, -1)
             if s.seasonal_encoding
             else None
         )
