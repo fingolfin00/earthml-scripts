@@ -914,6 +914,7 @@ def print_training_recap(
 
         "model.network": s.net_name,
         "model.loss": s.loss_name,
+        "model.target_scale_degrees": s.target_scale_degrees if s.loss_name=="GeoMaskedMSELowFreqLoss" else None,
         "model.n_channels": n_channels,
         "model.n_classes": n_classes,
         "model.channel_representation": s.channel_representation,
@@ -1003,6 +1004,7 @@ def train(
         loss_name="MSELoss",
         init_learning_rate=3e-4,
         weight_decay=1e-4,
+        target_scale_degrees=15.0,
         batch_size=8,
         max_epochs=50,
         target_realization_avg=False,
@@ -1171,6 +1173,33 @@ def train(
                 "eps": 1e-8,
             }
 
+        elif s.loss_name == "GeoMaskedMSELowFreqLoss":
+            target_scale_degrees = s.target_scale_degrees
+            grid_spacing = abs(
+                float(
+                    train_dataset.target_ds.latitude.diff("latitude")
+                    .median()
+                    .values
+                )
+            )
+
+            pool_kernel_size = max(
+                3,
+                round(target_scale_degrees / grid_spacing),
+            )
+
+            # Prefer odd windows.
+            if pool_kernel_size % 2 == 0:
+                pool_kernel_size += 1
+
+            loss_kwargs = {
+                "latitudes": latitudes,
+                "lambda_low_freq": 0.1,
+                "pool_kernel_size": pool_kernel_size,
+                "pool_stride": max(1, pool_kernel_size // 2),
+                "eps": 1e-8,
+            }
+
         elif s.loss_name == "VarNormMaskMSELoss":
             loss_kwargs = {
                 "variance_type": "spatial", # "channel", "geochannel", "spatial", "temporal", "geotemporal"
@@ -1221,6 +1250,12 @@ def train(
             reduction_ratio=s.reduction_ratio,
             kernels_per_layer=s.kernels_per_layer,
             base_channels=s.base_channels,
+            zero_init_output=True if s.target_mode in (
+                "residual",
+                "residual_realization",
+                "anomaly_residual",
+                "anomaly_residual_realization",
+            ) else False,
         )
 
         # Init model
