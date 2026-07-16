@@ -93,7 +93,6 @@ def seasonal_cycle_encoder(
     leadtime: int | float,
     leadtime_unit: LeadtimeUnit,
     time_dim: str | None = None,
-    prefix: str = "season",
 ) -> xr.Dataset:
     if time_dim is None:
         time_dim = ds.earthml.guessed_dims.time
@@ -109,19 +108,20 @@ def seasonal_cycle_encoder(
 
     valid_times = pd.DatetimeIndex(valid_times)
 
-    phase = (valid_times.month.to_numpy() - 1) / 12.0
-    angle = 2.0 * np.pi * phase
+    init_times = pd.DatetimeIndex(ds[time_dim].values)
+
+    init_phase = (init_times.month.to_numpy() - 1) / 12.0
+    init_angle = 2.0 * np.pi * init_phase
+
+    valid_phase = (valid_times.month.to_numpy() - 1) / 12.0
+    valid_angle = 2.0 * np.pi * valid_phase
 
     seasonal = xr.Dataset(
         {
-            f"{prefix}_sin": (
-                (time_dim,),
-                np.sin(angle).astype(np.float32),
-            ),
-            f"{prefix}_cos": (
-                (time_dim,),
-                np.cos(angle).astype(np.float32),
-            ),
+            f"valid_sin": ((time_dim,), np.sin(valid_angle).astype(np.float32)),
+            f"valid_cos": ((time_dim,), np.cos(valid_angle).astype(np.float32)),
+            "init_sin": ((time_dim,), np.sin(init_angle).astype(np.float32)),
+            "init_cos": ((time_dim,), np.cos(init_angle).astype(np.float32)),
         },
         coords={
             time_dim: ds[time_dim],
