@@ -194,7 +194,7 @@ def extract_period_from_ds(
     end: str,
     leadtime: int | float,
     leadtime_unit: LeadtimeUnit,
-    interpolate: bool = True,
+    interpolate_analysis: bool = True,
     materialize: bool = False,
 ) -> tuple[xr.Dataset, xr.Dataset]:
     time_dim = fc_ds.earthml.guessed_dims.time
@@ -228,7 +228,7 @@ def extract_period_from_ds(
         time_dim: fc_ds[time_dim].values
     })
 
-    if interpolate:
+    if interpolate_analysis:
         # Regrid analysis into forecast
         an_ds = an_ds.interp(
             latitude=fc_ds.latitude,
@@ -257,8 +257,8 @@ def make_leadtime_pair(
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
-    interpolate: bool = True,
     ensemble_encoding: bool = False,
+    interpolate_analysis: bool = True,
     materialize: bool = False,
 ) -> tuple[xr.Dataset, xr.Dataset]:
     def _encode_input(ds: xr.Dataset) -> xr.Dataset:
@@ -281,7 +281,7 @@ def make_leadtime_pair(
         end=end,
         leadtime=leadtime,
         leadtime_unit=leadtime_unit,
-        interpolate=interpolate,
+        interpolate_analysis=interpolate_analysis,
         materialize=materialize,
     )
 
@@ -386,8 +386,8 @@ def make_train_test_datasets_for_leadtime(
     region: dict | None = None,
     dataset_kwargs: dict | None = None,
     seasonal_encoding: bool = False,
-    interpolate: bool = True,
     ensemble_encoding: bool = False,
+    interpolate_analysis: bool = True,
     materialize: bool = False,
 ) -> LeadtimeDatasets:
     dataset_kwargs = dataset_kwargs or {}
@@ -420,7 +420,7 @@ def make_train_test_datasets_for_leadtime(
             end=train_end,
             leadtime=leadtime,
             leadtime_unit=leadtime_unit,
-            interpolate=interpolate,
+            interpolate_analysis=interpolate_analysis,
         )
 
         fc_time_dim = fc_ds.earthml.guessed_dims.time
@@ -445,8 +445,8 @@ def make_train_test_datasets_for_leadtime(
         target_mode=target_mode,
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
-        interpolate=interpolate,
         ensemble_encoding=ensemble_encoding,
+        interpolate_analysis=interpolate_analysis,
         materialize=materialize,
     )
 
@@ -469,8 +469,8 @@ def make_train_test_datasets_for_leadtime(
             target_mode=target_mode,
             clim_period=clim_period,
             seasonal_encoding=seasonal_encoding,
-            interpolate=interpolate,
             ensemble_encoding=ensemble_encoding,
+            interpolate_analysis=interpolate_analysis,
             materialize=materialize,
         )
 
@@ -497,8 +497,8 @@ def make_train_test_datasets_for_leadtime(
         target_mode=target_mode,
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
-        interpolate=interpolate,
         ensemble_encoding=ensemble_encoding,
+        interpolate_analysis=interpolate_analysis,
         materialize=materialize,
     )
 
@@ -865,8 +865,10 @@ def print_training_recap(
     normalization_name: str,
     n_channels: int,
     n_classes: int,
+    dry_run: bool,
     force_retrain: bool,
     force_test: bool,
+    interpolate_analysis: bool,
     train_input_shape: tuple | None = None,
     train_target_shape: tuple | None = None,
     val_input_shape: tuple | None = None,
@@ -884,8 +886,10 @@ def print_training_recap(
     flat_recap = {
         "experiment.name": exp_name or s.output_name,
         "experiment.leadtime": f"{leadtime} {s.leadtime_unit.value}",
+        "experiment.dry_run": dry_run,
         "experiment.force_retrain": force_retrain,
         "experiment.force_test": force_test,
+        "experiment.interpolate_analysis": interpolate_analysis,
         "experiment.torch_workers": s.torch_workers,
 
         "data.forecast": f"{s.model_fc}/{s.var_fc}",
@@ -953,8 +957,8 @@ def train(
 
     dry_run = False
     force_retrain = False
-    force_test = True
-    interpolate = True
+    force_test = False
+    interpolate_analysis = True
 
     accelerator, device = resolve_accelerator_and_device()
 
@@ -1097,7 +1101,7 @@ def train(
             },
             seasonal_encoding=s.seasonal_encoding,
             ensemble_encoding=s.ensemble_encoding,
-            interpolate=interpolate,
+            interpolate_analysis=interpolate_analysis,
             materialize=False,
         )
 
@@ -1289,8 +1293,10 @@ def train(
             normalization_name=type(normalize_input).__name__,
             n_channels=n_channels,
             n_classes=n_classes,
+            dry_run=dry_run,
             force_retrain=force_retrain,
             force_test=force_test,
+            interpolate_analysis=interpolate_analysis,
             train_input_shape=tuple(train_dataset.x.shape),
             train_target_shape=tuple(train_dataset.y.shape),
             val_input_shape=tuple(val_dataset.x.shape) if val_dataset is not None else None,
