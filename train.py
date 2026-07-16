@@ -1383,9 +1383,9 @@ def train(
             preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
 
             # Reconstruct
-            if s.target_mode == "residual":
+            if s.target_mode in ("residual", "residual_realization"):
                 fc_base = dataset.input_ds[s.var_fc]
-                if "realization" in fc_base.dims:
+                if s.target_mode == "residual" and "realization" in fc_base.dims:
                     fc_base = fc_base.mean("realization")
 
                 fc_base = fc_base.chunk(safe_chunk_spec(fc_base, dataset.input_ds))
