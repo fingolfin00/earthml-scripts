@@ -1194,7 +1194,8 @@ def train(
 
             loss_kwargs = {
                 "latitudes": latitudes,
-                "lambda_low_freq": 0.1,
+                "lambda_low_freq": 0.5,
+                "lambda_batch_mean": 1,
                 "pool_kernel_size": pool_kernel_size,
                 "pool_stride": max(1, pool_kernel_size // 2),
                 "eps": 1e-8,
