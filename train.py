@@ -1297,10 +1297,10 @@ def train(
         test_dataloader = DataLoader(
             test_dataset,
             batch_size=1, 
-            num_workers=s.torch_workers,
+            num_workers=0,
             shuffle=False,
-            pin_memory = (accelerator == "gpu"),
-            persistent_workers=s.torch_workers > 0,
+            pin_memory=(accelerator == "gpu"),
+            persistent_workers=False,
         )
 
         val_test_dataloader = None
@@ -1308,19 +1308,19 @@ def train(
             val_test_dataloader = DataLoader(
                 val_dataset,
                 batch_size=1,
-                num_workers=s.torch_workers,
+                num_workers=0,
                 shuffle=False,
-                pin_memory = (accelerator == "gpu"),
-                persistent_workers=s.torch_workers > 0,
+                pin_memory=(accelerator == "gpu"),
+                persistent_workers=False,
             )
 
         train_test_dataloader = DataLoader(
             train_dataset,
             batch_size=1,
-            num_workers=s.torch_workers,
+            num_workers=0,
             shuffle=False,
-            pin_memory = (accelerator == "gpu"),
-            persistent_workers=s.torch_workers > 0,
+            pin_memory=(accelerator == "gpu"),
+            persistent_workers=False,
         )
 
         print_training_recap(
@@ -1550,14 +1550,45 @@ def train(
         train_trainer.strategy.teardown()
         test_trainer.strategy.teardown()
 
-        del model, train_trainer, test_trainer
-        del train_datamodule, train_test_dataloader, val_test_dataloader, test_dataloader
+        for ds in (
+            train_dataset.input_ds,
+            train_dataset.target_ds,
+            val_dataset.input_ds if val_dataset is not None else None,
+            val_dataset.target_ds if val_dataset is not None else None,
+            test_dataset.input_ds,
+            test_dataset.target_ds,
+            dataset_d["x_clim"],
+            dataset_d["y_clim"],
+        ):
+            if ds is not None:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
+
+        try:
+            tb_logger.finalize("success")
+        except Exception:
+            pass
+
+        del train_trainer, test_trainer, model
+        del train_datamodule
+        del train_test_dataloader, val_test_dataloader, test_dataloader
         del train_dataset, val_dataset, test_dataset, dataset_d
+        del normalize_input, normalize_target
+        del latitudes, loss_kwargs, base_loss_params, net_kwargs
+        del tb_logger
 
         gc.collect()
+
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+
+        if (
+            getattr(torch.backends, "mps", None)
+            and torch.backends.mps.is_available()
+        ):
             torch.mps.empty_cache()
 
     # Combine all leadtimes
