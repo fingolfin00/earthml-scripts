@@ -25,6 +25,8 @@ from earthml.metrics import (
     is_probabilistic,
     get_metrics,
     calculate_save_and_subset_climatologies,
+    stack_hour_clim,
+    groupby_period,
 )
 from earthml.plots import (
     safe_label,
@@ -46,6 +48,7 @@ def main() -> None:
     plot_mlfc = True
     regenerate_plots = (
         # "fc",
+        # "clim-fc",
         "mlfc",
     )
 
@@ -230,13 +233,40 @@ def main() -> None:
         )
         mlfc_clim = mlfc_clim.assign_coords(leadtime=s.leadtimes) if mlfc_clim is not None else None
 
-        models = ("fc", "mlfc")
+        leadtime_dim = fc.earthml.guessed_dims.leadtime
+        fc = fc.sel({leadtime_dim: s.leadtimes})
+        an = an.sel({leadtime_dim: s.leadtimes})
+        fc_clim = fc_clim.sel({leadtime_dim: s.leadtimes})
+        an_clim = an_clim.sel({leadtime_dim: s.leadtimes})
+
+        # fc corrected with analysis clim
+        fc_clim_da = stack_hour_clim(fc_clim[s.var_fc], clim_period)
+        an_clim_da = stack_hour_clim(an_clim[s.var_an], clim_period)
+
+        fc_anom_da = groupby_period(fc[s.var_fc], fc.earthml.guessed_dims.time, clim_period) - fc_clim_da
+        clim_fc = (groupby_period(fc_anom_da, fc.earthml.guessed_dims.time, clim_period) + an_clim_da).to_dataset(name=s.var_fc)
+
+        realization_dim = fc.earthml.guessed_dims.realization
+        an_clim_for_fc = an_clim
+        if (
+            realization_dim is not None
+            and realization_dim in fc.dims
+            and realization_dim not in an_clim_for_fc.dims
+        ):
+            an_clim_for_fc = an_clim_for_fc.expand_dims(
+                {
+                    realization_dim: fc[realization_dim]
+                }
+            )
+
+        models = ("fc", "clim-fc", "mlfc")
         model_plot_folders = {
             "fc": fc_plot_dir,
+            "clim-fc": fc_plot_dir,
             "mlfc": s.plot_dir,
         }
-        ds_plot = (fc, mlfc) if plot_mlfc else (fc,)
-        ds_clim_plot = (fc_clim, mlfc_clim) if plot_mlfc else (fc_clim,)
+        ds_plot = (fc, clim_fc, mlfc) if plot_mlfc else (fc, clim_fc)
+        ds_clim_plot = (fc_clim, an_clim_for_fc, mlfc_clim) if plot_mlfc else (fc_clim, an_clim_for_fc,)
 
         for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
             if ds is None or ds_clim is None:
@@ -342,7 +372,7 @@ def main() -> None:
                             link = s.plot_dir / common_path / filename
 
                             if out_file.exists() and model not in regenerate_plots:
-                                if model == "fc" and not link.exists():
+                                if model in ("fc", "clim-fc") and not link.exists():
                                     link.parent.mkdir(parents=True, exist_ok=True)
                                     link.symlink_to(out_file.resolve())
                                 continue
@@ -369,7 +399,7 @@ def main() -> None:
                                 title_strftime="%Y",
                             )
 
-                            if model == "fc" and not link.exists():
+                            if model in ("fc", "clim-fc") and not link.exists():
                                 link.parent.mkdir(parents=True, exist_ok=True)
                                 link.symlink_to(out_file.resolve())
 
