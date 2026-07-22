@@ -1143,13 +1143,76 @@ def _test(
     model_mse = error_norm.square().mean()
     zero_mse = targets_norm.square().mean()
 
+    masks = model.test_masks
+
+    model_loss = model.compute_loss(
+        prediction=preds_norm,
+        target=targets_norm,
+        mask=masks,
+    )
+
+    zero_loss = model.compute_loss(
+        prediction=torch.zeros_like(targets_norm),
+        target=targets_norm,
+        mask=masks,
+    )
+
     print("Normalized tensor diagnostics")
-    print("  model MSE:", float(model_mse))
+    print("  unweighted raw tensor MSE:", float(model_mse))
     print("  zero-output MSE:", float(zero_mse))
     print("  skill vs zero:", float(1.0 - model_mse / zero_mse))
     print("  model scalar bias:", float(error_norm.mean()))
     print("  target mean:", float(targets_norm.mean()))
     print("  prediction mean:", float(preds_norm.mean()))
+    print(
+        "prediction std:",
+        float(preds_norm.std()),
+    )
+    print(
+        "target std:",
+        float(targets_norm.std()),
+    )
+
+    print("Loss-consistent normalized diagnostics")
+    print("  model loss:", float(model_loss))
+    print("  zero-output loss:", float(zero_loss))
+    print(
+        "  skill vs zero:",
+        float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
+    )
+
+    # Per-grid-cell skill against predicting zero residual.
+    valid = masks.bool()
+    valid_count_map = valid.sum(dim=(0, 1))  # (H, W)
+
+    model_mse_map = (
+        error_norm.square()
+        .masked_fill(~valid, 0.0)
+        .sum(dim=(0, 1))
+        / valid_count_map.clamp_min(1)
+    )
+
+    zero_mse_map = (
+        targets_norm.square()
+        .masked_fill(~valid, 0.0)
+        .sum(dim=(0, 1))
+        / valid_count_map.clamp_min(1)
+    )
+
+    valid_grid_cells = valid_count_map > 0
+    improved_grid_cells = (
+        model_mse_map < zero_mse_map
+    ) & valid_grid_cells
+
+    improved_grid_fraction = (
+        improved_grid_cells.sum()
+        / valid_grid_cells.sum().clamp_min(1)
+    )
+
+    print(
+        "  improved grid cells:",
+        f"{100.0 * float(improved_grid_fraction):.1f}%",
+    )
 
     target_mean_map = targets_norm.mean(dim=0)
     prediction_mean_map = preds_norm.mean(dim=0)
@@ -1185,9 +1248,29 @@ def _test(
         pred_mean_map = pred_month.mean(dim=0)
         error_mean_map = error_month.mean(dim=0)
 
+        mask_month = masks[selected]
+
+        model_loss = model.compute_loss(
+            prediction=pred_month,
+            target=target_month,
+            mask=mask_month,
+        )
+
+        zero_loss = model.compute_loss(
+            prediction=torch.zeros_like(target_month),
+            target=target_month,
+            mask=mask_month,
+        )
+
         print(f"Month {int(month)}")
         print("  samples:", int(selected.sum()))
-        print("  model MSE:", float(model_mse))
+        print("  unweighted raw tensor MSE:", float(model_mse))
+        print("  weighted loss:", float(model_loss))
+        print("  weighted zero loss:", float(zero_loss))
+        print(
+            "  weighted skill vs zero:",
+            float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
+        )
         print("  zero MSE:", float(zero_mse))
         print(
             "  skill vs zero:",
@@ -1209,8 +1292,48 @@ def _test(
             "  error mean-map max:",
             float(error_mean_map.abs().max()),
         )
+        print(
+            "prediction std:",
+            float(pred_month.std()),
+        )
+        print(
+            "target std:",
+            float(target_month.std()),
+        )
+
+        model_mse_map = (
+            error_month.square()
+            .masked_fill(~valid, 0.0)
+            .sum(dim=(0, 1))
+            / valid_count_map.clamp_min(1)
+        )
+
+        zero_mse_map = (
+            target_month.square()
+            .masked_fill(~valid, 0.0)
+            .sum(dim=(0, 1))
+            / valid_count_map.clamp_min(1)
+        )
+
+        valid_grid_cells = valid_count_map > 0
+        improved_grid_cells = (
+            model_mse_map < zero_mse_map
+        ) & valid_grid_cells
+
+        improved_grid_fraction = (
+            improved_grid_cells.sum()
+            / valid_grid_cells.sum().clamp_min(1)
+        )
+
+        print(
+            "  improved grid cells:",
+            f"{100.0 * float(improved_grid_fraction):.1f}%",
+        )
 
     del model.test_preds
+    del model.test_targets
+    del model.test_masks
+    del model.test_months
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
