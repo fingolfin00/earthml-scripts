@@ -1208,6 +1208,7 @@ def _test(
     dataloader: DataLoader,
     preds_store: Path,
     an_clim: xr.Dataset | None = None,
+    log_monthly: bool = False,
 ):
     test_trainer.test(model, dataloaders=dataloader)
 
@@ -1312,109 +1313,110 @@ def _test(
     print("  mean abs:", float(error_mean_map.abs().mean()))
     print("  max abs:", float(error_mean_map.abs().max()))
 
-    preds = model.test_preds.float()
-    targets = model.test_targets.float()
-    months = model.test_months
+    if log_monthly:
+        preds = model.test_preds.float()
+        targets = model.test_targets.float()
+        months = model.test_months
 
-    for month in torch.unique(months).sort().values:
-        selected = months == month
+        for month in torch.unique(months).sort().values:
+            selected = months == month
 
-        pred_month = preds[selected]
-        target_month = targets[selected]
-        error_month = pred_month - target_month
+            pred_month = preds[selected]
+            target_month = targets[selected]
+            error_month = pred_month - target_month
 
-        model_mse = error_month.square().mean()
-        zero_mse = target_month.square().mean()
+            model_mse = error_month.square().mean()
+            zero_mse = target_month.square().mean()
 
-        target_mean_map = target_month.mean(dim=0)
-        pred_mean_map = pred_month.mean(dim=0)
-        error_mean_map = error_month.mean(dim=0)
+            target_mean_map = target_month.mean(dim=0)
+            pred_mean_map = pred_month.mean(dim=0)
+            error_mean_map = error_month.mean(dim=0)
 
-        mask_month = masks[selected]
+            mask_month = masks[selected]
 
-        model_loss = model.compute_loss(
-            prediction=pred_month,
-            target=target_month,
-            mask=mask_month,
-        )
+            model_loss = model.compute_loss(
+                prediction=pred_month,
+                target=target_month,
+                mask=mask_month,
+            )
 
-        zero_loss = model.compute_loss(
-            prediction=torch.zeros_like(target_month),
-            target=target_month,
-            mask=mask_month,
-        )
+            zero_loss = model.compute_loss(
+                prediction=torch.zeros_like(target_month),
+                target=target_month,
+                mask=mask_month,
+            )
 
-        print(f"Month {int(month)}")
-        print("  samples:", int(selected.sum()))
-        print("  unweighted raw tensor MSE:", float(model_mse))
-        print("  weighted loss:", float(model_loss))
-        print("  weighted zero loss:", float(zero_loss))
-        print(
-            "  weighted skill vs zero:",
-            float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
-        )
-        print("  zero MSE:", float(zero_mse))
-        print(
-            "  skill vs zero:",
-            float(1.0 - model_mse / zero_mse.clamp_min(1e-8)),
-        )
-        print(
-            "  target mean-map abs:",
-            float(target_mean_map.abs().mean()),
-        )
-        print(
-            "  prediction mean-map abs:",
-            float(pred_mean_map.abs().mean()),
-        )
-        print(
-            "  error mean-map abs:",
-            float(error_mean_map.abs().mean()),
-        )
-        print(
-            "  error mean-map max:",
-            float(error_mean_map.abs().max()),
-        )
-        print(
-            "prediction std:",
-            float(pred_month.std()),
-        )
-        print(
-            "target std:",
-            float(target_month.std()),
-        )
+            print(f"Month {int(month)}")
+            print("  samples:", int(selected.sum()))
+            print("  unweighted raw tensor MSE:", float(model_mse))
+            print("  weighted loss:", float(model_loss))
+            print("  weighted zero loss:", float(zero_loss))
+            print(
+                "  weighted skill vs zero:",
+                float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
+            )
+            print("  zero MSE:", float(zero_mse))
+            print(
+                "  skill vs zero:",
+                float(1.0 - model_mse / zero_mse.clamp_min(1e-8)),
+            )
+            print(
+                "  target mean-map abs:",
+                float(target_mean_map.abs().mean()),
+            )
+            print(
+                "  prediction mean-map abs:",
+                float(pred_mean_map.abs().mean()),
+            )
+            print(
+                "  error mean-map abs:",
+                float(error_mean_map.abs().mean()),
+            )
+            print(
+                "  error mean-map max:",
+                float(error_mean_map.abs().max()),
+            )
+            print(
+                "prediction std:",
+                float(pred_month.std()),
+            )
+            print(
+                "target std:",
+                float(target_month.std()),
+            )
 
-        valid_month = mask_month.bool()
-        valid_count_map_month = valid_month.sum(dim=(0, 1))
+            valid_month = mask_month.bool()
+            valid_count_map_month = valid_month.sum(dim=(0, 1))
 
-        model_mse_map = (
-            error_month.square()
-            .masked_fill(~valid_month, 0.0)
-            .sum(dim=(0, 1))
-            / valid_count_map_month.clamp_min(1)
-        )
+            model_mse_map = (
+                error_month.square()
+                .masked_fill(~valid_month, 0.0)
+                .sum(dim=(0, 1))
+                / valid_count_map_month.clamp_min(1)
+            )
 
-        zero_mse_map = (
-            target_month.square()
-            .masked_fill(~valid_month, 0.0)
-            .sum(dim=(0, 1))
-            / valid_count_map_month.clamp_min(1)
-        )
+            zero_mse_map = (
+                target_month.square()
+                .masked_fill(~valid_month, 0.0)
+                .sum(dim=(0, 1))
+                / valid_count_map_month.clamp_min(1)
+            )
 
-        valid_grid_cells_month = valid_count_map_month > 0
+            valid_grid_cells_month = valid_count_map_month > 0
 
-        improved_grid_cells = (
-            model_mse_map < zero_mse_map
-        ) & valid_grid_cells_month
+            improved_grid_cells = (
+                model_mse_map < zero_mse_map
+            ) & valid_grid_cells_month
 
-        improved_grid_fraction = (
-            improved_grid_cells.sum()
-            / valid_grid_cells_month.sum().clamp_min(1)
-        )
+            improved_grid_fraction = (
+                improved_grid_cells.sum()
+                / valid_grid_cells_month.sum().clamp_min(1)
+            )
 
-        print(
-            "  improved grid cells:",
-            f"{100.0 * float(improved_grid_fraction):.1f}%",
-        )
+            print(
+                "  improved grid cells:",
+                f"{100.0 * float(improved_grid_fraction):.1f}%",
+            )
 
     del model.test_preds
     del model.test_targets
@@ -1503,6 +1505,7 @@ def _core_train(
     device: torch.device,
     accelerator: str,
     leadtime: int | float | str,
+    log_monthly: bool = False,
 
 ):
     # Create exp dirs
@@ -1869,6 +1872,7 @@ def _core_train(
             dataloader=test_dataloader,
             preds_store=test_store,
             an_clim=y_clim,
+            log_monthly=log_monthly,
         )
 
         if val_test_dataloader is not None and val_dataset is not None:
@@ -1881,6 +1885,7 @@ def _core_train(
                 dataloader=val_test_dataloader,
                 preds_store=val_store,
                 an_clim=y_clim,
+                log_monthly=log_monthly,
             )
 
         _test(
@@ -1892,6 +1897,7 @@ def _core_train(
             dataloader=train_test_dataloader,
             preds_store=train_store,
             an_clim=y_clim,
+            log_monthly=log_monthly,
         )
     else:
         print(
@@ -2017,6 +2023,7 @@ def train(
     force_retrain = False
     force_test = False
     interpolate_analysis = True
+    log_monthly = False
 
     accelerator, device = resolve_accelerator_and_device()
 
@@ -2184,6 +2191,7 @@ def train(
                     device=device,
                     accelerator=accelerator,
                     leadtime=lt,
+                    log_monthly=log_monthly,
                 )
 
                 train_pred_paths.append(
