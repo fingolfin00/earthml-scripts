@@ -45,6 +45,13 @@ class LeadtimeDatasets(TypedDict):
     x_clim: xr.Dataset | None
     y_clim: xr.Dataset | None
 
+PredictionRecord = tuple[
+    int,          # leadtime
+    str | None,   # init period
+    str,          # regional name
+    Path,         # prediction store
+]
+
 console = Console()
 
 
@@ -1002,45 +1009,112 @@ def print_training_recap(
 def _combine_predictions(
     s: Settings,
     data_type: Literal["train", "val", "test"],
-    pred_records: list[tuple[int, str | None, Path]],
+    pred_records: list[
+        tuple[int, str | None, str, Path]
+    ],
 ) -> None:
     if not pred_records:
         return
 
-    paths_by_leadtime: dict[int, list[tuple[str | None, Path]]] = {}
+    records_by_leadtime: dict[
+        int,
+        list[tuple[str | None, str, Path]],
+    ] = {}
 
-    for leadtime, init_period, path in pred_records:
-        paths_by_leadtime.setdefault(leadtime, []).append(
-            (init_period, path)
+    for leadtime, init_period, regional_name, path in pred_records:
+        records_by_leadtime.setdefault(
+            leadtime,
+            [],
+        ).append(
+            (
+                init_period,
+                regional_name,
+                path,
+            )
         )
 
     leadtime_datasets: list[xr.Dataset] = []
 
-    for leadtime in sorted(paths_by_leadtime):
-        period_paths = paths_by_leadtime[leadtime]
+    for leadtime in sorted(records_by_leadtime):
+        records_for_leadtime = records_by_leadtime[leadtime]
 
-        period_datasets: list[xr.Dataset] = []
+        records_by_init_period: dict[
+            str | None,
+            list[tuple[str, Path]],
+        ] = {}
 
-        for init_period, path in sorted(
-            period_paths,
-            key=lambda item: (
-                int(item[0]) if item[0] is not None else 0
+        for init_period, regional_name, path in records_for_leadtime:
+            records_by_init_period.setdefault(
+                init_period,
+                [],
+            ).append(
+                (
+                    regional_name,
+                    path,
+                )
+            )
+
+        init_period_datasets: list[xr.Dataset] = []
+
+        for init_period in sorted(
+            records_by_init_period,
+            key=lambda value: (
+                int(value) if value is not None else 0
             ),
         ):
-            if not path.exists():
-                raise FileNotFoundError(
-                    f"Missing {data_type} prediction store for "
-                    f"leadtime={leadtime}, "
-                    f"init_period={init_period}: {path}"
+            regional_records = records_by_init_period[init_period]
+
+            regional_datasets: list[xr.Dataset] = []
+
+            for regional_name, path in sorted(
+                regional_records,
+                key=lambda item: item[0],
+            ):
+                if not path.exists():
+                    raise FileNotFoundError(
+                        f"Missing {data_type} prediction store for "
+                        f"leadtime={leadtime}, "
+                        f"init_period={init_period}, "
+                        f"region={regional_name}: {path}"
+                    )
+
+                regional_datasets.append(
+                    open_zarr(path)
                 )
 
-            period_datasets.append(open_zarr(path))
+            if len(regional_datasets) == 1:
+                combined_regions = regional_datasets[0]
+            else:
+                combined_regions = xr.combine_by_coords(
+                    regional_datasets,
+                    combine_attrs="override",
+                    data_vars="all",
+                    coords="minimal",
+                    compat="override",
+                    join="exact",
+                )
 
-        if len(period_datasets) == 1:
-            combined_periods = period_datasets[0]
+                for dim in ("latitude", "longitude"):
+                    if dim in combined_regions.coords:
+                        _, unique_indices = np.unique(
+                            combined_regions[dim].values,
+                            return_index=True,
+                        )
+
+                        if len(unique_indices) != combined_regions.sizes[dim]:
+                            combined_regions = combined_regions.isel(
+                                {
+                                    dim: np.sort(unique_indices),
+                                }
+                            )
+
+            init_period_datasets.append(combined_regions)
+
+        if len(init_period_datasets) == 1:
+            combined_periods = init_period_datasets[0]
         else:
             combined_periods = xr.concat(
-                period_datasets,
+                init_period_datasets,
                 dim="time",
                 coords="minimal",
                 compat="override",
@@ -1050,15 +1124,19 @@ def _combine_predictions(
             combined_periods = combined_periods.sortby("time")
 
             time_values = combined_periods["time"].values
+
             if np.unique(time_values).size != time_values.size:
                 _, duplicate_counts = np.unique(
                     time_values,
                     return_counts=True,
                 )
+
                 raise ValueError(
-                    f"Duplicate initialization times found while combining "
-                    f"{data_type} predictions for leadtime={leadtime}. "
-                    f"Maximum duplicate count={duplicate_counts.max()}"
+                    f"Duplicate initialization times while combining "
+                    f"{data_type} predictions for "
+                    f"leadtime={leadtime}. "
+                    f"Maximum duplicate count="
+                    f"{duplicate_counts.max()}"
                 )
 
         combined_periods = add_or_set_leadtime(
@@ -1077,21 +1155,28 @@ def _combine_predictions(
     )
 
     combined_preds = combined_preds.sortby("leadtime")
+
     combined_preds = combined_preds.chunk(
         safe_chunk_spec(combined_preds)
     )
 
-    combined_preds["leadtime"].attrs.update({
-        "long_name": "forecast lead time",
-        "units": s.leadtime_unit.value,
-    })
+    combined_preds["leadtime"].attrs.update(
+        {
+            "long_name": "forecast lead time",
+            "units": s.leadtime_unit.value,
+        }
+    )
 
-    combined_preds["time"].attrs.update({
-        "long_name": "forecast initialization time",
-        "standard_name": "forecast_reference_time",
-    })
+    combined_preds["time"].attrs.update(
+        {
+            "long_name": "forecast initialization time",
+            "standard_name": "forecast_reference_time",
+        }
+    )
 
-    output_store = s.output_dir / f"{data_type}_corrected.zarr"
+    output_store = (
+        s.output_dir / f"{data_type}_corrected.zarr"
+    )
 
     save_zarr(
         combined_preds,
@@ -1109,9 +1194,6 @@ def _combine_predictions(
             ds.close()
         except Exception:
             pass
-
-    for period_datasets_for_lt in paths_by_leadtime.values():
-        del period_datasets_for_lt
 
     del leadtime_datasets, combined_preds
     gc.collect()
@@ -1301,28 +1383,32 @@ def _test(
             float(target_month.std()),
         )
 
+        valid_month = mask_month.bool()
+        valid_count_map_month = valid_month.sum(dim=(0, 1))
+
         model_mse_map = (
             error_month.square()
-            .masked_fill(~valid, 0.0)
+            .masked_fill(~valid_month, 0.0)
             .sum(dim=(0, 1))
-            / valid_count_map.clamp_min(1)
+            / valid_count_map_month.clamp_min(1)
         )
 
         zero_mse_map = (
             target_month.square()
-            .masked_fill(~valid, 0.0)
+            .masked_fill(~valid_month, 0.0)
             .sum(dim=(0, 1))
-            / valid_count_map.clamp_min(1)
+            / valid_count_map_month.clamp_min(1)
         )
 
-        valid_grid_cells = valid_count_map > 0
+        valid_grid_cells_month = valid_count_map_month > 0
+
         improved_grid_cells = (
             model_mse_map < zero_mse_map
-        ) & valid_grid_cells
+        ) & valid_grid_cells_month
 
         improved_grid_fraction = (
             improved_grid_cells.sum()
-            / valid_grid_cells.sum().clamp_min(1)
+            / valid_grid_cells_month.sum().clamp_min(1)
         )
 
         print(
@@ -1859,6 +1945,62 @@ def _core_train(
     return train_store, val_store, test_store
 
 
+def make_regional_boxes(
+    full_region: dict[str, tuple[float, float]] | None,
+    lat_size: float = 30.0,
+    lon_size: float = 30.0,
+) -> list[dict[str, dict[str, tuple[float, float]]]]:
+    if full_region is None:
+        lat_min, lat_max = -90.0, 90.0
+        lon_min, lon_max = -180.0, 180.0
+    else:
+        lat_min, lat_max = sorted(map(float, full_region["lat"]))
+        lon_min, lon_max = sorted(map(float, full_region["lon"]))
+
+    lat_edges = np.append(
+        np.arange(lat_min, lat_max, lat_size),
+        lat_max,
+    )
+    lon_edges = np.append(
+        np.arange(lon_min, lon_max, lon_size),
+        lon_max,
+    )
+
+    regions = []
+
+    for lat0, lat1 in zip(
+        lat_edges[:-1],
+        lat_edges[1:],
+        strict=True,
+    ):
+        for lon0, lon1 in zip(
+            lon_edges[:-1],
+            lon_edges[1:],
+            strict=True,
+        ):
+            lat0 = float(lat0)
+            lat1 = float(lat1)
+            lon0 = float(lon0)
+            lon1 = float(lon1)
+
+            name = (
+                f"lat_{lat0:+04.0f}_{lat1:+04.0f}_"
+                f"lon_{lon0:+04.0f}_{lon1:+04.0f}"
+            )
+
+            regions.append(
+                {
+                    name: {
+                        # Descending latitude.
+                        "lat": (lat1, lat0),
+                        "lon": (lon0, lon1),
+                    }
+                }
+            )
+
+    return regions
+
+
 def train(
     var: str,
     region_name: str,
@@ -1898,6 +2040,9 @@ def train(
         # leadtimes=[3, 4, 5],
         leadtimes=[1, 2, 3, 4, 5, 6],
         separate_training_by_init_period=None,
+        regional_training=False,
+        regional_training_lat_size=30.0,
+        regional_training_lon_size=30.0,
         region_name=region_name,
         region=region_location,
         train_start="1993-01-01",
@@ -1946,118 +2091,89 @@ def train(
 
     L.seed_everything(s.seed)
 
-    train_pred_paths: list[tuple[int, str | None, Path]] = []
-    val_pred_paths: list[tuple[int, str | None, Path]] = []
-    test_pred_paths: list[tuple[int, str | None, Path]] = []
+    train_pred_paths: list[PredictionRecord] = []
+    val_pred_paths: list[PredictionRecord] = []
+    test_pred_paths: list[PredictionRecord] = []
 
-    for lt in s.leadtimes:
-        explicit_split = s.split_strategy == "explicit"
-
-        # Explicit:
-        #   train dataset = training period only
-        # Percentage:
-        #   source dataset = full pre-test period, later split by the data module
-        train_end = s.train_end if explicit_split else s.val_end
-
-        dataset_d = make_train_test_datasets_for_leadtime(
-            forecast_ds_path=(
-                s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
-            ),
-            analysis_ds_path=(
-                s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
-            ),
-            leadtime=lt,
-            leadtime_unit=LeadtimeUnit(s.leadtime_unit),
-            train_start=s.train_start,
-            train_end=train_end,
-            val_start=s.val_start if explicit_split else None,
-            val_end=s.val_end if explicit_split else None,
-            test_start=s.test_start,
-            test_end=s.test_end,
-            target_mode=s.target_mode,
-            clim_period=s.clim_period,
-            forecast_vars=[s.var_fc],
-            analysis_vars=[s.var_an],
-            region=s.region,
-            dataset_kwargs={
-                "target_realization_avg": s.target_realization_avg,
-                "channel_representation": s.channel_representation,
-                "init_period_dim": s.init_period_dim,
-                "output_realizations": s.output_realizations,
-                "torch_mask": s.torch_mask,
-                "fill_nan_value": s.fill_nan_value,
-            },
-            seasonal_encoding=s.seasonal_encoding and s.channel_representation!="init_period",
-            ensemble_encoding=s.ensemble_encoding,
-            interpolate_analysis=interpolate_analysis,
-            materialize=False,
-            separate_training_by_init_period=s.separate_training_by_init_period,
+    if s.regional_training:
+        region_boxes = make_regional_boxes(
+            full_region=s.region,
+            lat_size=s.regional_training_lat_size,
+            lon_size=s.regional_training_lon_size,
         )
+    else:
+        region_boxes = [
+            {
+                s.region_name: s.region,
+            }
+        ]
 
-        # Training
-        if s.separate_training_by_init_period is None:
-            train_store, val_store, test_store = _core_train(
-                s=s,
-                exp_name=f"exp_{lt}_{s.leadtime_unit.value}",
-                train_dataset=dataset_d["train"],
-                val_dataset=dataset_d["val"],
-                test_dataset=dataset_d["test"],
-                x_clim=dataset_d["x_clim"],
-                y_clim=dataset_d["y_clim"],
-                explicit_split=explicit_split,
-                force_retrain=force_retrain,
-                force_test=force_test,
-                dry_run=dry_run,
-                interpolate_analysis=interpolate_analysis,
-                device=device,
-                accelerator=accelerator,
-                leadtime=lt,
+    for regional_entry in region_boxes:
+        if len(regional_entry) != 1:
+            raise ValueError(
+                "Each regional entry must contain exactly one region"
             )
 
-            train_pred_paths.append((int(lt), None, train_store))
-            if dataset_d["val"] is not None:
-                val_pred_paths.append((int(lt), None, val_store))
-            test_pred_paths.append((int(lt), None, test_store))
+        regional_name, regional_location = next(
+            iter(regional_entry.items())
+        )
 
-        else:
-            train_by_period = dataset_d["train"]
-            val_by_period = dataset_d["val"]
-            test_by_period = dataset_d["test"]
+        for lt in s.leadtimes:
+            explicit_split = s.split_strategy == "explicit"
+            train_end = s.train_end if explicit_split else s.val_end
 
-            if not isinstance(train_by_period, dict):
-                raise TypeError("Expected train datasets divided by initialization period")
+            dataset_d = make_train_test_datasets_for_leadtime(
+                forecast_ds_path=(
+                    s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
+                ),
+                analysis_ds_path=(
+                    s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
+                ),
+                leadtime=lt,
+                leadtime_unit=LeadtimeUnit(s.leadtime_unit),
+                train_start=s.train_start,
+                train_end=train_end,
+                val_start=s.val_start if explicit_split else None,
+                val_end=s.val_end if explicit_split else None,
+                test_start=s.test_start,
+                test_end=s.test_end,
+                target_mode=s.target_mode,
+                clim_period=s.clim_period,
+                forecast_vars=[s.var_fc],
+                analysis_vars=[s.var_an],
+                region=regional_location,
+                dataset_kwargs={
+                    "target_realization_avg": s.target_realization_avg,
+                    "channel_representation": s.channel_representation,
+                    "init_period_dim": s.init_period_dim,
+                    "output_realizations": s.output_realizations,
+                    "torch_mask": s.torch_mask,
+                    "fill_nan_value": s.fill_nan_value,
+                },
+                seasonal_encoding=(
+                    s.seasonal_encoding
+                    and s.channel_representation != "init_period"
+                ),
+                ensemble_encoding=s.ensemble_encoding,
+                interpolate_analysis=interpolate_analysis,
+                materialize=False,
+                separate_training_by_init_period=(
+                    s.separate_training_by_init_period
+                ),
+            )
 
-            if not isinstance(test_by_period, dict):
-                raise TypeError("Expected test datasets divided by initialization period")
-
-            if val_by_period is not None and not isinstance(val_by_period, dict):
-                raise TypeError("Expected validation datasets divided by initialization period")
-
-            for init_period, train_dataset in train_by_period.items():
-                if init_period not in test_by_period:
-                    raise ValueError(
-                        f"Initialization period {init_period!r} exists in training "
-                        "but not in test data"
-                    )
-
-                val_dataset = None
-                if val_by_period is not None:
-                    if init_period not in val_by_period:
-                        raise ValueError(
-                            f"Initialization period {init_period!r} exists in training "
-                            "but not in validation data"
-                        )
-                    val_dataset = val_by_period[init_period]
+            # Training
+            if s.separate_training_by_init_period is None:
+                exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
+                if s.regional_training:
+                    exp_name += f"_{regional_name}"
 
                 train_store, val_store, test_store = _core_train(
                     s=s,
-                    exp_name=(
-                        f"exp_{lt}_{s.leadtime_unit.value}_"
-                        f"{s.separate_training_by_init_period.value}_{init_period}"
-                    ),
-                    train_dataset=train_dataset,
-                    val_dataset=val_dataset,
-                    test_dataset=test_by_period[init_period],
+                    exp_name=exp_name,
+                    train_dataset=dataset_d["train"],
+                    val_dataset=dataset_d["val"],
+                    test_dataset=dataset_d["test"],
                     x_clim=dataset_d["x_clim"],
                     y_clim=dataset_d["y_clim"],
                     explicit_split=explicit_split,
@@ -2070,24 +2186,111 @@ def train(
                     leadtime=lt,
                 )
 
-                train_pred_paths.append((int(lt), init_period, train_store))
-                if val_dataset is not None:
-                    val_pred_paths.append((int(lt), init_period, val_store))
-                test_pred_paths.append((int(lt), init_period, test_store))
+                train_pred_paths.append(
+                    (int(lt), None, regional_name, train_store)
+                )
+                if dataset_d["val"] is not None:
+                    val_pred_paths.append(
+                        (int(lt), None, regional_name, val_store)
+                    )
+                test_pred_paths.append(
+                    (int(lt), None, regional_name, test_store)
+                )
 
-        # Clean-up after all leadtimes
-        for clim_ds in (
-            dataset_d["x_clim"],
-            dataset_d["y_clim"],
-        ):
-            if clim_ds is not None:
-                try:
-                    clim_ds.close()
-                except Exception:
-                    pass
-        del dataset_d
+            else:
+                train_by_period = dataset_d["train"]
+                val_by_period = dataset_d["val"]
+                test_by_period = dataset_d["test"]
 
-    # Combine leadtimes and init periods if necessary
+                if not isinstance(train_by_period, dict):
+                    raise TypeError("Expected train datasets divided by initialization period")
+
+                if not isinstance(test_by_period, dict):
+                    raise TypeError("Expected test datasets divided by initialization period")
+
+                if val_by_period is not None and not isinstance(val_by_period, dict):
+                    raise TypeError("Expected validation datasets divided by initialization period")
+
+                for init_period, train_dataset in train_by_period.items():
+                    if init_period not in test_by_period:
+                        raise ValueError(
+                            f"Initialization period {init_period!r} exists in training "
+                            "but not in test data"
+                        )
+
+                    val_dataset = None
+                    if val_by_period is not None:
+                        if init_period not in val_by_period:
+                            raise ValueError(
+                                f"Initialization period {init_period!r} exists in training "
+                                "but not in validation data"
+                            )
+                        val_dataset = val_by_period[init_period]
+
+                    exp_name = (
+                        f"exp_{lt}_{s.leadtime_unit.value}_"
+                        f"{s.separate_training_by_init_period.value}_{init_period}"
+                    )
+                    if s.regional_training:
+                        exp_name += f"_{regional_name}"
+
+                    train_store, val_store, test_store = _core_train(
+                        s=s,
+                        exp_name=exp_name,
+                        train_dataset=train_dataset,
+                        val_dataset=val_dataset,
+                        test_dataset=test_by_period[init_period],
+                        x_clim=dataset_d["x_clim"],
+                        y_clim=dataset_d["y_clim"],
+                        explicit_split=explicit_split,
+                        force_retrain=force_retrain,
+                        force_test=force_test,
+                        dry_run=dry_run,
+                        interpolate_analysis=interpolate_analysis,
+                        device=device,
+                        accelerator=accelerator,
+                        leadtime=lt,
+                    )
+
+                    train_pred_paths.append(
+                        (
+                            int(lt),
+                            init_period,
+                            regional_name,
+                            train_store,
+                        )
+                    )
+                    if val_dataset is not None:
+                        val_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                val_store,
+                            )
+                        )
+                    test_pred_paths.append(
+                        (
+                            int(lt),
+                            init_period,
+                            regional_name,
+                            test_store,
+                        )
+                    )
+
+            # Clean-up after all leadtimes
+            for clim_ds in (
+                dataset_d["x_clim"],
+                dataset_d["y_clim"],
+            ):
+                if clim_ds is not None:
+                    try:
+                        clim_ds.close()
+                    except Exception:
+                        pass
+            del dataset_d
+
+    # Combine leadtimes (always), regions and init periods if necessary
     _combine_predictions(
         s=s,
         data_type="train",
@@ -2107,6 +2310,7 @@ def train(
         pred_records=test_pred_paths,
     )
 
+
 def main():
     regions = {
         # "ConUS": {
@@ -2122,8 +2326,8 @@ def main():
         #     "lat": (30, -30),
         # },
         "World": None,
-
     }
+
     for region_name, region_location in regions.items():
         for var in [
             # Atmo
