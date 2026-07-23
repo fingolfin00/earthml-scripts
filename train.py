@@ -918,12 +918,15 @@ def convert_to_xarray(
 def print_training_recap(
     *,
     settings: Settings,
+    exp_ratio: tuple[int, int],
+    region_name: str,
     accelerator: str,
     device: torch.device,
     leadtime: int | float | str,
     normalization_name: str,
     n_channels: int,
     n_classes: int,
+    longitude_padding: str,
     dry_run: bool,
     force_retrain: bool,
     force_test: bool,
@@ -943,6 +946,7 @@ def print_training_recap(
     s = settings
 
     flat_recap = {
+        "experiment.number": f"{exp_ratio[0]} / {exp_ratio[1]}",
         "experiment.name": exp_name or s.output_name,
         "experiment.leadtime": f"{leadtime} {s.leadtime_unit.value}",
         "experiment.dry_run": dry_run,
@@ -951,10 +955,11 @@ def print_training_recap(
         "experiment.interpolate_analysis": interpolate_analysis,
         "experiment.torch_workers": s.torch_workers,
         "experiment.separate_training_by_init_period": s.separate_training_by_init_period,
+        "experiment.regional_training": f"{s.regional_training}, {region_name} [lat={s.regional_training_lat_size} x lon={s.regional_training_lon_size}]",
 
         "data.forecast": f"{s.model_fc}/{s.var_fc}",
         "data.analysis": f"{s.model_an}/{s.var_an}",
-        "data.region": f"{s.region_name} {s.region}",
+        "data.full_region": f"{s.region_name} {s.region}",
         "data.train_period": f"{s.train_start} → {s.train_end}",
         "data.val_period": f"{s.val_start} → {s.val_end}",
         "data.test_period": f"{s.test_start} → {s.test_end}",
@@ -974,18 +979,16 @@ def print_training_recap(
         "split.val_idx": f"{val_idx[0]} → {val_idx[-1]}" if val_idx is not None and len(val_idx) else None,
 
         "model.network": s.net_name,
+        "model.extra_net_kwargs": s.extra_net_kwargs,
         "model.loss": s.loss_name,
         "model.target_scale_degrees": s.target_scale_degrees if s.loss_name=="GeoMaskedMSELowFreqLoss" else None,
         "model.n_channels": n_channels,
         "model.n_classes": n_classes,
+        "model.longitude_padding": longitude_padding,
         "model.channel_representation": s.channel_representation,
         "model.init_period_dim": s.init_period_dim if s.channel_representation=="init_period" else None,
         "model.output_realizations": s.output_realizations,
         "model.norm_layer": s.training_norm,
-        "model.depth": s.depth,
-        "model.base_channels": s.base_channels,
-        "model.kernels_per_layer": s.kernels_per_layer,
-        "model.reduction_ratio": s.reduction_ratio,
 
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
         "training.normalization_mode": s.normalization_mode,
@@ -1003,7 +1006,7 @@ def print_training_recap(
         "paths.checkpoints_dir": checkpoints_dir,
     }
 
-    console.print(Table(flat_recap, title="Training recap").table)
+    console.print(Table(flat_recap, title="Training recap", twocols=True).table)
 
 
 def _combine_predictions(
@@ -1492,12 +1495,13 @@ def _test(
 def _core_train(
     s: Settings,
     exp_name: str,
+    region_name: str,
+    exp_ratio: tuple[int, int],
     train_dataset: XarrayDataset,
     val_dataset: XarrayDataset | None,
     test_dataset: XarrayDataset,
     x_clim: xr.Dataset | None,
     y_clim: xr.Dataset | None,
-    explicit_split: bool,
     force_retrain: bool,
     force_test: bool,
     dry_run: bool,
@@ -1519,19 +1523,23 @@ def _core_train(
     weights_file = weights_dir / "weights.ckpt"
     last_checkpoint = checkpoints_dir / "last.ckpt"
 
-    train_store = exp_dir / "train_preds.zarr"
-    val_store = exp_dir / "val_preds.zarr"
-    test_store = exp_dir / "test_preds.zarr"
-
-    training_complete = weights_file.exists()
-    testing_complete = (
-        train_store.exists()
-        and test_store.exists()
-        and (not explicit_split or val_store.exists())
+    train_store, val_store, test_store = experiment_stores(
+        s,
+        exp_name,
     )
 
-    should_train = force_retrain or not training_complete
-    should_test = force_retrain or force_test or not testing_complete
+    should_train = force_retrain or not weights_file.exists()
+
+    should_test = (
+        force_retrain
+        or force_test
+        or not train_store.exists()
+        or not test_store.exists()
+        or (
+            val_dataset is not None
+            and not val_store.exists()
+        )
+    )
 
     if force_retrain:
         print(f"[yellow]Force retrain enabled for leadtime {leadtime}.[/yellow]")
@@ -1664,26 +1672,29 @@ def _core_train(
     n_classes = train_dataset.y.shape[1] # TODO not sure this works if realization_as_channel is True
 
     # Initialize model args
-    net_kwargs = dict(
-        learning_rate=s.init_learning_rate,
-        weight_decay=s.weight_decay,
-        loss=s.loss_name,
-        loss_params=base_loss_params,
-        norm=s.training_norm,
-        supervised=True,
-        n_channels=n_channels,
-        n_classes=n_classes,
-        depth=s.depth,
-        reduction_ratio=s.reduction_ratio,
-        kernels_per_layer=s.kernels_per_layer,
-        base_channels=s.base_channels,
-        zero_init_output=True if s.target_mode in (
+    longitude_padding = "circular" if region_name=="World" else "replicate"
+    common_net_kwargs = {
+        "learning_rate": s.init_learning_rate,
+        "weight_decay": s.weight_decay,
+        "loss": s.loss_name,
+        "loss_params": base_loss_params,
+        "norm": s.training_norm,
+        "supervised": True,
+        "n_channels": n_channels,
+        "n_classes": n_classes,
+        "longitude_padding": longitude_padding,
+        "zero_init_output": True if s.target_mode in (
             "residual",
             "residual_realization",
             "anomaly_residual",
             "anomaly_residual_realization",
         ) else False,
-    )
+    }
+
+    net_kwargs = {
+        **common_net_kwargs,
+        **s.extra_net_kwargs,
+    }
 
     # Init model
     model = build_net(
@@ -1752,12 +1763,15 @@ def _core_train(
 
     print_training_recap(
         settings=s,
+        exp_ratio=exp_ratio,
+        region_name=region_name,
         accelerator=accelerator,
         device=device,
         leadtime=leadtime,
         normalization_name=type(normalize_input).__name__,
         n_channels=n_channels,
         n_classes=n_classes,
+        longitude_padding=longitude_padding,
         dry_run=dry_run,
         force_retrain=force_retrain,
         force_test=force_test,
@@ -1795,8 +1809,6 @@ def _core_train(
             "effective_batch_size": (
                 s.batch_size * s.accumulate_grad_batches
             ),
-            "depth": s.depth,
-            "base_channels": s.base_channels,
             "normalization": s.normalization,
             "normalization_mode": s.normalization_mode,
             "seasonal_encoding": s.seasonal_encoding,
@@ -2007,6 +2019,44 @@ def make_regional_boxes(
     return regions
 
 
+def experiment_stores(
+    s: Settings,
+    exp_name: str,
+) -> tuple[Path, Path, Path]:
+    exp_dir = s.exp_dir / exp_name
+
+    return (
+        exp_dir / "train_preds.zarr",
+        exp_dir / "val_preds.zarr",
+        exp_dir / "test_preds.zarr",
+    )
+
+def experiment_is_complete(
+    s: Settings,
+    exp_name: str,
+    *,
+    explicit_split: bool,
+) -> bool:
+    exp_dir = s.exp_dir / exp_name
+    weights_file = exp_dir / "weights" / "weights.ckpt"
+
+    train_store, val_store, test_store = experiment_stores(
+        s,
+        exp_name,
+    )
+
+    predictions_complete = (
+        train_store.exists()
+        and test_store.exists()
+        and (
+            not explicit_split
+            or val_store.exists()
+        )
+    )
+
+    return weights_file.exists() and predictions_complete
+
+
 def train(
     var: str,
     region_name: str,
@@ -2048,7 +2098,7 @@ def train(
         leadtimes=[1, 2, 3, 4, 5, 6],
         separate_training_by_init_period=None,
         regional_training=False,
-        regional_training_lat_size=30.0,
+        regional_training_lat_size=60.0,
         regional_training_lon_size=30.0,
         region_name=region_name,
         region=region_location,
@@ -2058,7 +2108,7 @@ def train(
         val_end="2020-12-01",
         test_start="2021-01-01",
         test_end="2022-12-01",
-        target_mode="anomaly_residual_realization",
+        target_mode="analysis",
         clim_period=ClimPeriod.MONTH,
         seed=42,
         channel_representation="variable",
@@ -2079,11 +2129,19 @@ def train(
         target_realization_avg=False,
         fill_nan_value=0.0,
         torch_mask="target",
-        training_norm="BatchNorm2d",
-        reduction_ratio=8,
-        depth=3,
-        kernels_per_layer=1,
-        base_channels=16,
+        training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
+        smaatunet_kwargs=dict(
+            reduction_ratio=8,
+            depth=3,
+            kernels_per_layer=1,
+            base_channels=16,
+        ),
+        convnext_kwargs=dict(
+            depths=(2, 2, 4, 2),
+            dims=(32, 64, 128, 256),
+            drop_path_rate=0.05,
+            layer_scale_init_value=1e-6,
+        ),
         train_fraction=0.85,
         accumulate_grad_batches=1,
         early_stopping_patience=20,
@@ -2115,6 +2173,18 @@ def train(
             }
         ]
 
+    if s.separate_training_by_init_period is None:
+        total_exps = len(region_boxes) * len(s.leadtimes)
+    else:
+        num_periods = 12 if s.separate_training_by_init_period==ClimPeriod.MONTH else 1
+        total_exps = (
+            len(region_boxes)
+            * len(s.leadtimes)
+            * num_periods
+        )
+
+    current_exp = 0
+
     for regional_entry in region_boxes:
         if len(regional_entry) != 1:
             raise ValueError(
@@ -2129,61 +2199,100 @@ def train(
             explicit_split = s.split_strategy == "explicit"
             train_end = s.train_end if explicit_split else s.val_end
 
-            dataset_d = make_train_test_datasets_for_leadtime(
-                forecast_ds_path=(
-                    s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
-                ),
-                analysis_ds_path=(
-                    s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
-                ),
-                leadtime=lt,
-                leadtime_unit=LeadtimeUnit(s.leadtime_unit),
-                train_start=s.train_start,
-                train_end=train_end,
-                val_start=s.val_start if explicit_split else None,
-                val_end=s.val_end if explicit_split else None,
-                test_start=s.test_start,
-                test_end=s.test_end,
-                target_mode=s.target_mode,
-                clim_period=s.clim_period,
-                forecast_vars=[s.var_fc],
-                analysis_vars=[s.var_an],
-                region=regional_location,
-                dataset_kwargs={
-                    "target_realization_avg": s.target_realization_avg,
-                    "channel_representation": s.channel_representation,
-                    "init_period_dim": s.init_period_dim,
-                    "output_realizations": s.output_realizations,
-                    "torch_mask": s.torch_mask,
-                    "fill_nan_value": s.fill_nan_value,
-                },
-                seasonal_encoding=(
-                    s.seasonal_encoding
-                    and s.channel_representation != "init_period"
-                ),
-                ensemble_encoding=s.ensemble_encoding,
-                interpolate_analysis=interpolate_analysis,
-                materialize=False,
-                separate_training_by_init_period=(
-                    s.separate_training_by_init_period
-                ),
-            )
+            def _make_datasets() -> LeadtimeDatasets:
+                return make_train_test_datasets_for_leadtime(
+                    forecast_ds_path=(
+                        s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
+                    ),
+                    analysis_ds_path=(
+                        s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
+                    ),
+                    leadtime=lt,
+                    leadtime_unit=LeadtimeUnit(s.leadtime_unit),
+                    train_start=s.train_start,
+                    train_end=train_end,
+                    val_start=s.val_start if explicit_split else None,
+                    val_end=s.val_end if explicit_split else None,
+                    test_start=s.test_start,
+                    test_end=s.test_end,
+                    target_mode=s.target_mode,
+                    clim_period=s.clim_period,
+                    forecast_vars=[s.var_fc],
+                    analysis_vars=[s.var_an],
+                    region=regional_location,
+                    dataset_kwargs={
+                        "target_realization_avg": s.target_realization_avg,
+                        "channel_representation": s.channel_representation,
+                        "init_period_dim": s.init_period_dim,
+                        "output_realizations": s.output_realizations,
+                        "torch_mask": s.torch_mask,
+                        "fill_nan_value": s.fill_nan_value,
+                    },
+                    seasonal_encoding=(
+                        s.seasonal_encoding
+                        and s.channel_representation != "init_period"
+                    ),
+                    ensemble_encoding=s.ensemble_encoding,
+                    interpolate_analysis=interpolate_analysis,
+                    materialize=False,
+                    separate_training_by_init_period=s.separate_training_by_init_period,
+                )
 
-            # Training
             if s.separate_training_by_init_period is None:
                 exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
+
                 if s.regional_training:
                     exp_name += f"_{regional_name}"
+
+                current_exp += 1
+
+                if (
+                    not force_retrain
+                    and not force_test
+                    and experiment_is_complete(
+                        s,
+                        exp_name,
+                        explicit_split=explicit_split,
+                    )
+                ):
+                    train_store, val_store, test_store = experiment_stores(
+                        s,
+                        exp_name,
+                    )
+
+                    print(
+                        f"[green]Skipping experiment "
+                        f"{current_exp}/{total_exps}: {exp_name} "
+                        f"is already complete.[/green]"
+                    )
+
+                    train_pred_paths.append(
+                        (int(lt), None, regional_name, train_store)
+                    )
+
+                    if explicit_split:
+                        val_pred_paths.append(
+                            (int(lt), None, regional_name, val_store)
+                        )
+
+                    test_pred_paths.append(
+                        (int(lt), None, regional_name, test_store)
+                    )
+
+                    continue
+
+                dataset_d = _make_datasets()
 
                 train_store, val_store, test_store = _core_train(
                     s=s,
                     exp_name=exp_name,
+                    region_name=regional_name,
+                    exp_ratio=(current_exp, total_exps),
                     train_dataset=dataset_d["train"],
                     val_dataset=dataset_d["val"],
                     test_dataset=dataset_d["test"],
                     x_clim=dataset_d["x_clim"],
                     y_clim=dataset_d["y_clim"],
-                    explicit_split=explicit_split,
                     force_retrain=force_retrain,
                     force_test=force_test,
                     dry_run=dry_run,
@@ -2197,60 +2306,173 @@ def train(
                 train_pred_paths.append(
                     (int(lt), None, regional_name, train_store)
                 )
+
                 if dataset_d["val"] is not None:
                     val_pred_paths.append(
                         (int(lt), None, regional_name, val_store)
                     )
+
                 test_pred_paths.append(
                     (int(lt), None, regional_name, test_store)
                 )
 
             else:
+                if s.separate_training_by_init_period != ClimPeriod.MONTH:
+                    raise NotImplementedError(
+                        "Currently only monthly separate training is supported."
+                    )
+
+                init_periods = [str(month) for month in range(1, 13)]
+                pending_periods: set[str] = set()
+
+                # First check every experiment without generating datasets.
+                for init_period in init_periods:
+                    exp_name = (
+                        f"exp_{lt}_{s.leadtime_unit.value}_"
+                        f"{s.separate_training_by_init_period.value}_"
+                        f"{init_period}"
+                    )
+
+                    if s.regional_training:
+                        exp_name += f"_{regional_name}"
+
+                    current_exp += 1
+
+                    complete = (
+                        not force_retrain
+                        and not force_test
+                        and experiment_is_complete(
+                            s,
+                            exp_name,
+                            explicit_split=explicit_split,
+                        )
+                    )
+
+                    if complete:
+                        train_store, val_store, test_store = experiment_stores(
+                            s,
+                            exp_name,
+                        )
+
+                        print(
+                            f"[green]Skipping experiment "
+                            f"{current_exp}/{total_exps}: {exp_name} "
+                            f"is already complete.[/green]"
+                        )
+
+                        train_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                train_store,
+                            )
+                        )
+
+                        if explicit_split:
+                            val_pred_paths.append(
+                                (
+                                    int(lt),
+                                    init_period,
+                                    regional_name,
+                                    val_store,
+                                )
+                            )
+
+                        test_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                test_store,
+                            )
+                        )
+                    else:
+                        pending_periods.add(init_period)
+
+                # Every month already exists: avoid all dataset work.
+                if not pending_periods:
+                    continue
+
+                dataset_d = _make_datasets()
+
                 train_by_period = dataset_d["train"]
                 val_by_period = dataset_d["val"]
                 test_by_period = dataset_d["test"]
 
                 if not isinstance(train_by_period, dict):
-                    raise TypeError("Expected train datasets divided by initialization period")
+                    raise TypeError(
+                        "Expected train datasets divided by initialization period"
+                    )
 
                 if not isinstance(test_by_period, dict):
-                    raise TypeError("Expected test datasets divided by initialization period")
+                    raise TypeError(
+                        "Expected test datasets divided by initialization period"
+                    )
 
-                if val_by_period is not None and not isinstance(val_by_period, dict):
-                    raise TypeError("Expected validation datasets divided by initialization period")
+                if (
+                    val_by_period is not None
+                    and not isinstance(val_by_period, dict)
+                ):
+                    raise TypeError(
+                        "Expected validation datasets divided by "
+                        "initialization period"
+                    )
 
-                for init_period, train_dataset in train_by_period.items():
+                available_periods = set(train_by_period)
+                missing_periods = pending_periods - available_periods
+
+                if missing_periods:
+                    raise ValueError(
+                        "Pending initialization periods are absent from the "
+                        f"training data: {sorted(missing_periods, key=int)}"
+                    )
+
+                # current_exp has already advanced during the pre-check. Recover
+                # each period's stable position in the global experiment sequence.
+                first_period_exp = current_exp - len(init_periods) + 1
+
+                for init_period in sorted(pending_periods, key=int):
                     if init_period not in test_by_period:
                         raise ValueError(
-                            f"Initialization period {init_period!r} exists in training "
-                            "but not in test data"
+                            f"Initialization period {init_period!r} exists in "
+                            "training but not in test data"
                         )
 
                     val_dataset = None
+
                     if val_by_period is not None:
                         if init_period not in val_by_period:
                             raise ValueError(
-                                f"Initialization period {init_period!r} exists in training "
-                                "but not in validation data"
+                                f"Initialization period {init_period!r} exists in "
+                                "training but not in validation data"
                             )
+
                         val_dataset = val_by_period[init_period]
 
                     exp_name = (
                         f"exp_{lt}_{s.leadtime_unit.value}_"
-                        f"{s.separate_training_by_init_period.value}_{init_period}"
+                        f"{s.separate_training_by_init_period.value}_"
+                        f"{init_period}"
                     )
+
                     if s.regional_training:
                         exp_name += f"_{regional_name}"
+
+                    period_exp_number = (
+                        first_period_exp + int(init_period) - 1
+                    )
 
                     train_store, val_store, test_store = _core_train(
                         s=s,
                         exp_name=exp_name,
-                        train_dataset=train_dataset,
+                        region_name=regional_name,
+                        exp_ratio=(period_exp_number, total_exps),
+                        train_dataset=train_by_period[init_period],
                         val_dataset=val_dataset,
                         test_dataset=test_by_period[init_period],
                         x_clim=dataset_d["x_clim"],
                         y_clim=dataset_d["y_clim"],
-                        explicit_split=explicit_split,
                         force_retrain=force_retrain,
                         force_test=force_test,
                         dry_run=dry_run,
@@ -2258,6 +2480,7 @@ def train(
                         device=device,
                         accelerator=accelerator,
                         leadtime=lt,
+                        log_monthly=log_monthly,
                     )
 
                     train_pred_paths.append(
@@ -2268,6 +2491,7 @@ def train(
                             train_store,
                         )
                     )
+
                     if val_dataset is not None:
                         val_pred_paths.append(
                             (
@@ -2277,6 +2501,7 @@ def train(
                                 val_store,
                             )
                         )
+
                     test_pred_paths.append(
                         (
                             int(lt),
@@ -2296,6 +2521,7 @@ def train(
                         clim_ds.close()
                     except Exception:
                         pass
+
             del dataset_d
 
     # Combine leadtimes (always), regions and init periods if necessary
