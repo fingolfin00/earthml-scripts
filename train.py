@@ -467,6 +467,50 @@ def make_init_month_dataset(
     )
 
 
+def select_region(
+    ds: xr.Dataset,
+    region: dict[str, tuple[float, float]] | None,
+) -> xr.Dataset:
+    if region is None:
+        return ds
+
+    indexers = {}
+
+    lat = region.get("lat")
+    lon = region.get("lon")
+
+    if lat is not None:
+        indexers["latitude"] = slice(*lat)
+    if lon is not None:
+        indexers["longitude"] = slice(*lon)
+
+    return ds.sel(indexers) if indexers else ds
+
+
+def select_region_pair(
+    pair: XarrayPair,
+    region: dict[str, tuple[float, float]] | None,
+) -> XarrayPair:
+    return {
+        "x": select_region(pair["x"], region),
+        "y": select_region(pair["y"], region),
+    }
+
+
+def make_region_dataset(
+    x: xr.Dataset,
+    y: xr.Dataset,
+    region: dict[str, tuple[float, float]] | None,
+    *,
+    dataset_kwargs: dict,
+) -> XarrayDataset:
+    return XarrayDataset(
+        select_region(x, region),
+        select_region(y, region),
+        **dataset_kwargs,
+    )
+
+
 def make_train_test_datasets_for_leadtime(
     forecast_ds_path: str | Path,
     analysis_ds_path: str | Path,
@@ -489,6 +533,7 @@ def make_train_test_datasets_for_leadtime(
     interpolate_analysis: bool = True,
     materialize: bool = False,
     separate_training_by_init_period: ClimPeriod | None = None,
+    defer_dataset_creation: bool = False,
 ) -> LeadtimeDatasets:
     logger = get_logger()
 
@@ -583,17 +628,17 @@ def make_train_test_datasets_for_leadtime(
             label="validation",
         )
 
-        if separate_training_by_init_period is None:
+        if defer_dataset_creation or separate_training_by_init_period is not None:
+            val_ds = {
+                "x": x_val,
+                "y": y_val,
+            }
+        else:
             val_ds = XarrayDataset(
                 x_val,
                 y_val,
                 **dataset_kwargs,
             )
-        else:
-            val_ds = {
-                "x": x_val,
-                "y": y_val,
-            }
 
     x_test, y_test = make_leadtime_pair(
         fc_ds=fc_ds,
@@ -618,7 +663,17 @@ def make_train_test_datasets_for_leadtime(
         label="test",
     )
 
-    if separate_training_by_init_period is None:
+    if defer_dataset_creation or separate_training_by_init_period is not None:
+        train_ds = {
+            "x": x_train,
+            "y": y_train,
+        }
+
+        test_ds = {
+            "x": x_test,
+            "y": y_test,
+        }
+    else:
         train_ds = XarrayDataset(
             x_train,
             y_train,
@@ -630,16 +685,6 @@ def make_train_test_datasets_for_leadtime(
             y_test,
             **dataset_kwargs,
         )
-    else:
-        train_ds = {
-            "x": x_train,
-            "y": y_train,
-        }
-
-        test_ds = {
-            "x": x_test,
-            "y": y_test,
-        }
 
     return {
         "train": train_ds,
@@ -2533,100 +2578,313 @@ def train(
 
     current_exp = 0
 
-    for regional_entry in region_boxes:
-        if len(regional_entry) != 1:
-            raise ValueError(
-                "Each regional entry must contain exactly one region"
-            )
+    # Dataset preparation is expensive (Zarr opening, period/leadtime selection,
+    # interpolation, climatology and target construction). Build it once per
+    # leadtime for the full requested domain, then create cheap spatial/monthly
+    # xarray views for the individual experiments.
+    for lt in s.leadtimes:
+        explicit_split = s.split_strategy == "explicit"
+        train_end = s.train_end if explicit_split else s.val_end
 
-        regional_name, regional_location = next(
-            iter(regional_entry.items())
-        )
+        # First resolve completed experiments without touching the input data.
+        # Pending entries keep their experiment number so progress reporting is
+        # unchanged even when only part of a run needs to be resumed.
+        pending_experiments: list[
+            tuple[int, str, dict[str, tuple[float, float]] | None, str | None]
+        ] = []
 
-        for lt in s.leadtimes:
-            explicit_split = s.split_strategy == "explicit"
-            train_end = s.train_end if explicit_split else s.val_end
-            dataset_d: LeadtimeDatasets | None = None
-
-            def _make_datasets() -> LeadtimeDatasets:
-                return make_train_test_datasets_for_leadtime(
-                    forecast_ds_path=(
-                        s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
-                    ),
-                    analysis_ds_path=(
-                        s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
-                    ),
-                    leadtime=lt,
-                    leadtime_unit=LeadtimeUnit(s.leadtime_unit),
-                    train_start=s.train_start,
-                    train_end=train_end,
-                    val_start=s.val_start if explicit_split else None,
-                    val_end=s.val_end if explicit_split else None,
-                    test_start=s.test_start,
-                    test_end=s.test_end,
-                    target_mode=s.target_mode,
-                    clim_period=s.clim_period,
-                    forecast_vars=[s.var_fc],
-                    analysis_vars=[s.var_an],
-                    region=regional_location,
-                    dataset_kwargs=dataset_kwargs,
-                    seasonal_encoding=(
-                        s.seasonal_encoding
-                        and s.channel_representation != "init_period"
-                    ),
-                    ensemble_encoding=s.ensemble_encoding,
-                    interpolate_analysis=interpolate_analysis,
-                    materialize=False,
-                    separate_training_by_init_period=(
-                        s.separate_training_by_init_period
-                    ),
+        for regional_entry in region_boxes:
+            if len(regional_entry) != 1:
+                raise ValueError(
+                    "Each regional entry must contain exactly one region"
                 )
 
-            try:
-                if s.separate_training_by_init_period is None:
-                    exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
+            regional_name, regional_location = next(
+                iter(regional_entry.items())
+            )
 
-                    if s.regional_training:
-                        exp_name += f"_{regional_name}"
+            if s.separate_training_by_init_period is None:
+                init_periods: list[str | None] = [None]
+            else:
+                init_periods = [str(month) for month in range(1, 13)]
 
-                    current_exp += 1
+            for init_period in init_periods:
+                exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
 
+                if init_period is not None:
+                    exp_name += (
+                        f"_{s.separate_training_by_init_period.value}_"
+                        f"{init_period}"
+                    )
+
+                if s.regional_training:
+                    exp_name += f"_{regional_name}"
+
+                current_exp += 1
+                exp_number = current_exp
+
+                complete = (
+                    not force_retrain
+                    and not force_test
+                    and experiment_is_complete(
+                        s,
+                        exp_name,
+                        explicit_split=explicit_split,
+                    )
+                )
+
+                if not complete:
+                    pending_experiments.append(
+                        (
+                            exp_number,
+                            regional_name,
+                            regional_location,
+                            init_period,
+                        )
+                    )
+                    continue
+
+                train_store, val_store, test_store = experiment_stores(
+                    s,
+                    exp_name,
+                )
+
+                logger.print(
+                    f"[green]Skipping experiment "
+                    f"{exp_number}/{total_exps}: {exp_name} "
+                    f"is already complete.[/green]"
+                )
+
+                train_pred_paths.append(
+                    (int(lt), init_period, regional_name, train_store)
+                )
+
+                if explicit_split:
+                    val_pred_paths.append(
+                        (int(lt), init_period, regional_name, val_store)
+                    )
+
+                test_pred_paths.append(
+                    (int(lt), init_period, regional_name, test_store)
+                )
+
+        if not pending_experiments:
+            continue
+
+        # Regional training needs raw xarray pairs so every region can be a cheap
+        # spatial view of this common leadtime dataset. Per-period training needs
+        # the same for cheap monthly views.
+        defer_dataset_creation = (
+            s.regional_training
+            or s.separate_training_by_init_period is not None
+        )
+
+        dataset_d: LeadtimeDatasets | None = None
+        regional_views: dict[
+            str,
+            tuple[
+                XarrayPair,
+                XarrayPair | None,
+                XarrayPair,
+                xr.Dataset | None,
+                xr.Dataset | None,
+            ],
+        ] = {}
+
+        try:
+            dataset_d = make_train_test_datasets_for_leadtime(
+                forecast_ds_path=(
+                    s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
+                ),
+                analysis_ds_path=(
+                    s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
+                ),
+                leadtime=lt,
+                leadtime_unit=LeadtimeUnit(s.leadtime_unit),
+                train_start=s.train_start,
+                train_end=train_end,
+                val_start=s.val_start if explicit_split else None,
+                val_end=s.val_end if explicit_split else None,
+                test_start=s.test_start,
+                test_end=s.test_end,
+                target_mode=s.target_mode,
+                clim_period=s.clim_period,
+                forecast_vars=[s.var_fc],
+                analysis_vars=[s.var_an],
+                # Build once for the complete requested domain. Individual
+                # regional boxes are selected below as cheap xarray views.
+                region=s.region,
+                dataset_kwargs=dataset_kwargs,
+                seasonal_encoding=(
+                    s.seasonal_encoding
+                    and s.channel_representation != "init_period"
+                ),
+                ensemble_encoding=s.ensemble_encoding,
+                interpolate_analysis=interpolate_analysis,
+                materialize=False,
+                separate_training_by_init_period=(
+                    s.separate_training_by_init_period
+                ),
+                defer_dataset_creation=defer_dataset_creation,
+            )
+
+            for (
+                exp_number,
+                regional_name,
+                regional_location,
+                init_period,
+            ) in pending_experiments:
+                exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
+
+                if init_period is not None:
+                    exp_name += (
+                        f"_{s.separate_training_by_init_period.value}_"
+                        f"{init_period}"
+                    )
+
+                if s.regional_training:
+                    exp_name += f"_{regional_name}"
+
+                if defer_dataset_creation:
+                    train_pair = dataset_d["train"]
+                    val_pair = dataset_d["val"]
+                    test_pair = dataset_d["test"]
+
+                    if isinstance(train_pair, XarrayDataset):
+                        raise TypeError("Expected raw train xarray pair")
+                    if isinstance(test_pair, XarrayDataset):
+                        raise TypeError("Expected raw test xarray pair")
                     if (
-                        not force_retrain
-                        and not force_test
-                        and experiment_is_complete(
-                            s,
-                            exp_name,
-                            explicit_split=explicit_split,
-                        )
+                        val_pair is not None
+                        and isinstance(val_pair, XarrayDataset)
                     ):
-                        train_store, val_store, test_store = experiment_stores(
-                            s,
-                            exp_name,
+                        raise TypeError("Expected raw validation xarray pair")
+
+                    # Select/filter each region only once per leadtime. The
+                    # resulting datasets remain lazy views backed by the common
+                    # leadtime datasets. Region-specific valid-sample filtering
+                    # preserves the behavior of the previous region-first path.
+                    if regional_name not in regional_views:
+                        regional_train_pair = select_region_pair(
+                            train_pair,
+                            regional_location,
+                        )
+                        regional_test_pair = select_region_pair(
+                            test_pair,
+                            regional_location,
+                        )
+                        regional_val_pair = (
+                            select_region_pair(val_pair, regional_location)
+                            if val_pair is not None
+                            else None
                         )
 
+                        train_x, train_y = drop_zero_valid_target_samples(
+                            regional_train_pair["x"],
+                            regional_train_pair["y"],
+                            label=f"train ({regional_name})",
+                        )
+                        test_x, test_y = drop_zero_valid_target_samples(
+                            regional_test_pair["x"],
+                            regional_test_pair["y"],
+                            label=f"test ({regional_name})",
+                        )
+
+                        regional_train_pair = {"x": train_x, "y": train_y}
+                        regional_test_pair = {"x": test_x, "y": test_y}
+
+                        if regional_val_pair is not None:
+                            val_x, val_y = drop_zero_valid_target_samples(
+                                regional_val_pair["x"],
+                                regional_val_pair["y"],
+                                label=f"validation ({regional_name})",
+                            )
+                            regional_val_pair = {"x": val_x, "y": val_y}
+
+                        regional_x_clim = (
+                            select_region(
+                                dataset_d["x_clim"],
+                                regional_location,
+                            )
+                            if dataset_d["x_clim"] is not None
+                            else None
+                        )
+                        regional_y_clim = (
+                            select_region(
+                                dataset_d["y_clim"],
+                                regional_location,
+                            )
+                            if dataset_d["y_clim"] is not None
+                            else None
+                        )
+
+                        regional_views[regional_name] = (
+                            regional_train_pair,
+                            regional_val_pair,
+                            regional_test_pair,
+                            regional_x_clim,
+                            regional_y_clim,
+                        )
+                    else:
+                        (
+                            regional_train_pair,
+                            regional_val_pair,
+                            regional_test_pair,
+                            regional_x_clim,
+                            regional_y_clim,
+                        ) = regional_views[regional_name]
+
+                    if init_period is None:
+                        train_dataset = XarrayDataset(
+                            regional_train_pair["x"],
+                            regional_train_pair["y"],
+                            **dataset_kwargs,
+                        )
+                        test_dataset = XarrayDataset(
+                            regional_test_pair["x"],
+                            regional_test_pair["y"],
+                            **dataset_kwargs,
+                        )
+                        val_dataset = (
+                            XarrayDataset(
+                                regional_val_pair["x"],
+                                regional_val_pair["y"],
+                                **dataset_kwargs,
+                            )
+                            if regional_val_pair is not None
+                            else None
+                        )
+                    else:
+                        month = int(init_period)
                         logger.print(
-                            f"[green]Skipping experiment "
-                            f"{current_exp}/{total_exps}: {exp_name} "
-                            f"is already complete.[/green]"
+                            f"Generating datasets for initialization month {month}"
                         )
 
-                        train_pred_paths.append(
-                            (int(lt), None, regional_name, train_store)
+                        train_dataset = make_init_month_dataset(
+                            regional_train_pair["x"],
+                            regional_train_pair["y"],
+                            month,
+                            dataset_kwargs=dataset_kwargs,
+                        )
+                        test_dataset = make_init_month_dataset(
+                            regional_test_pair["x"],
+                            regional_test_pair["y"],
+                            month,
+                            dataset_kwargs=dataset_kwargs,
                         )
 
-                        if explicit_split:
-                            val_pred_paths.append(
-                                (int(lt), None, regional_name, val_store)
+                        val_dataset = None
+                        if regional_val_pair is not None:
+                            val_dataset = make_init_month_dataset(
+                                regional_val_pair["x"],
+                                regional_val_pair["y"],
+                                month,
+                                dataset_kwargs=dataset_kwargs,
                             )
 
-                        test_pred_paths.append(
-                            (int(lt), None, regional_name, test_store)
-                        )
-                        continue
-
-                    dataset_d = _make_datasets()
-
+                    x_clim = regional_x_clim
+                    y_clim = regional_y_clim
+                else:
                     train_dataset = dataset_d["train"]
                     val_dataset = dataset_d["val"]
                     test_dataset = dataset_d["test"]
@@ -2639,251 +2897,82 @@ def train(
                         val_dataset is not None
                         and not isinstance(val_dataset, XarrayDataset)
                     ):
-                        raise TypeError("Expected a full validation XarrayDataset")
-
-                    train_store, val_store, test_store = _core_train(
-                        s=s,
-                        exp_name=exp_name,
-                        region_name=regional_name,
-                        exp_ratio=(current_exp, total_exps),
-                        train_dataset=train_dataset,
-                        val_dataset=val_dataset,
-                        test_dataset=test_dataset,
-                        x_clim=dataset_d["x_clim"],
-                        y_clim=dataset_d["y_clim"],
-                        force_retrain=force_retrain,
-                        force_test=force_test,
-                        dry_run=dry_run,
-                        interpolate_analysis=interpolate_analysis,
-                        device=device,
-                        accelerator=accelerator,
-                        leadtime=lt,
-                        log_monthly=log_monthly,
-                    )
-
-                    train_pred_paths.append(
-                        (int(lt), None, regional_name, train_store)
-                    )
-                    if val_dataset is not None:
-                        val_pred_paths.append(
-                            (int(lt), None, regional_name, val_store)
-                        )
-                    test_pred_paths.append(
-                        (int(lt), None, regional_name, test_store)
-                    )
-
-                else:
-                    init_periods = [str(month) for month in range(1, 13)]
-                    pending_periods: set[str] = set()
-
-                    # Check completion before touching the input datasets. This keeps
-                    # restart/skip paths cheap when some or all months already exist.
-                    for init_period in init_periods:
-                        exp_name = (
-                            f"exp_{lt}_{s.leadtime_unit.value}_"
-                            f"{s.separate_training_by_init_period.value}_"
-                            f"{init_period}"
+                        raise TypeError(
+                            "Expected a full validation XarrayDataset"
                         )
 
-                        if s.regional_training:
-                            exp_name += f"_{regional_name}"
+                    x_clim = dataset_d["x_clim"]
+                    y_clim = dataset_d["y_clim"]
 
-                        current_exp += 1
+                train_store, val_store, test_store = _core_train(
+                    s=s,
+                    exp_name=exp_name,
+                    region_name=regional_name,
+                    exp_ratio=(exp_number, total_exps),
+                    train_dataset=train_dataset,
+                    val_dataset=val_dataset,
+                    test_dataset=test_dataset,
+                    x_clim=x_clim,
+                    y_clim=y_clim,
+                    force_retrain=force_retrain,
+                    force_test=force_test,
+                    dry_run=dry_run,
+                    interpolate_analysis=interpolate_analysis,
+                    device=device,
+                    accelerator=accelerator,
+                    leadtime=lt,
+                    log_monthly=log_monthly,
+                    # Regional/monthly datasets are views on common base xarray
+                    # datasets; close the bases once after all experiments for
+                    # this leadtime have finished.
+                    close_datasets=not defer_dataset_creation,
+                )
 
-                        complete = (
-                            not force_retrain
-                            and not force_test
-                            and experiment_is_complete(
-                                s,
-                                exp_name,
-                                explicit_split=explicit_split,
-                            )
-                        )
+                train_pred_paths.append(
+                    (int(lt), init_period, regional_name, train_store)
+                )
+                if val_dataset is not None:
+                    val_pred_paths.append(
+                        (int(lt), init_period, regional_name, val_store)
+                    )
+                test_pred_paths.append(
+                    (int(lt), init_period, regional_name, test_store)
+                )
 
-                        if not complete:
-                            pending_periods.add(init_period)
+                if defer_dataset_creation:
+                    del train_dataset, val_dataset, test_dataset
+                    del x_clim, y_clim
+                    gc.collect()
+
+        finally:
+            regional_views.clear()
+
+            if dataset_d is not None:
+                # Deferred mode keeps raw x/y base datasets alive across all
+                # regional/monthly experiments. Close them exactly once here.
+                if defer_dataset_creation:
+                    for key in ("train", "val", "test"):
+                        pair = dataset_d[key]
+                        if pair is None or isinstance(pair, XarrayDataset):
                             continue
-
-                        train_store, val_store, test_store = experiment_stores(
-                            s,
-                            exp_name,
-                        )
-
-                        logger.print(
-                            f"[green]Skipping experiment "
-                            f"{current_exp}/{total_exps}: {exp_name} "
-                            f"is already complete.[/green]"
-                        )
-
-                        train_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                train_store,
-                            )
-                        )
-                        if explicit_split:
-                            val_pred_paths.append(
-                                (
-                                    int(lt),
-                                    init_period,
-                                    regional_name,
-                                    val_store,
-                                )
-                            )
-                        test_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                test_store,
-                            )
-                        )
-
-                    if not pending_periods:
-                        continue
-
-                    dataset_d = _make_datasets()
-                    train_pair = dataset_d["train"]
-                    val_pair = dataset_d["val"]
-                    test_pair = dataset_d["test"]
-
-                    if isinstance(train_pair, XarrayDataset):
-                        raise TypeError(
-                            "Expected raw train xarray pair for per-period training"
-                        )
-                    if isinstance(test_pair, XarrayDataset):
-                        raise TypeError(
-                            "Expected raw test xarray pair for per-period training"
-                        )
-                    if (
-                        val_pair is not None
-                        and isinstance(val_pair, XarrayDataset)
-                    ):
-                        raise TypeError(
-                            "Expected raw validation xarray pair for per-period training"
-                        )
-
-                    first_period_exp = current_exp - len(init_periods) + 1
-
-                    for init_period in sorted(pending_periods, key=int):
-                        month = int(init_period)
-                        logger.print(
-                            f"Generating datasets for initialization month {month}"
-                        )
-
-                        train_dataset = make_init_month_dataset(
-                            train_pair["x"],
-                            train_pair["y"],
-                            month,
-                            dataset_kwargs=dataset_kwargs,
-                        )
-                        test_dataset = make_init_month_dataset(
-                            test_pair["x"],
-                            test_pair["y"],
-                            month,
-                            dataset_kwargs=dataset_kwargs,
-                        )
-
-                        val_dataset = None
-                        if val_pair is not None:
-                            val_dataset = make_init_month_dataset(
-                                val_pair["x"],
-                                val_pair["y"],
-                                month,
-                                dataset_kwargs=dataset_kwargs,
-                            )
-
-                        exp_name = (
-                            f"exp_{lt}_{s.leadtime_unit.value}_"
-                            f"{s.separate_training_by_init_period.value}_"
-                            f"{init_period}"
-                        )
-                        if s.regional_training:
-                            exp_name += f"_{regional_name}"
-
-                        period_exp_number = first_period_exp + month - 1
-
-                        train_store, val_store, test_store = _core_train(
-                            s=s,
-                            exp_name=exp_name,
-                            region_name=regional_name,
-                            exp_ratio=(period_exp_number, total_exps),
-                            train_dataset=train_dataset,
-                            val_dataset=val_dataset,
-                            test_dataset=test_dataset,
-                            x_clim=dataset_d["x_clim"],
-                            y_clim=dataset_d["y_clim"],
-                            force_retrain=force_retrain,
-                            force_test=force_test,
-                            dry_run=dry_run,
-                            interpolate_analysis=interpolate_analysis,
-                            device=device,
-                            accelerator=accelerator,
-                            leadtime=lt,
-                            log_monthly=log_monthly,
-                            # Monthly datasets are views on shared base xarray
-                            # datasets; close the bases once after all months.
-                            close_datasets=False,
-                        )
-
-                        train_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                train_store,
-                            )
-                        )
-                        if val_dataset is not None:
-                            val_pred_paths.append(
-                                (
-                                    int(lt),
-                                    init_period,
-                                    regional_name,
-                                    val_store,
-                                )
-                            )
-                        test_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                test_store,
-                            )
-                        )
-
-                        del train_dataset, val_dataset, test_dataset
-                        gc.collect()
-
-            finally:
-                if dataset_d is not None:
-                    # Per-month mode keeps raw x/y base datasets alive across all
-                    # monthly experiments. Close them exactly once here.
-                    if s.separate_training_by_init_period is not None:
-                        for key in ("train", "val", "test"):
-                            pair = dataset_d[key]
-                            if pair is None or isinstance(pair, XarrayDataset):
-                                continue
-                            for ds in pair.values():
-                                try:
-                                    ds.close()
-                                except Exception:
-                                    pass
-
-                    for clim_ds in (
-                        dataset_d["x_clim"],
-                        dataset_d["y_clim"],
-                    ):
-                        if clim_ds is not None:
+                        for ds in pair.values():
                             try:
-                                clim_ds.close()
+                                ds.close()
                             except Exception:
                                 pass
 
-                    del dataset_d
-                    gc.collect()
+                for clim_ds in (
+                    dataset_d["x_clim"],
+                    dataset_d["y_clim"],
+                ):
+                    if clim_ds is not None:
+                        try:
+                            clim_ds.close()
+                        except Exception:
+                            pass
+
+                del dataset_d
+                gc.collect()
 
     # Combine leadtimes, regions and initialization periods.
     _combine_predictions(
