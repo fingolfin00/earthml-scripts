@@ -183,10 +183,9 @@ def seasonal_cycle_encoder(
 def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
     realization_dim = ds.earthml.guessed_dims.realization
 
+    # Deterministic dataset: nothing to encode.
     if realization_dim is None:
-        raise ValueError(
-            "Could not determine the realization dimension."
-        )
+        return ds
 
     encoded: dict[str, xr.DataArray] = {}
 
@@ -208,10 +207,7 @@ def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
         )
 
     if not encoded:
-        raise ValueError(
-            f"No variables contain realization dimension "
-            f"{realization_dim!r}. Variables: {list(ds.data_vars)}"
-        )
+        return ds
 
     return xr.merge(
         [ds, xr.Dataset(encoded)],
