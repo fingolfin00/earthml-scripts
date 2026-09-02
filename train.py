@@ -15,7 +15,11 @@ from dask.diagnostics.progress import ProgressBar
 import torch
 from torch.utils.data import DataLoader
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    RichProgressBar,
+)
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from earthml import (
@@ -784,6 +788,9 @@ def init_callbacks(
         enable_version_counter=False,
     )
     callbacks.append(best_weights_callback)
+
+    callbacks.append(RichProgressBar())
+
     return callbacks
 
 
@@ -1585,7 +1592,13 @@ def _core_train(
     ):
         directory.mkdir(exist_ok=True, parents=True)
 
-    file_handler = add_file_handler(logger, log_file)
+    file_handler = add_file_handler(
+        logger,
+        log_file,
+        external_loggers=(
+            "lightning.pytorch",
+        ),
+    )
 
     if (
         s.loss_name == "SpatialDegradationMSELoss"
