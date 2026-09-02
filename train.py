@@ -2380,8 +2380,8 @@ def train(
         # leadtimes=[3, 4, 5],
         leadtimes=[1, 2, 3, 4, 5, 6],
 
-        # separate_training_by_init_period=ClimPeriod.MONTH,
-        separate_training_by_init_period=None,
+        separate_training_by_init_period=ClimPeriod.MONTH,
+        # separate_training_by_init_period=None,
 
         regional_training=False,
         regional_training_lat_size=60.0,
@@ -2512,10 +2512,23 @@ def train(
         
         loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
         loss_kwargs=dict(
-            spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
+            # Geographic size of each spatial patch used to compare
+            # corrected-model MSE against the zero-residual baseline MSE.
+            # Automatically converted to a grid-cell patch_size.
+            spatial_patch_size_degrees=10.0,
+            # Strength of the spatial degradation penalty relative to the
+            # global GeoMaskedMSE term. Larger values more strongly discourage
+            # local regions from becoming worse than the baseline forecast.
             lambda_degradation=6.0,
+            # Fraction of spatial patches used for the degradation penalty.
+            # 0.2 means the loss focuses on the worst 20% of patches according
+            # to relative degradation.
             degradation_fraction=0.2,
+            # Stabilizes relative degradation where baseline patch MSE is very
+            # small. The denominator is floored at 5% of the mean baseline
+            # patch MSE, avoiding excessively large relative penalties.
             relative_floor_fraction=0.05,
+            # Numerical stability constant used in divisions and clamping.
             eps=1e-8,
         ),
 
@@ -2547,6 +2560,33 @@ def train(
     }
 
     s.make_dirs()
+
+    config_differences = s.check_existing_config()
+
+    if config_differences:
+        logger.print(
+            "[yellow]Existing experiment configuration differs "
+            "from the current configuration:[/yellow]"
+        )
+
+        for name, (old_value, new_value) in config_differences.items():
+            logger.print(
+                f"  {name}: "
+                f"[red]{old_value!r}[/red] -> "
+                f"[green]{new_value!r}[/green]"
+            )
+
+        if not force_retrain:
+            raise RuntimeError(
+                "Experiment configuration has changed. "
+                "Set force_retrain=True to replace the existing experiment."
+            )
+
+        logger.print(
+            "[yellow]force_retrain=True: accepting the new "
+            "configuration and retraining the experiment.[/yellow]"
+        )
+
     s.save_config()
 
     if dry_run:
