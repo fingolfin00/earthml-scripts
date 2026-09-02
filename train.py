@@ -4,8 +4,7 @@ from pathlib import Path
 
 import gc
 
-from rich import print
-from rich.console import Console
+import logging
 
 import numpy as np
 import pandas as pd
@@ -28,6 +27,7 @@ from earthml import (
     Normalize,
     MonthlyNormalize,
     SplitDataModule,
+    SingleMonthBatchSampler,
     Table,
     Settings,
     calculate_climatology,
@@ -35,13 +35,24 @@ from earthml import (
     open_zarr,
     save_zarr,
     safe_chunk_spec,
+    EarthMLLogger,
+    configure_logging,
+    get_logger,
+    add_file_handler,
+    remove_file_handler,
+    log_renderable,
 )
 
 
+class XarrayPair(TypedDict):
+    x: xr.Dataset
+    y: xr.Dataset
+
+
 class LeadtimeDatasets(TypedDict):
-    train: XarrayDataset | dict[str, XarrayDataset]
-    val: XarrayDataset | dict[str, XarrayDataset] | None
-    test: XarrayDataset | dict[str, XarrayDataset]
+    train: XarrayDataset | XarrayPair
+    val: XarrayDataset | XarrayPair | None
+    test: XarrayDataset | XarrayPair
     x_clim: xr.Dataset | None
     y_clim: xr.Dataset | None
 
@@ -52,7 +63,30 @@ PredictionRecord = tuple[
     Path,         # prediction store
 ]
 
-console = Console()
+TestWeights = Literal["best", "last", "current"]
+
+
+def resolve_test_checkpoint(
+    *,
+    test_weights: TestWeights,
+    weights_file: Path,
+    last_checkpoint: Path,
+) -> Path | None:
+    if test_weights == "current":
+        return None
+
+    checkpoint = {
+        "best": weights_file,
+        "last": last_checkpoint,
+    }[test_weights]
+
+    if not checkpoint.exists():
+        raise FileNotFoundError(
+            f"Requested {test_weights!r} checkpoint does not exist: "
+            f"{checkpoint}"
+        )
+
+    return checkpoint
 
 
 def compute_leadtimes(
@@ -375,6 +409,60 @@ def make_leadtime_pair(
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
 
 
+def make_init_month_dataset(
+    x: xr.Dataset,
+    y: xr.Dataset,
+    month: int,
+    *,
+    dataset_kwargs: dict,
+) -> XarrayDataset:
+    x_time_dim = x.earthml.guessed_dims.time
+    y_time_dim = y.earthml.guessed_dims.time
+
+    if x_time_dim is None or y_time_dim is None:
+        raise ValueError(
+            "Could not determine input or target time dimension"
+        )
+
+    if x.sizes[x_time_dim] != y.sizes[y_time_dim]:
+        raise ValueError(
+            "Input and target have different sample counts: "
+            f"{x.sizes[x_time_dim]} != {y.sizes[y_time_dim]}"
+        )
+
+    months = pd.DatetimeIndex(
+        x[x_time_dim].values
+    ).month.to_numpy()
+
+    indices = np.flatnonzero(months == month)
+
+    if indices.size == 0:
+        raise ValueError(
+            f"No samples found for initialization month {month}"
+        )
+
+    indexer: slice | np.ndarray = indices
+
+    # Prefer a cheap regular slice whenever possible.
+    if indices.size > 1:
+        steps = np.diff(indices)
+
+        if np.all(steps == steps[0]):
+            step = int(steps[0])
+
+            indexer = slice(
+                int(indices[0]),
+                int(indices[-1]) + step,
+                step,
+            )
+
+    return XarrayDataset(
+        x.isel({x_time_dim: indexer}),
+        y.isel({y_time_dim: indexer}),
+        **dataset_kwargs,
+    )
+
+
 def make_train_test_datasets_for_leadtime(
     forecast_ds_path: str | Path,
     analysis_ds_path: str | Path,
@@ -398,6 +486,8 @@ def make_train_test_datasets_for_leadtime(
     materialize: bool = False,
     separate_training_by_init_period: ClimPeriod | None = None,
 ) -> LeadtimeDatasets:
+    logger = get_logger()
+
     dataset_kwargs = dataset_kwargs or {}
 
     lon = region["lon"] if region is not None else None
@@ -441,44 +531,6 @@ def make_train_test_datasets_for_leadtime(
         fc_clim = None
         an_clim = None
 
-    def _generate_period_datasets(
-        x: xr.Dataset,
-        y: xr.Dataset,
-    ) -> dict[str, XarrayDataset]:
-        x_time_dim = x.earthml.guessed_dims.time
-        y_time_dim = y.earthml.guessed_dims.time
-
-        if x_time_dim is None or y_time_dim is None:
-            raise ValueError("Could not determine input or target time dimension")
-
-        if x.sizes[x_time_dim] != y.sizes[y_time_dim]:
-            raise ValueError(
-                "Input and target have different sample counts: "
-                f"{x.sizes[x_time_dim]} != {y.sizes[y_time_dim]}"
-            )
-
-        if separate_training_by_init_period == ClimPeriod.MONTH:
-            labels = np.asarray(x[x_time_dim].dt.month.values)
-        else:
-            raise NotImplementedError(
-                f"Currently only separate_training_by_init_period="
-                f"{ClimPeriod.MONTH!r} is supported"
-            )
-
-        datasets: dict[str, XarrayDataset] = {}
-
-        for label in np.unique(labels):
-            print("_generate_period_datasets:", label)
-            indices = np.flatnonzero(labels == label)
-
-            datasets[str(label)] = XarrayDataset(
-                x.isel({x_time_dim: indices}),
-                y.isel({y_time_dim: indices}),
-                **dataset_kwargs,
-            )
-
-        return datasets
-
     x_train, y_train = make_leadtime_pair(
         fc_ds=fc_ds,
         an_ds=an_ds,
@@ -502,7 +554,7 @@ def make_train_test_datasets_for_leadtime(
         label="train",
     )
 
-    val_ds: dict[str, XarrayDataset] | XarrayDataset | None = None
+    val_ds: XarrayDataset | XarrayPair | None = None
     if val_start is not None and val_end is not None:
         x_val, y_val = make_leadtime_pair(
             fc_ds=fc_ds,
@@ -528,9 +580,16 @@ def make_train_test_datasets_for_leadtime(
         )
 
         if separate_training_by_init_period is None:
-            val_ds = XarrayDataset(x_val, y_val, **dataset_kwargs)
+            val_ds = XarrayDataset(
+                x_val,
+                y_val,
+                **dataset_kwargs,
+            )
         else:
-            val_ds = _generate_period_datasets(x_val, y_val)
+            val_ds = {
+                "x": x_val,
+                "y": y_val,
+            }
 
     x_test, y_test = make_leadtime_pair(
         fc_ds=fc_ds,
@@ -556,19 +615,27 @@ def make_train_test_datasets_for_leadtime(
     )
 
     if separate_training_by_init_period is None:
-        train_ds: dict[str, XarrayDataset] | XarrayDataset = XarrayDataset(
+        train_ds = XarrayDataset(
             x_train,
             y_train,
             **dataset_kwargs,
         )
-        test_ds: dict[str, XarrayDataset] | XarrayDataset = XarrayDataset(
+
+        test_ds = XarrayDataset(
             x_test,
             y_test,
             **dataset_kwargs,
         )
     else:
-        train_ds = _generate_period_datasets(x_train, y_train)
-        test_ds = _generate_period_datasets(x_test, y_test)
+        train_ds = {
+            "x": x_train,
+            "y": y_train,
+        }
+
+        test_ds = {
+            "x": x_test,
+            "y": y_test,
+        }
 
     return {
         "train": train_ds,
@@ -592,6 +659,8 @@ def drop_zero_valid_target_samples(
     A sample is retained when at least one target variable contains at least
     one finite value across all non-time dimensions.
     """
+    logger = get_logger()
+
     if time_dim is None:
         time_dim = y_ds.earthml.guessed_dims.time
 
@@ -636,10 +705,11 @@ def drop_zero_valid_target_samples(
     if dropped_indices.size:
         dropped_times = y_ds[time_dim].values[dropped_indices]
 
-        print(
-            f"[yellow]{label}: dropping {dropped_indices.size} "
+        logger.print(
+            f"{label}: dropping {dropped_indices.size} "
             f"zero-valid target samples out of "
-            f"{y_ds.sizes[time_dim]}[/yellow]"
+            f"{y_ds.sizes[time_dim]}",
+            level=logging.WARNING,
         )
 
         for index, timestamp in zip(
@@ -647,7 +717,7 @@ def drop_zero_valid_target_samples(
             dropped_times,
             strict=False,
         ):
-            print(
+            logger.print(
                 f"[yellow]  index={index}, time={timestamp}[/yellow]"
             )
 
@@ -943,6 +1013,8 @@ def print_training_recap(
     weights_dir: Path | None = None,
     checkpoints_dir: Path | None = None,
 ) -> None:
+    logger = get_logger()
+
     s = settings
 
     flat_recap = {
@@ -981,7 +1053,7 @@ def print_training_recap(
         "model.network": s.net_name,
         "model.extra_net_kwargs": s.extra_net_kwargs,
         "model.loss": s.loss_name,
-        "model.target_scale_degrees": s.target_scale_degrees if s.loss_name=="GeoMaskedMSELowFreqLoss" else None,
+        "model.loss_kwargs": s.loss_kwargs,
         "model.n_channels": n_channels,
         "model.n_classes": n_classes,
         "model.longitude_padding": longitude_padding,
@@ -1006,7 +1078,16 @@ def print_training_recap(
         "paths.checkpoints_dir": checkpoints_dir,
     }
 
-    console.print(Table(flat_recap, title="Training recap", twocols=True).table)
+    table = Table(
+        flat_recap,
+        title="Training recap",
+        twocols=True,
+    ).table
+
+    log_renderable(
+        table,
+        logger=logger,
+    )
 
 
 def _combine_predictions(
@@ -1018,6 +1099,8 @@ def _combine_predictions(
 ) -> None:
     if not pred_records:
         return
+
+    logger = get_logger()
 
     records_by_leadtime: dict[
         int,
@@ -1187,7 +1270,7 @@ def _combine_predictions(
         chunks={"leadtime": 1},
     )
 
-    print(
+    logger.print(
         f"[green]Final combined {data_type} predictions: "
         f"{dict(combined_preds.sizes)}[/green]"
     )
@@ -1213,10 +1296,25 @@ def _test(
     an_clim: xr.Dataset | None = None,
     log_monthly: bool = False,
 ):
-    test_trainer.test(model, dataloaders=dataloader)
+    logger = get_logger()
+
+    test_trainer.test(
+        model,
+        dataloaders=dataloader,
+    )
 
     preds_norm = model.test_preds.detach().float().cpu()
     targets_norm = model.test_targets.detach().float().cpu()
+    masks = model.test_masks.detach().cpu()
+    test_months = model.test_months.detach().cpu()
+
+    del model.test_preds
+    del model.test_targets
+    del model.test_masks
+    del model.test_months
+
+    if torch.mps.is_available():
+        torch.mps.empty_cache()
 
     if preds_norm.shape != targets_norm.shape:
         raise ValueError(
@@ -1229,42 +1327,20 @@ def _test(
     model_mse = error_norm.square().mean()
     zero_mse = targets_norm.square().mean()
 
-    masks = model.test_masks
-
-    model_loss = model.compute_loss(
-        prediction=preds_norm,
-        target=targets_norm,
-        mask=masks,
-    )
-
-    zero_loss = model.compute_loss(
-        prediction=torch.zeros_like(targets_norm),
-        target=targets_norm,
-        mask=masks,
-    )
-
-    print("Normalized tensor diagnostics")
-    print("  unweighted raw tensor MSE:", float(model_mse))
-    print("  zero-output MSE:", float(zero_mse))
-    print("  skill vs zero:", float(1.0 - model_mse / zero_mse))
-    print("  model scalar bias:", float(error_norm.mean()))
-    print("  target mean:", float(targets_norm.mean()))
-    print("  prediction mean:", float(preds_norm.mean()))
-    print(
+    logger.print("Normalized tensor diagnostics")
+    logger.print("  unweighted raw tensor MSE:", float(model_mse))
+    logger.print("  zero-output MSE:", float(zero_mse))
+    logger.print("  skill vs zero:", float(1.0 - model_mse / zero_mse))
+    logger.print("  model scalar bias:", float(error_norm.mean()))
+    logger.print("  target mean:", float(targets_norm.mean()))
+    logger.print("  prediction mean:", float(preds_norm.mean()))
+    logger.print(
         "prediction std:",
         float(preds_norm.std()),
     )
-    print(
+    logger.print(
         "target std:",
         float(targets_norm.std()),
-    )
-
-    print("Loss-consistent normalized diagnostics")
-    print("  model loss:", float(model_loss))
-    print("  zero-output loss:", float(zero_loss))
-    print(
-        "  skill vs zero:",
-        float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
     )
 
     # Per-grid-cell skill against predicting zero residual.
@@ -1295,7 +1371,7 @@ def _test(
         / valid_grid_cells.sum().clamp_min(1)
     )
 
-    print(
+    logger.print(
         "  improved grid cells:",
         f"{100.0 * float(improved_grid_fraction):.1f}%",
     )
@@ -1304,22 +1380,22 @@ def _test(
     prediction_mean_map = preds_norm.mean(dim=0)
     error_mean_map = error_norm.mean(dim=0)
 
-    print("Target mean map")
-    print("  mean abs:", float(target_mean_map.abs().mean()))
-    print("  max abs:", float(target_mean_map.abs().max()))
+    logger.print("Target mean map")
+    logger.print("  mean abs:", float(target_mean_map.abs().mean()))
+    logger.print("  max abs:", float(target_mean_map.abs().max()))
 
-    print("Prediction mean map")
-    print("  mean abs:", float(prediction_mean_map.abs().mean()))
-    print("  max abs:", float(prediction_mean_map.abs().max()))
+    logger.print("Prediction mean map")
+    logger.print("  mean abs:", float(prediction_mean_map.abs().mean()))
+    logger.print("  max abs:", float(prediction_mean_map.abs().max()))
 
-    print("Error mean map")
-    print("  mean abs:", float(error_mean_map.abs().mean()))
-    print("  max abs:", float(error_mean_map.abs().max()))
+    logger.print("Error mean map")
+    logger.print("  mean abs:", float(error_mean_map.abs().mean()))
+    logger.print("  max abs:", float(error_mean_map.abs().max()))
 
     if log_monthly:
-        preds = model.test_preds.float()
-        targets = model.test_targets.float()
-        months = model.test_months
+        preds = preds_norm
+        targets = targets_norm
+        months = test_months
 
         for month in torch.unique(months).sort().values:
             selected = months == month
@@ -1337,53 +1413,35 @@ def _test(
 
             mask_month = masks[selected]
 
-            model_loss = model.compute_loss(
-                prediction=pred_month,
-                target=target_month,
-                mask=mask_month,
-            )
-
-            zero_loss = model.compute_loss(
-                prediction=torch.zeros_like(target_month),
-                target=target_month,
-                mask=mask_month,
-            )
-
-            print(f"Month {int(month)}")
-            print("  samples:", int(selected.sum()))
-            print("  unweighted raw tensor MSE:", float(model_mse))
-            print("  weighted loss:", float(model_loss))
-            print("  weighted zero loss:", float(zero_loss))
-            print(
-                "  weighted skill vs zero:",
-                float(1.0 - model_loss / zero_loss.clamp_min(1e-8)),
-            )
-            print("  zero MSE:", float(zero_mse))
-            print(
+            logger.print(f"Month {int(month)}")
+            logger.print("  samples:", int(selected.sum()))
+            logger.print("  unweighted raw tensor MSE:", float(model_mse))
+            logger.print("  zero MSE:", float(zero_mse))
+            logger.print(
                 "  skill vs zero:",
                 float(1.0 - model_mse / zero_mse.clamp_min(1e-8)),
             )
-            print(
+            logger.print(
                 "  target mean-map abs:",
                 float(target_mean_map.abs().mean()),
             )
-            print(
+            logger.print(
                 "  prediction mean-map abs:",
                 float(pred_mean_map.abs().mean()),
             )
-            print(
+            logger.print(
                 "  error mean-map abs:",
                 float(error_mean_map.abs().mean()),
             )
-            print(
+            logger.print(
                 "  error mean-map max:",
                 float(error_mean_map.abs().max()),
             )
-            print(
+            logger.print(
                 "prediction std:",
                 float(pred_month.std()),
             )
-            print(
+            logger.print(
                 "target std:",
                 float(target_month.std()),
             )
@@ -1416,21 +1474,20 @@ def _test(
                 / valid_grid_cells_month.sum().clamp_min(1)
             )
 
-            print(
+            logger.print(
                 "  improved grid cells:",
                 f"{100.0 * float(improved_grid_fraction):.1f}%",
             )
 
-    del model.test_preds
-    del model.test_targets
-    del model.test_masks
-    del model.test_months
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    months = dataset.months[: preds_norm.shape[0]]
+    months = test_months[:preds_norm.shape[0]]
 
-    preds = normalize_target.inverse_tensor(preds_norm, months=months)
+    preds = normalize_target.inverse_tensor(
+        preds_norm,
+        months=months,
+    )
     preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
     preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
@@ -1510,457 +1567,611 @@ def _core_train(
     accelerator: str,
     leadtime: int | float | str,
     log_monthly: bool = False,
-
+    close_datasets: bool = True,
 ):
+    logger = get_logger()
+
     # Create exp dirs
     exp_dir = s.exp_dir / exp_name
     weights_dir = exp_dir / "weights"
     checkpoints_dir = exp_dir / "checkpoints"
+    log_file = exp_dir / "logs" / "run.log"
 
-    for d in (weights_dir, checkpoints_dir):
-        d.mkdir(exist_ok=True, parents=True)
 
-    weights_file = weights_dir / "weights.ckpt"
-    last_checkpoint = checkpoints_dir / "last.ckpt"
+    for directory in (
+        weights_dir,
+        checkpoints_dir,
+        log_file.parent,
+    ):
+        directory.mkdir(exist_ok=True, parents=True)
 
-    train_store, val_store, test_store = experiment_stores(
-        s,
-        exp_name,
-    )
+    file_handler = add_file_handler(logger, log_file)
 
-    should_train = force_retrain or not weights_file.exists()
-
-    should_test = (
-        force_retrain
-        or force_test
-        or not train_store.exists()
-        or not test_store.exists()
-        or (
-            val_dataset is not None
-            and not val_store.exists()
+    if (
+        s.loss_name == "SpatialDegradationMSELoss"
+        and s.target_mode not in {
+            "residual",
+            "residual_realization",
+            "anomaly_residual",
+            "anomaly_residual_realization",
+        }
+    ):
+        raise ValueError(
+            "SpatialDegradationMSELoss requires a residual target mode."
         )
-    )
 
-    if force_retrain:
-        print(f"[yellow]Force retrain enabled for leadtime {leadtime}.[/yellow]")
+    try:
+        logger.print("=" * 80)
+        logger.print(f"Starting experiment {exp_name} ({exp_ratio[0]} / {exp_ratio[1]})")
+        logger.print("Lead time:", leadtime)
 
-        weights_file.unlink(missing_ok=True)
-        last_checkpoint.unlink(missing_ok=True)
+        weights_file = weights_dir / "weights.ckpt"
+        last_checkpoint = checkpoints_dir / "last.ckpt"
 
-    # Normalize
-    if s.normalization == "monthly":
-        NormClass = MonthlyNormalize
-    elif s.normalization == "full":
-        NormClass = Normalize
-    else:
-        raise ValueError(f"normalization={s.normalization} not supported.")
+        train_store, val_store, test_store = experiment_stores(
+            s,
+            exp_name,
+        )
 
-    input_excluded_channels = (
-        (-4, -3, -2, -1)
-        if s.seasonal_encoding and s.channel_representation!="init_period"
-        else None
-    )
+        training_complete_file = exp_dir / "training_complete"
 
-    normalize_input = NormClass(
-        mode=s.normalization_mode,
-        exclude_channels=input_excluded_channels,
-    ).fit(
-        train_dataset,
-        dim="x",
-    )
+        should_train = (
+            force_retrain
+            or not training_complete_file.exists()
+        )
 
-    normalize_target = NormClass(
-        mode=s.normalization_mode,
-        exclude_channels=None,
-    ).fit(
-        train_dataset,
-        dim="y",
-    )
+        should_test = (
+            force_retrain
+            or force_test
+            or not train_store.exists()
+            or not test_store.exists()
+            or (
+                val_dataset is not None
+                and not val_store.exists()
+            )
+        )
 
-    train_dataset.transform_x = normalize_input
-    train_dataset.transform_y = normalize_target
+        if force_retrain:
+            logger.print(f"[yellow]Force retrain enabled for leadtime {leadtime}.[/yellow]")
+            weights_file.unlink(missing_ok=True)
+            last_checkpoint.unlink(missing_ok=True)
+            training_complete_file.unlink(missing_ok=True)
 
-    if val_dataset is not None:
-        val_dataset.transform_x = normalize_input
-        val_dataset.transform_y = normalize_target
+        # Normalize
+        if s.normalization == "monthly":
+            NormClass = MonthlyNormalize
+        elif s.normalization == "full":
+            NormClass = Normalize
+        else:
+            raise ValueError(f"normalization={s.normalization} not supported.")
 
-    # Loss
-    lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
-    latitudes = torch.as_tensor(
-        train_dataset.target_ds[lat_dim].values,
-        dtype=torch.float32,
-    )
+        input_excluded_channels = (
+            (-4, -3, -2, -1)
+            if s.seasonal_encoding and s.channel_representation!="init_period"
+            else None
+        )
 
-    loss_kwargs = {}
+        normalize_input = NormClass(
+            mode=s.normalization_mode,
+            exclude_channels=input_excluded_channels,
+        ).fit(
+            train_dataset,
+            dim="x",
+        )
 
-    if s.loss_name == "MaskedMSELoss":
-        loss_kwargs = {
-            "eps": 1e-8,
-        }
+        normalize_target = NormClass(
+            mode=s.normalization_mode,
+            exclude_channels=None,
+        ).fit(
+            train_dataset,
+            dim="y",
+        )
 
-    elif s.loss_name in {
-        "GeoMSELoss",
-        "GeoMaskedMSELoss",
-    }:
-        loss_kwargs = {
-            "latitudes": latitudes,
-            "eps": 1e-8,
-        }
+        train_dataset.transform_x = normalize_input
+        train_dataset.transform_y = normalize_target
 
-    elif s.loss_name == "GeoMaskedMSELowFreqLoss":
-        target_scale_degrees = s.target_scale_degrees
+        if val_dataset is not None:
+            val_dataset.transform_x = normalize_input
+            val_dataset.transform_y = normalize_target
+
+        # Loss
+        lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
+        latitudes = torch.as_tensor(
+            train_dataset.target_ds[lat_dim].values,
+            dtype=torch.float32,
+        )
+
+        # Grid-dependent loss configuration
         grid_spacing = abs(
             float(
-                train_dataset.target_ds.latitude.diff("latitude")
+                train_dataset.target_ds[lat_dim]
+                .diff(lat_dim)
                 .median()
                 .values
             )
         )
 
-        pool_kernel_size = max(
-            3,
-            round(target_scale_degrees / grid_spacing),
+        loss_kwargs = dict(s.loss_kwargs)
+
+        diagnostic_patch_size_degrees = float(
+            loss_kwargs.get("spatial_patch_size_degrees", 10.0)
+        )
+        if diagnostic_patch_size_degrees <= 0:
+            raise ValueError(
+                "spatial_patch_size_degrees must be positive"
+            )
+
+        patch_size = max(
+            1,
+            round(diagnostic_patch_size_degrees / grid_spacing),
         )
 
-        # Prefer odd windows.
-        if pool_kernel_size % 2 == 0:
-            pool_kernel_size += 1
-
-        loss_kwargs = {
-            "latitudes": latitudes,
-            "lambda_low_freq": 0.5,
-            "lambda_batch_mean": 2,
-            "pool_kernel_size": pool_kernel_size,
-            "pool_stride": max(1, pool_kernel_size // 2),
-            "eps": 1e-8,
+        losses_with_latitudes = {
+            "GeoMSELoss",
+            "GeoMaskedMSELoss",
+            "GeoMaskedMSEMultiScaleLoss",
+            "SpatialCVaRMSELoss",
+            "SpatialDegradationMSELoss",
         }
 
-    elif s.loss_name == "VarNormMaskMSELoss":
-        loss_kwargs = {
-            "variance_type": "spatial", # "channel", "geochannel", "spatial", "temporal", "geotemporal"
-            "eps": 1e-6,
-            "relative_floor_frac": 1e-3,
-            "min_valid_count": 2,
+        if s.loss_name in losses_with_latitudes:
+            loss_kwargs["latitudes"] = latitudes
+
+        if "spatial_patch_size_degrees" in loss_kwargs:
+            spatial_patch_size_degrees = float(
+                loss_kwargs.pop("spatial_patch_size_degrees")
+            )
+            if spatial_patch_size_degrees <= 0:
+                raise ValueError(
+                    "spatial_patch_size_degrees must be positive"
+                )
+            loss_kwargs["patch_size"] = max(
+                1,
+                round(spatial_patch_size_degrees / grid_spacing),
+            )
+
+        if s.loss_name == "GeoMaskedMSEMultiScaleLoss":
+            if "scales_degrees" not in loss_kwargs:
+                raise ValueError(
+                    "GeoMaskedMSEMultiScaleLoss requires "
+                    "loss_kwargs['scales_degrees']"
+                )
+
+            scales_degrees = loss_kwargs.pop("scales_degrees")
+            pool_kernel_sizes = []
+
+            for scale_degrees in scales_degrees:
+                kernel_size = max(
+                    3,
+                    round(float(scale_degrees) / grid_spacing),
+                )
+
+                if kernel_size % 2 == 0:
+                    kernel_size += 1
+
+                pool_kernel_sizes.append(kernel_size)
+
+            loss_kwargs["pool_kernel_sizes"] = tuple(
+                pool_kernel_sizes
+            )
+
+        base_loss_params = {
+            "loss": loss_kwargs,
+            "net": {},
         }
 
-    elif s.loss_name == "HeteroBiasCorrectionLoss":
-        loss_kwargs = {
-            "lambda_identity": 0.1,
-            "bias_scale": 0.5,
-            "variance_type": "channel",
-            "eps": 1e-6,
+        # Set input channels
+        n_channels = train_dataset.x.shape[1]
+        n_classes = train_dataset.y.shape[1] # TODO not sure this works if realization_as_channel is True
+
+        # Initialize model args
+        longitude_padding = "circular" if region_name=="World" else "replicate"
+        common_net_kwargs = {
+            "learning_rate": s.init_learning_rate,
+            "weight_decay": s.weight_decay,
+            "loss": s.loss_name,
+            "loss_params": base_loss_params,
+            "norm": s.training_norm,
+            "supervised": True,
+            "n_channels": n_channels,
+            "n_classes": n_classes,
+            "longitude_padding": longitude_padding,
+            "zero_init_output": True if s.target_mode in (
+                "residual",
+                "residual_realization",
+                "anomaly_residual",
+                "anomaly_residual_realization",
+            ) else False,
         }
 
-    elif s.loss_name == "GaussianNLLFromLogits":
-        loss_kwargs = {
-            "eps": 1e-6,
+        net_kwargs = {
+            **common_net_kwargs,
+            **s.extra_net_kwargs,
         }
 
-    elif s.loss_name == "MSELoss":
-        loss_kwargs = {}
+        # Init model
+        model = build_net(
+            name=s.net_name,
+            **net_kwargs,
+        ).to(device)
 
-    else:
-        raise ValueError(f"Unsupported loss configuration: {s.loss_name!r}")
+        model.configure_spatial_diagnostics(
+            latitudes=latitudes,
+            patch_size=patch_size,
+            cvar_fraction=0.2,
+        )
 
-    base_loss_params = {
-        "loss": loss_kwargs,
-        "net": {},
-    }
+        # Create train datamodule and split train dataset into train and validation based on self.config.train_percent
+        train_datamodule = SplitDataModule(
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            train_fraction=s.train_fraction,
+            batch_size=s.batch_size,
+            seed=s.seed,
+            num_workers=s.torch_workers,
+            split_strategy=s.split_strategy,
+            shuffle_train=s.shuffle_train_batch,
+            pin_memory=None, # True if CUDA available
+            persistent_workers=None, # True if num_workers > 0
+            drop_last_train=False,
+            group_batches_by_month=True,
+        )
 
-    # Set input channels
-    n_channels = train_dataset.x.shape[1]
-    n_classes = train_dataset.y.shape[1] # TODO not sure this works if realization_as_channel is True
+        if s.split_strategy == "explicit":
+            train_idx, val_idx = None, None
+        else:
+            train_datamodule.setup("fit")
+            train_idx = train_datamodule.train_indices
+            val_idx = train_datamodule.val_indices
 
-    # Initialize model args
-    longitude_padding = "circular" if region_name=="World" else "replicate"
-    common_net_kwargs = {
-        "learning_rate": s.init_learning_rate,
-        "weight_decay": s.weight_decay,
-        "loss": s.loss_name,
-        "loss_params": base_loss_params,
-        "norm": s.training_norm,
-        "supervised": True,
-        "n_channels": n_channels,
-        "n_classes": n_classes,
-        "longitude_padding": longitude_padding,
-        "zero_init_output": True if s.target_mode in (
-            "residual",
-            "residual_realization",
-            "anomaly_residual",
-            "anomaly_residual_realization",
-        ) else False,
-    }
+        debug_month_sampler = False
 
-    net_kwargs = {
-        **common_net_kwargs,
-        **s.extra_net_kwargs,
-    }
+        if debug_month_sampler:
+            train_datamodule.setup("fit")
+            loader = train_datamodule.train_dataloader()
+            dataset = train_datamodule.train_dataset
 
-    # Init model
-    model = build_net(
-        name=s.net_name,
-        **net_kwargs,
-    ).to(device)
+            time_dim = dataset.input_ds.earthml.guessed_dims.time
+            times_base = dataset.input_ds[time_dim].values
 
-    # Create train datamodule and split train dataset into train and validation based on self.config.train_percent
-    train_datamodule = SplitDataModule(
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        train_fraction=s.train_fraction,
-        batch_size=s.batch_size,
-        seed=s.seed,
-        num_workers=s.torch_workers,
-        split_strategy=s.split_strategy,
-        shuffle_train=s.shuffle_train_batch,
-        pin_memory=None, # True if CUDA available
-        persistent_workers=None, # True if num_workers > 0
-        drop_last_train=False,
-    )
+            realization_dim = dataset.input_ds.earthml.guessed_dims.realization
 
-    if s.split_strategy == "explicit":
-        train_idx, val_idx = None, None
-    else:
-        train_datamodule.setup("fit")
-        train_idx = train_datamodule.train_indices
-        val_idx = train_datamodule.val_indices
+            if (
+                realization_dim is not None
+                and realization_dim in dataset.input_ds.dims
+                and dataset.channel_representation in {"variable", "init_period"}
+            ):
+                n_realizations = dataset.input_ds.sizes[realization_dim]
+                sample_times = np.repeat(times_base, n_realizations)
+            else:
+                sample_times = times_base
 
-    # Normalize (use train-fitted normalizers)
-    test_dataset.transform_x = normalize_input
-    test_dataset.transform_y = normalize_target
-    # test_normalize_input  = Normalize().fit(test_dataset, filepath=None, dim='x')
-    # test_normalize_target = Normalize().fit(test_dataset, filepath=None, dim='y')
-    # test_dataset.transform_x = test_normalize_input
-    # test_dataset.transform_y = test_normalize_target
+            if len(sample_times) != len(dataset):
+                raise RuntimeError(
+                    f"Cannot align sample times: "
+                    f"{len(sample_times)=}, {len(dataset)=}"
+                )
 
-    test_dataloader = DataLoader(
-        test_dataset,
-        batch_size=1,
-        num_workers=0,
-        shuffle=False,
-        pin_memory=(accelerator == "gpu"),
-        persistent_workers=False,
-    )
+            for batch_index, batch_indices in enumerate(loader.batch_sampler):
+                batch_indices = torch.as_tensor(
+                    batch_indices,
+                    dtype=torch.long,
+                )
 
-    val_test_dataloader = None
-    if val_dataset is not None:
-        val_test_dataloader = DataLoader(
-            val_dataset,
-            batch_size=1,
+                months = dataset.months[batch_indices]
+
+                times = sample_times[
+                    batch_indices.cpu().numpy()
+                ]
+
+                years = pd.DatetimeIndex(times).year
+
+                print(
+                    batch_index,
+                    "month:",
+                    torch.unique(months).tolist(),
+                    "size:",
+                    len(batch_indices),
+                    "unique years:",
+                    len(np.unique(years)),
+                    "years:",
+                    np.unique(years).tolist(),
+                )
+
+                if batch_index >= 20:
+                    break
+
+        # Normalize (use train-fitted normalizers)
+        test_dataset.transform_x = normalize_input
+        test_dataset.transform_y = normalize_target
+        # test_normalize_input  = Normalize().fit(test_dataset, filepath=None, dim='x')
+        # test_normalize_target = Normalize().fit(test_dataset, filepath=None, dim='y')
+        # test_dataset.transform_x = test_normalize_input
+        # test_dataset.transform_y = test_normalize_target
+
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=s.batch_size,
             num_workers=0,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
             persistent_workers=False,
         )
 
-    train_test_dataloader = DataLoader(
-        train_dataset,
-        batch_size=1,
-        num_workers=0,
-        shuffle=False,
-        pin_memory=(accelerator == "gpu"),
-        persistent_workers=False,
-    )
+        val_test_dataloader = None
+        if val_dataset is not None:
+            val_test_dataloader = DataLoader(
+                val_dataset,
+                batch_size=s.batch_size,
+                num_workers=0,
+                shuffle=False,
+                pin_memory=(accelerator == "gpu"),
+                persistent_workers=False,
+            )
 
-    print_training_recap(
-        settings=s,
-        exp_ratio=exp_ratio,
-        region_name=region_name,
-        accelerator=accelerator,
-        device=device,
-        leadtime=leadtime,
-        normalization_name=type(normalize_input).__name__,
-        n_channels=n_channels,
-        n_classes=n_classes,
-        longitude_padding=longitude_padding,
-        dry_run=dry_run,
-        force_retrain=force_retrain,
-        force_test=force_test,
-        interpolate_analysis=interpolate_analysis,
-        train_input_shape=tuple(train_dataset.x.shape),
-        train_target_shape=tuple(train_dataset.y.shape),
-        val_input_shape=tuple(val_dataset.x.shape) if val_dataset is not None else None,
-        val_target_shape=tuple(val_dataset.y.shape) if val_dataset is not None else None,
-        test_input_shape=tuple(test_dataset.x.shape),
-        test_target_shape=tuple(test_dataset.y.shape),
-        train_idx=train_idx,
-        val_idx=val_idx,
-        exp_name=exp_name,
-        weights_dir=weights_dir,
-        checkpoints_dir=checkpoints_dir,
-    )
+        train_test_dataloader = DataLoader(
+            train_dataset,
+            batch_size=s.batch_size,
+            num_workers=0,
+            shuffle=False,
+            pin_memory=(accelerator == "gpu"),
+            persistent_workers=False,
+        )
 
-    # Tensorboard
-    tb_logger = TensorBoardLogger(
-        save_dir=s.exp_dir / "tensorboard",
-        name=exp_name,
-        version="",
-        default_hp_metric=False,
-        # log_graph=True,
-    )
+        print_training_recap(
+            settings=s,
+            exp_ratio=exp_ratio,
+            region_name=region_name,
+            accelerator=accelerator,
+            device=device,
+            leadtime=leadtime,
+            normalization_name=type(normalize_input).__name__,
+            n_channels=n_channels,
+            n_classes=n_classes,
+            longitude_padding=longitude_padding,
+            dry_run=dry_run,
+            force_retrain=force_retrain,
+            force_test=force_test,
+            interpolate_analysis=interpolate_analysis,
+            train_input_shape=tuple(train_dataset.x.shape),
+            train_target_shape=tuple(train_dataset.y.shape),
+            val_input_shape=tuple(val_dataset.x.shape) if val_dataset is not None else None,
+            val_target_shape=tuple(val_dataset.y.shape) if val_dataset is not None else None,
+            test_input_shape=tuple(test_dataset.x.shape),
+            test_target_shape=tuple(test_dataset.y.shape),
+            train_idx=train_idx,
+            val_idx=val_idx,
+            exp_name=exp_name,
+            weights_dir=weights_dir,
+            checkpoints_dir=checkpoints_dir,
+        )
 
-    tb_logger.log_hyperparams(
-        {
-            "leadtime": leadtime,
-            "network": s.net_name,
-            "loss": s.loss_name,
-            "learning_rate": s.init_learning_rate,
-            "weight_decay": s.weight_decay,
-            "batch_size": s.batch_size,
-            "effective_batch_size": (
-                s.batch_size * s.accumulate_grad_batches
+        # Tensorboard
+        tb_logger = TensorBoardLogger(
+            save_dir=s.exp_dir / "tensorboard",
+            name=exp_name,
+            version="",
+            default_hp_metric=False,
+            # log_graph=True,
+        )
+
+        tb_logger.log_hyperparams(
+            {
+                "leadtime": leadtime,
+                "network": s.net_name,
+                "loss": s.loss_name,
+                "learning_rate": s.init_learning_rate,
+                "weight_decay": s.weight_decay,
+                "batch_size": s.batch_size,
+                "effective_batch_size": (
+                    s.batch_size * s.accumulate_grad_batches
+                ),
+                "normalization": s.normalization,
+                "normalization_mode": s.normalization_mode,
+                "seasonal_encoding": s.seasonal_encoding,
+                "target_mode": s.target_mode,
+            }
+        )
+
+        train_trainer = L.Trainer(
+            max_epochs=s.max_epochs,
+            accelerator=accelerator,
+            devices=1,
+            precision=s.trainer_precision,
+            # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
+            # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
+            log_every_n_steps=1,
+            logger=tb_logger,
+            accumulate_grad_batches=s.accumulate_grad_batches,
+            # callbacks=[],
+            # enable_checkpointing=False,
+            callbacks=init_callbacks(
+                weights_folder_path=weights_dir,
+                ckpt_folder_path=checkpoints_dir,
+                patience=s.early_stopping_patience,
             ),
-            "normalization": s.normalization,
-            "normalization_mode": s.normalization_mode,
-            "seasonal_encoding": s.seasonal_encoding,
-            "target_mode": s.target_mode,
-        }
-    )
-
-    train_trainer = L.Trainer(
-        max_epochs=s.max_epochs,
-        accelerator=accelerator,
-        devices=1,
-        precision=s.trainer_precision,
-        # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
-        # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
-        log_every_n_steps=1,
-        logger=tb_logger,
-        accumulate_grad_batches=s.accumulate_grad_batches,
-        # callbacks=[],
-        # enable_checkpointing=False,
-        callbacks=init_callbacks(
-            weights_folder_path=weights_dir,
-            ckpt_folder_path=checkpoints_dir,
-            patience=s.early_stopping_patience,
-        ),
-        # deterministic=True
-        # num_sanity_val_steps=0,
-    )
-
-    resume_checkpoint: str | None = None
-
-    if should_train and not force_retrain and last_checkpoint.exists():
-        resume_checkpoint = str(last_checkpoint)
-
-    if should_train:
-        train_trainer.fit(
-            model,
-            datamodule=train_datamodule,
-            ckpt_path=resume_checkpoint,
-        )
-    else:
-        print(
-            f"[green]Skipping training for leadtime {leadtime}: "
-            f"best weights already exist.[/green]"
+            # deterministic=True
+            # num_sanity_val_steps=0,
         )
 
-    if not weights_file.exists():
-        raise FileNotFoundError(
-            f"Best model checkpoint was not created: {weights_file}"
+        resume_checkpoint: str | None = None
+
+        if should_train and not force_retrain and last_checkpoint.exists():
+            resume_checkpoint = str(last_checkpoint)
+
+        if should_train:
+            if resume_checkpoint is not None:
+                logger.print(
+                    f"[yellow]Resuming training from {resume_checkpoint}[/yellow]"
+                )
+
+            train_trainer.fit(
+                model,
+                datamodule=train_datamodule,
+                ckpt_path=resume_checkpoint,
+            )
+
+            # Only written when fit() returns successfully. This distinguishes
+            # a completed fit from a partial run that already produced best weights.
+            training_complete_file.touch()
+        else:
+            logger.print(
+                f"[green]Skipping training for leadtime {leadtime}: "
+                f"training is already complete.[/green]"
+            )
+
+        test_weights: TestWeights = "best"
+
+        checkpoint_path = resolve_test_checkpoint(
+            test_weights=test_weights,
+            weights_file=weights_file,
+            last_checkpoint=last_checkpoint,
         )
 
-    model = type(model).load_from_checkpoint(
-        weights_file,
-        **net_kwargs,
-    ).to(device)
+        # Training is completely finished.
+        train_trainer.strategy.teardown()
 
-    test_trainer = L.Trainer(
-        accelerator=accelerator,
-        devices=1,
-        precision=s.trainer_precision,
-        # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
-        # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
-        # deterministic=True
-    )
+        del train_trainer
+        del train_datamodule
+        del model
 
-    # Predict
-    if should_test:
-        _test(
-            test_trainer=test_trainer,
-            s=s,
-            model=model,
-            dataset=test_dataset,
-            normalize_target=normalize_target,
-            dataloader=test_dataloader,
-            preds_store=test_store,
-            an_clim=y_clim,
-            log_monthly=log_monthly,
+        gc.collect()
+
+        if accelerator == "mps":
+            torch.mps.empty_cache()
+        elif accelerator == "gpu":
+            torch.cuda.empty_cache()
+
+        model = build_net(
+            name=s.net_name,
+            **net_kwargs,
         )
 
-        if val_test_dataloader is not None and val_dataset is not None:
+        model = type(model).load_from_checkpoint(
+            checkpoint_path,
+            strict=False,
+            **net_kwargs,
+        ).to(device)
+
+        logger.print(
+            f"Testing with {test_weights} weights"
+            + (
+                f": {checkpoint_path}"
+                if checkpoint_path is not None
+                else ""
+            )
+        )
+        test_trainer = L.Trainer(
+            accelerator=accelerator,
+            devices=1,
+            precision=s.trainer_precision,
+            # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
+            # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
+            # deterministic=True
+        )
+    
+        # Predict
+        if should_test:
             _test(
                 test_trainer=test_trainer,
                 s=s,
                 model=model,
-                dataset=val_dataset,
+                dataset=test_dataset,
                 normalize_target=normalize_target,
-                dataloader=val_test_dataloader,
-                preds_store=val_store,
+                dataloader=test_dataloader,
+                preds_store=test_store,
                 an_clim=y_clim,
                 log_monthly=log_monthly,
             )
+    
+            if val_test_dataloader is not None and val_dataset is not None:
+                _test(
+                    test_trainer=test_trainer,
+                    s=s,
+                    model=model,
+                    dataset=val_dataset,
+                    normalize_target=normalize_target,
+                    dataloader=val_test_dataloader,
+                    preds_store=val_store,
+                    an_clim=y_clim,
+                    log_monthly=log_monthly,
+                )
+    
+            _test(
+                test_trainer=test_trainer,
+                s=s,
+                model=model,
+                dataset=train_dataset,
+                normalize_target=normalize_target,
+                dataloader=train_test_dataloader,
+                preds_store=train_store,
+                an_clim=y_clim,
+                log_monthly=log_monthly,
+            )
+        else:
+            logger.print(
+                f"[green]Skipping testing for leadtime {leadtime}: "
+                f"saved preds already exist.[/green]"
+            )
+    
+        # Trainer clean-up
+        test_trainer.strategy.teardown()
+    
+        if close_datasets:
+            for ds in (
+                train_dataset.input_ds,
+                train_dataset.target_ds,
+                val_dataset.input_ds if val_dataset is not None else None,
+                val_dataset.target_ds if val_dataset is not None else None,
+                test_dataset.input_ds,
+                test_dataset.target_ds,
+            ):
+                if ds is not None:
+                    try:
+                        ds.close()
+                    except Exception:
+                        pass
+    
+        try:
+            tb_logger.experiment.flush()
+            tb_logger.experiment.close()
+        except Exception:
+            pass
 
-        _test(
-            test_trainer=test_trainer,
-            s=s,
-            model=model,
-            dataset=train_dataset,
-            normalize_target=normalize_target,
-            dataloader=train_test_dataloader,
-            preds_store=train_store,
-            an_clim=y_clim,
-            log_monthly=log_monthly,
-        )
-    else:
-        print(
-            f"[green]Skipping testing for leadtime {leadtime}: "
-            f"saved preds already exist.[/green]"
-        )
+        try:
+            tb_logger.finalize("success")
+        except Exception:
+            pass
+    
+        del test_trainer, model
+        del train_test_dataloader, val_test_dataloader, test_dataloader
+        del train_dataset, val_dataset, test_dataset
+        del normalize_input, normalize_target
+        del latitudes, loss_kwargs, base_loss_params, net_kwargs
+        del tb_logger
+    
+        gc.collect()
+    
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+    
+        if (
+            getattr(torch.backends, "mps", None)
+            and torch.backends.mps.is_available()
+        ):
+            torch.mps.empty_cache()
 
-    # Trainer clean-up
-    train_trainer.strategy.teardown()
-    test_trainer.strategy.teardown()
+        logger.print("Experiment completed successfully")
+    
+        return train_store, val_store, test_store
 
-    for ds in (
-        train_dataset.input_ds,
-        train_dataset.target_ds,
-        val_dataset.input_ds if val_dataset is not None else None,
-        val_dataset.target_ds if val_dataset is not None else None,
-        test_dataset.input_ds,
-        test_dataset.target_ds,
-    ):
-        if ds is not None:
-            try:
-                ds.close()
-            except Exception:
-                pass
-
-    try:
-        tb_logger.finalize("success")
     except Exception:
-        pass
+        logger.exception("Experiment failed: %s", exp_name)
+        raise
 
-    del train_trainer, test_trainer, model
-    del train_datamodule
-    del train_test_dataloader, val_test_dataloader, test_dataloader
-    del train_dataset, val_dataset, test_dataset
-    del normalize_input, normalize_target
-    del latitudes, loss_kwargs, base_loss_params, net_kwargs
-    del tb_logger
-
-    gc.collect()
-
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-
-    if (
-        getattr(torch.backends, "mps", None)
-        and torch.backends.mps.is_available()
-    ):
-        torch.mps.empty_cache()
-
-    return train_store, val_store, test_store
+    finally:
+        remove_file_handler(logger, file_handler)
 
 
 def make_regional_boxes(
@@ -2039,6 +2250,7 @@ def experiment_is_complete(
 ) -> bool:
     exp_dir = s.exp_dir / exp_name
     weights_file = exp_dir / "weights" / "weights.ckpt"
+    training_complete_file = exp_dir / "training_complete"
 
     train_store, val_store, test_store = experiment_stores(
         s,
@@ -2054,7 +2266,11 @@ def experiment_is_complete(
         )
     )
 
-    return weights_file.exists() and predictions_complete
+    return (
+        training_complete_file.exists()
+        and weights_file.exists()
+        and predictions_complete
+    )
 
 
 def train(
@@ -2062,6 +2278,10 @@ def train(
     region_name: str,
     region_location: dict[str, tuple[int | float, int | float]] | None,
 ) -> None:
+    logger = configure_logging()
+
+    logger.print(f"Starting training for variable={var}, region={region_name}")
+
     if var in {"mlotst", "ssh", "sss", "t20d"}:
         var_type_fc = "ocean"
         reanalysis_model = "oras5"
@@ -2071,9 +2291,9 @@ def train(
 
     dry_run = False
     force_retrain = False
-    force_test = False
+    force_test = True
     interpolate_analysis = True
-    log_monthly = False
+    log_monthly = True
 
     accelerator, device = resolve_accelerator_and_device()
 
@@ -2085,69 +2305,189 @@ def train(
         data_root_dir=None,
         exp_root_dir=None,
         plot_root_dir=None,
+    
         extra_suffix_folder="",
+
         lead_period_offset=-1,
+
         var_file_fc=var,
         var_file_an=var,
         var_fc=var,
         var_an=var,
+
         model_fc=f"sps4_{var_type_fc}",
         model_an=reanalysis_model,
+
         leadtime_unit=LeadtimeUnit.MONTHS,
         # leadtimes=[3, 4, 5],
         leadtimes=[1, 2, 3, 4, 5, 6],
+
+        # separate_training_by_init_period=ClimPeriod.MONTH,
         separate_training_by_init_period=None,
+
         regional_training=False,
         regional_training_lat_size=60.0,
         regional_training_lon_size=30.0,
         region_name=region_name,
         region=region_location,
+
         train_start="1993-01-01",
+        # train_end="2020-12-01",
         train_end="2014-12-01",
         val_start="2015-01-01",
         val_end="2020-12-01",
         test_start="2021-01-01",
-        test_end="2022-12-01",
-        target_mode="analysis",
+        test_end="2025-12-01",
+
+        target_mode="anomaly_residual_realization",
+
         clim_period=ClimPeriod.MONTH,
+
         seed=42,
+
         channel_representation="variable",
         output_realizations="deterministic",
+
         split_strategy="explicit",
         shuffle_train_batch=True,
+
         normalization="full",
         normalization_mode="channel",
+
         seasonal_encoding=True, # automatically set to False if channel_representation="init_period"
         ensemble_encoding=True,
-        net_name="SmaAt_UNet",
-        loss_name="GeoMaskedMSELoss",
-        target_scale_degrees=30.0, # only for GeoMaskedMSELowFreqLoss
-        init_learning_rate=3e-4,
+
+        # NN
+        # net_name="SmaAt_UNet",
+        # smaatunet_kwargs=dict(
+        #     reduction_ratio=8,
+        #     depth=3,
+        #     kernels_per_layer=1,
+        #     base_channels=16,
+        # ),
+
+        net_name="ConvNeXtTransformerUNet",
+        convnext_kwargs=dict(
+            encoder_depths=(1, 1, 1),
+            decoder_depths=(1, 1),
+            dims=(8, 16, 32),
+            drop_path_rate=0.0,
+            layer_scale_init_value=1e-6,
+
+            transformer_depth=0, # disable transform block
+            transformer_heads=8,
+            transformer_mlp_ratio=4.0,
+            transformer_dropout=0.0,
+
+            refinement_depth=2,
+
+            zero_init_output=True,
+            longitude_padding="circular",
+        ),
+
+        # convnext_kwargs = dict(
+        #     encoder_depths=(2, 2, 3, 3),
+        #     decoder_depths=(2, 2, 2),
+        #     dims=(32, 64, 128, 256),
+
+        #     drop_path_rate=0.2,
+        #     layer_scale_init_value=1e-6,
+
+        #     transformer_depth=1,
+        #     transformer_heads=8,
+        #     transformer_mlp_ratio=4.0,
+        #     transformer_dropout=0.0,
+
+        #     refinement_depth=2,
+
+        #     zero_init_output=True,
+        #     longitude_padding="circular",
+        # )
+
+        # Loss
+        # loss_name="MSELoss",
+        # loss_kwargs={},
+
+        # loss_name="MaskedMSELoss",
+        # loss_kwargs=dict(
+        #     eps=1e-8,
+        # ),
+
+        # loss_name="GeoMSELoss", # latitudes are injected automatically
+        # loss_kwargs=dict(
+        #     eps=1e-8,
+        # ),
+
+        # loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
+        # loss_kwargs=dict(
+        #     eps=1e-8,
+        # ),
+
+        # loss_name="HuberLoss",
+        # loss_kwargs=dict(
+        #     delta=2.0,
+        # ),
+
+        # loss_name="VarNormMaskMSELoss",
+        # loss_kwargs=dict(
+        #     eps=1e-8,
+        # ),
+
+        # loss_name="GeoMaskedMSEMultiScaleLoss", # latitudes are injected automatically
+        # loss_kwargs=dict(
+        #     scales_degrees=(30.0, 60.0, 120.0), # scales_degrees are converted automatically to pool_kernel_sizes
+        #     scale_weights=(0.1, 0.4, 0.5),
+        #     lambda_multiscale=0.5,
+        #     lambda_batch_mean=1.0,
+        #     lambda_identity=0.5,
+        #     pool_stride=3,
+        #     eps=1e-8,
+        # ),
+
+        # loss_name="SpatialCVaRMSELoss", # latitudes are injected automatically
+        # loss_kwargs=dict(
+        #     spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
+        #     cvar_fraction=0.2,
+        #     lambda_cvar=0.2,
+        #     eps=1e-8,
+        # ),
+        
+        loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
+        loss_kwargs=dict(
+            spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
+            lambda_degradation=6.0,
+            degradation_fraction=0.2,
+            relative_floor_fraction=0.05,
+            eps=1e-8,
+        ),
+
+        init_learning_rate=1e-4,
+        # weight_decay=1e-3,
         weight_decay=1e-4,
-        batch_size=32,
-        max_epochs=100,
+        batch_size=16,
+        max_epochs=50,
         target_realization_avg=False,
         fill_nan_value=0.0,
         torch_mask="target",
-        training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
-        smaatunet_kwargs=dict(
-            reduction_ratio=8,
-            depth=3,
-            kernels_per_layer=1,
-            base_channels=16,
-        ),
-        convnext_kwargs=dict(
-            depths=(2, 2, 4, 2),
-            dims=(32, 64, 128, 256),
-            drop_path_rate=0.05,
-            layer_scale_init_value=1e-6,
-        ),
+        training_norm="LayerNorm", # ignored for convnext (uses only LayerNorm)
+
         train_fraction=0.85,
         accumulate_grad_batches=1,
         early_stopping_patience=20,
+
         torch_workers=4,
         trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
+
+    dataset_kwargs = {
+        "target_realization_avg": s.target_realization_avg,
+        "channel_representation": s.channel_representation,
+        "init_period_dim": s.init_period_dim,
+        "output_realizations": s.output_realizations,
+        "torch_mask": s.torch_mask,
+        "fill_nan_value": s.fill_nan_value,
+    }
+
     s.make_dirs()
     s.save_config()
 
@@ -2167,20 +2507,15 @@ def train(
             lon_size=s.regional_training_lon_size,
         )
     else:
-        region_boxes = [
-            {
-                s.region_name: s.region,
-            }
-        ]
+        region_boxes = [{s.region_name: s.region}]
 
     if s.separate_training_by_init_period is None:
         total_exps = len(region_boxes) * len(s.leadtimes)
+    elif s.separate_training_by_init_period == ClimPeriod.MONTH:
+        total_exps = len(region_boxes) * len(s.leadtimes) * 12
     else:
-        num_periods = 12 if s.separate_training_by_init_period==ClimPeriod.MONTH else 1
-        total_exps = (
-            len(region_boxes)
-            * len(s.leadtimes)
-            * num_periods
+        raise NotImplementedError(
+            "Currently only monthly separate training is supported."
         )
 
     current_exp = 0
@@ -2198,6 +2533,7 @@ def train(
         for lt in s.leadtimes:
             explicit_split = s.split_strategy == "explicit"
             train_end = s.train_end if explicit_split else s.val_end
+            dataset_d: LeadtimeDatasets | None = None
 
             def _make_datasets() -> LeadtimeDatasets:
                 return make_train_test_datasets_for_leadtime(
@@ -2220,14 +2556,7 @@ def train(
                     forecast_vars=[s.var_fc],
                     analysis_vars=[s.var_an],
                     region=regional_location,
-                    dataset_kwargs={
-                        "target_realization_avg": s.target_realization_avg,
-                        "channel_representation": s.channel_representation,
-                        "init_period_dim": s.init_period_dim,
-                        "output_realizations": s.output_realizations,
-                        "torch_mask": s.torch_mask,
-                        "fill_nan_value": s.fill_nan_value,
-                    },
+                    dataset_kwargs=dataset_kwargs,
                     seasonal_encoding=(
                         s.seasonal_encoding
                         and s.channel_representation != "init_period"
@@ -2235,110 +2564,21 @@ def train(
                     ensemble_encoding=s.ensemble_encoding,
                     interpolate_analysis=interpolate_analysis,
                     materialize=False,
-                    separate_training_by_init_period=s.separate_training_by_init_period,
+                    separate_training_by_init_period=(
+                        s.separate_training_by_init_period
+                    ),
                 )
 
-            if s.separate_training_by_init_period is None:
-                exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
-
-                if s.regional_training:
-                    exp_name += f"_{regional_name}"
-
-                current_exp += 1
-
-                if (
-                    not force_retrain
-                    and not force_test
-                    and experiment_is_complete(
-                        s,
-                        exp_name,
-                        explicit_split=explicit_split,
-                    )
-                ):
-                    train_store, val_store, test_store = experiment_stores(
-                        s,
-                        exp_name,
-                    )
-
-                    print(
-                        f"[green]Skipping experiment "
-                        f"{current_exp}/{total_exps}: {exp_name} "
-                        f"is already complete.[/green]"
-                    )
-
-                    train_pred_paths.append(
-                        (int(lt), None, regional_name, train_store)
-                    )
-
-                    if explicit_split:
-                        val_pred_paths.append(
-                            (int(lt), None, regional_name, val_store)
-                        )
-
-                    test_pred_paths.append(
-                        (int(lt), None, regional_name, test_store)
-                    )
-
-                    continue
-
-                dataset_d = _make_datasets()
-
-                train_store, val_store, test_store = _core_train(
-                    s=s,
-                    exp_name=exp_name,
-                    region_name=regional_name,
-                    exp_ratio=(current_exp, total_exps),
-                    train_dataset=dataset_d["train"],
-                    val_dataset=dataset_d["val"],
-                    test_dataset=dataset_d["test"],
-                    x_clim=dataset_d["x_clim"],
-                    y_clim=dataset_d["y_clim"],
-                    force_retrain=force_retrain,
-                    force_test=force_test,
-                    dry_run=dry_run,
-                    interpolate_analysis=interpolate_analysis,
-                    device=device,
-                    accelerator=accelerator,
-                    leadtime=lt,
-                    log_monthly=log_monthly,
-                )
-
-                train_pred_paths.append(
-                    (int(lt), None, regional_name, train_store)
-                )
-
-                if dataset_d["val"] is not None:
-                    val_pred_paths.append(
-                        (int(lt), None, regional_name, val_store)
-                    )
-
-                test_pred_paths.append(
-                    (int(lt), None, regional_name, test_store)
-                )
-
-            else:
-                if s.separate_training_by_init_period != ClimPeriod.MONTH:
-                    raise NotImplementedError(
-                        "Currently only monthly separate training is supported."
-                    )
-
-                init_periods = [str(month) for month in range(1, 13)]
-                pending_periods: set[str] = set()
-
-                # First check every experiment without generating datasets.
-                for init_period in init_periods:
-                    exp_name = (
-                        f"exp_{lt}_{s.leadtime_unit.value}_"
-                        f"{s.separate_training_by_init_period.value}_"
-                        f"{init_period}"
-                    )
+            try:
+                if s.separate_training_by_init_period is None:
+                    exp_name = f"exp_{lt}_{s.leadtime_unit.value}"
 
                     if s.regional_training:
                         exp_name += f"_{regional_name}"
 
                     current_exp += 1
 
-                    complete = (
+                    if (
                         not force_retrain
                         and not force_test
                         and experiment_is_complete(
@@ -2346,131 +2586,56 @@ def train(
                             exp_name,
                             explicit_split=explicit_split,
                         )
-                    )
-
-                    if complete:
+                    ):
                         train_store, val_store, test_store = experiment_stores(
                             s,
                             exp_name,
                         )
 
-                        print(
+                        logger.print(
                             f"[green]Skipping experiment "
                             f"{current_exp}/{total_exps}: {exp_name} "
                             f"is already complete.[/green]"
                         )
 
                         train_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                train_store,
-                            )
+                            (int(lt), None, regional_name, train_store)
                         )
 
                         if explicit_split:
                             val_pred_paths.append(
-                                (
-                                    int(lt),
-                                    init_period,
-                                    regional_name,
-                                    val_store,
-                                )
+                                (int(lt), None, regional_name, val_store)
                             )
 
                         test_pred_paths.append(
-                            (
-                                int(lt),
-                                init_period,
-                                regional_name,
-                                test_store,
-                            )
+                            (int(lt), None, regional_name, test_store)
                         )
-                    else:
-                        pending_periods.add(init_period)
+                        continue
 
-                # Every month already exists: avoid all dataset work.
-                if not pending_periods:
-                    continue
+                    dataset_d = _make_datasets()
 
-                dataset_d = _make_datasets()
+                    train_dataset = dataset_d["train"]
+                    val_dataset = dataset_d["val"]
+                    test_dataset = dataset_d["test"]
 
-                train_by_period = dataset_d["train"]
-                val_by_period = dataset_d["val"]
-                test_by_period = dataset_d["test"]
-
-                if not isinstance(train_by_period, dict):
-                    raise TypeError(
-                        "Expected train datasets divided by initialization period"
-                    )
-
-                if not isinstance(test_by_period, dict):
-                    raise TypeError(
-                        "Expected test datasets divided by initialization period"
-                    )
-
-                if (
-                    val_by_period is not None
-                    and not isinstance(val_by_period, dict)
-                ):
-                    raise TypeError(
-                        "Expected validation datasets divided by "
-                        "initialization period"
-                    )
-
-                available_periods = set(train_by_period)
-                missing_periods = pending_periods - available_periods
-
-                if missing_periods:
-                    raise ValueError(
-                        "Pending initialization periods are absent from the "
-                        f"training data: {sorted(missing_periods, key=int)}"
-                    )
-
-                # current_exp has already advanced during the pre-check. Recover
-                # each period's stable position in the global experiment sequence.
-                first_period_exp = current_exp - len(init_periods) + 1
-
-                for init_period in sorted(pending_periods, key=int):
-                    if init_period not in test_by_period:
-                        raise ValueError(
-                            f"Initialization period {init_period!r} exists in "
-                            "training but not in test data"
-                        )
-
-                    val_dataset = None
-
-                    if val_by_period is not None:
-                        if init_period not in val_by_period:
-                            raise ValueError(
-                                f"Initialization period {init_period!r} exists in "
-                                "training but not in validation data"
-                            )
-
-                        val_dataset = val_by_period[init_period]
-
-                    exp_name = (
-                        f"exp_{lt}_{s.leadtime_unit.value}_"
-                        f"{s.separate_training_by_init_period.value}_"
-                        f"{init_period}"
-                    )
-
-                    if s.regional_training:
-                        exp_name += f"_{regional_name}"
-
-                    period_exp_number = (
-                        first_period_exp + int(init_period) - 1
-                    )
+                    if not isinstance(train_dataset, XarrayDataset):
+                        raise TypeError("Expected a full training XarrayDataset")
+                    if not isinstance(test_dataset, XarrayDataset):
+                        raise TypeError("Expected a full test XarrayDataset")
+                    if (
+                        val_dataset is not None
+                        and not isinstance(val_dataset, XarrayDataset)
+                    ):
+                        raise TypeError("Expected a full validation XarrayDataset")
 
                     train_store, val_store, test_store = _core_train(
                         s=s,
                         exp_name=exp_name,
                         region_name=regional_name,
-                        exp_ratio=(period_exp_number, total_exps),
-                        train_dataset=train_by_period[init_period],
+                        exp_ratio=(current_exp, total_exps),
+                        train_dataset=train_dataset,
                         val_dataset=val_dataset,
-                        test_dataset=test_by_period[init_period],
+                        test_dataset=test_dataset,
                         x_clim=dataset_d["x_clim"],
                         y_clim=dataset_d["y_clim"],
                         force_retrain=force_retrain,
@@ -2484,47 +2649,230 @@ def train(
                     )
 
                     train_pred_paths.append(
-                        (
-                            int(lt),
-                            init_period,
-                            regional_name,
-                            train_store,
-                        )
+                        (int(lt), None, regional_name, train_store)
                     )
-
                     if val_dataset is not None:
                         val_pred_paths.append(
+                            (int(lt), None, regional_name, val_store)
+                        )
+                    test_pred_paths.append(
+                        (int(lt), None, regional_name, test_store)
+                    )
+
+                else:
+                    init_periods = [str(month) for month in range(1, 13)]
+                    pending_periods: set[str] = set()
+
+                    # Check completion before touching the input datasets. This keeps
+                    # restart/skip paths cheap when some or all months already exist.
+                    for init_period in init_periods:
+                        exp_name = (
+                            f"exp_{lt}_{s.leadtime_unit.value}_"
+                            f"{s.separate_training_by_init_period.value}_"
+                            f"{init_period}"
+                        )
+
+                        if s.regional_training:
+                            exp_name += f"_{regional_name}"
+
+                        current_exp += 1
+
+                        complete = (
+                            not force_retrain
+                            and not force_test
+                            and experiment_is_complete(
+                                s,
+                                exp_name,
+                                explicit_split=explicit_split,
+                            )
+                        )
+
+                        if not complete:
+                            pending_periods.add(init_period)
+                            continue
+
+                        train_store, val_store, test_store = experiment_stores(
+                            s,
+                            exp_name,
+                        )
+
+                        logger.print(
+                            f"[green]Skipping experiment "
+                            f"{current_exp}/{total_exps}: {exp_name} "
+                            f"is already complete.[/green]"
+                        )
+
+                        train_pred_paths.append(
                             (
                                 int(lt),
                                 init_period,
                                 regional_name,
-                                val_store,
+                                train_store,
+                            )
+                        )
+                        if explicit_split:
+                            val_pred_paths.append(
+                                (
+                                    int(lt),
+                                    init_period,
+                                    regional_name,
+                                    val_store,
+                                )
+                            )
+                        test_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                test_store,
                             )
                         )
 
-                    test_pred_paths.append(
-                        (
-                            int(lt),
-                            init_period,
-                            regional_name,
-                            test_store,
+                    if not pending_periods:
+                        continue
+
+                    dataset_d = _make_datasets()
+                    train_pair = dataset_d["train"]
+                    val_pair = dataset_d["val"]
+                    test_pair = dataset_d["test"]
+
+                    if isinstance(train_pair, XarrayDataset):
+                        raise TypeError(
+                            "Expected raw train xarray pair for per-period training"
                         )
-                    )
+                    if isinstance(test_pair, XarrayDataset):
+                        raise TypeError(
+                            "Expected raw test xarray pair for per-period training"
+                        )
+                    if (
+                        val_pair is not None
+                        and isinstance(val_pair, XarrayDataset)
+                    ):
+                        raise TypeError(
+                            "Expected raw validation xarray pair for per-period training"
+                        )
 
-            # Clean-up after all leadtimes
-            for clim_ds in (
-                dataset_d["x_clim"],
-                dataset_d["y_clim"],
-            ):
-                if clim_ds is not None:
-                    try:
-                        clim_ds.close()
-                    except Exception:
-                        pass
+                    first_period_exp = current_exp - len(init_periods) + 1
 
-            del dataset_d
+                    for init_period in sorted(pending_periods, key=int):
+                        month = int(init_period)
+                        logger.print(
+                            f"Generating datasets for initialization month {month}"
+                        )
 
-    # Combine leadtimes (always), regions and init periods if necessary
+                        train_dataset = make_init_month_dataset(
+                            train_pair["x"],
+                            train_pair["y"],
+                            month,
+                            dataset_kwargs=dataset_kwargs,
+                        )
+                        test_dataset = make_init_month_dataset(
+                            test_pair["x"],
+                            test_pair["y"],
+                            month,
+                            dataset_kwargs=dataset_kwargs,
+                        )
+
+                        val_dataset = None
+                        if val_pair is not None:
+                            val_dataset = make_init_month_dataset(
+                                val_pair["x"],
+                                val_pair["y"],
+                                month,
+                                dataset_kwargs=dataset_kwargs,
+                            )
+
+                        exp_name = (
+                            f"exp_{lt}_{s.leadtime_unit.value}_"
+                            f"{s.separate_training_by_init_period.value}_"
+                            f"{init_period}"
+                        )
+                        if s.regional_training:
+                            exp_name += f"_{regional_name}"
+
+                        period_exp_number = first_period_exp + month - 1
+
+                        train_store, val_store, test_store = _core_train(
+                            s=s,
+                            exp_name=exp_name,
+                            region_name=regional_name,
+                            exp_ratio=(period_exp_number, total_exps),
+                            train_dataset=train_dataset,
+                            val_dataset=val_dataset,
+                            test_dataset=test_dataset,
+                            x_clim=dataset_d["x_clim"],
+                            y_clim=dataset_d["y_clim"],
+                            force_retrain=force_retrain,
+                            force_test=force_test,
+                            dry_run=dry_run,
+                            interpolate_analysis=interpolate_analysis,
+                            device=device,
+                            accelerator=accelerator,
+                            leadtime=lt,
+                            log_monthly=log_monthly,
+                            # Monthly datasets are views on shared base xarray
+                            # datasets; close the bases once after all months.
+                            close_datasets=False,
+                        )
+
+                        train_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                train_store,
+                            )
+                        )
+                        if val_dataset is not None:
+                            val_pred_paths.append(
+                                (
+                                    int(lt),
+                                    init_period,
+                                    regional_name,
+                                    val_store,
+                                )
+                            )
+                        test_pred_paths.append(
+                            (
+                                int(lt),
+                                init_period,
+                                regional_name,
+                                test_store,
+                            )
+                        )
+
+                        del train_dataset, val_dataset, test_dataset
+                        gc.collect()
+
+            finally:
+                if dataset_d is not None:
+                    # Per-month mode keeps raw x/y base datasets alive across all
+                    # monthly experiments. Close them exactly once here.
+                    if s.separate_training_by_init_period is not None:
+                        for key in ("train", "val", "test"):
+                            pair = dataset_d[key]
+                            if pair is None or isinstance(pair, XarrayDataset):
+                                continue
+                            for ds in pair.values():
+                                try:
+                                    ds.close()
+                                except Exception:
+                                    pass
+
+                    for clim_ds in (
+                        dataset_d["x_clim"],
+                        dataset_d["y_clim"],
+                    ):
+                        if clim_ds is not None:
+                            try:
+                                clim_ds.close()
+                            except Exception:
+                                pass
+
+                    del dataset_d
+                    gc.collect()
+
+    # Combine leadtimes, regions and initialization periods.
     _combine_predictions(
         s=s,
         data_type="train",
@@ -2579,7 +2927,6 @@ def main():
             # "sss",
             # "t20d",
         ]:
-            print(f"Training for {var}")
             train(
                 var=var,
                 region_name=region_name,
