@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import xarray as xr
 
 import warnings
@@ -17,13 +18,17 @@ from earthml import (
     LeadtimeUnit,
     ClimPeriod,
     get_experiment_configs,
+    get_and_subset_datasets,
 )
 from earthml.metrics import (
     LeadtimeAgg,
     MetricAgg,
     is_deterministic,
     is_probabilistic,
-    get_scalar_metrics,
+    get_metrics,
+    calculate_save_and_subset_climatologies,
+    stack_hour_clim,
+    groupby_period,
 )
 from earthml.plots import (
     safe_label,
@@ -33,8 +38,65 @@ from earthml.plots import (
 )
 
 
+def get_profile_metrics(
+    *,
+    s,
+    an,
+    fc,
+    an_clim,
+    fc_clim,
+    metrics,
+    realization_agg,
+    metric_agg_mode,
+    leadtime_agg_mode,
+    leadtime_agg_coord,
+    clim_period,
+    period_dim,
+    wanted_start_periods,
+):
+    metric_kind = (
+        "scalar"
+        if metric_agg_mode == "global"
+        else "maps"
+    )
+
+    ds = get_metrics(
+        an=an,
+        fc=fc,
+        var=s.var_fc,
+        metric_kind=metric_kind,
+        leadtime_agg=leadtime_agg_mode,
+        realization_agg=realization_agg,
+        an_clim=an_clim,
+        fc_clim=fc_clim,
+        metrics=metrics,
+        leadtime_windows=s.seasonal_leadtime_windows,
+        leadtime_agg_coord=leadtime_agg_coord,
+        clim_period=clim_period,
+        period_dim=period_dim,
+        periods_requested=wanted_start_periods,
+    )
+
+    if metric_agg_mode == "global":
+        return ds
+
+    if metric_agg_mode == "spatial_avg":
+        lat_dim = fc.earthml.guessed_dims.latitude
+        lon_dim = fc.earthml.guessed_dims.longitude
+
+        weights = np.cos(np.deg2rad(fc[lat_dim]))
+
+        return ds.weighted(weights).mean(
+            dim=(lat_dim, lon_dim)
+        )
+
+    raise ValueError(
+        f"Unsupported metric_agg_mode={metric_agg_mode}"
+    )
+
+
 def main() -> None:
-    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
+    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments_geomaskedmsemultiscale")
 
     plot_mode: PlotMode = "profiles"
     regenerate_plots = False
@@ -51,7 +113,7 @@ def main() -> None:
         "bias",
         # "mae",
         # "mse",
-        # "rmse",
+        "rmse",
         # "nrmse",
         # "corr",
         # "r2",
@@ -149,10 +211,10 @@ def main() -> None:
     lon_range = None
 
     wanted_start_periods = [
-        # "01",
-        # "05",
-        # "08",
-        # "10",
+        "01",
+        "05",
+        "08",
+        "10",
         "all",
     ]
 
@@ -171,17 +233,18 @@ def main() -> None:
         experiments_root,
         var_fc=variables,
         region_name=regions,
-        net_name="SmaAt_UNet",
-        target_mode="anomaly_residual",
-        extra_suffix_folder="random_split",
+        # net_name="SmaAt_UNet",
+        net_name="ConvNeXt",
+        # target_mode="anomaly_residual",
+        # extra_suffix_folder="random_split",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
 
     n = 0
     for s in settings:
-        valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
-        clim_time_range = (s.train_start, s.test_end)
+        valid_time_range = (s.train_start, s.train_end) if time_range is None else time_range
+        clim_time_range = (s.train_start, s.train_end)
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
@@ -191,145 +254,304 @@ def main() -> None:
 
         print(f"Generate {leadtime_agg_mode} {plot_mode} for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
 
+        fc, an, mlfc = get_and_subset_datasets(
+            s,
+            leadtime_units=leadtime_units,
+            lat_range=valid_lat_range,
+            lon_range=valid_lon_range,
+            time_range=valid_time_range,
+            interpolate=interpolate,
+        )
+
+        if mlfc is not None:
+            mlfc = mlfc.assign_coords(leadtime=s.leadtimes)
+
+        fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
+            s,
+            leadtime_units=leadtime_units,
+            force=force_clim_recalc,
+            clim_period=clim_period,
+            rolling_window=clim_rolling_window,
+            rolling_center=True,
+            rolling_min_periods=1,
+            lat_range=valid_lat_range,
+            lon_range=valid_lon_range,
+            time_range=clim_time_range,
+            time_start=None,
+            interpolate=interpolate,
+            engine="zarr",
+            build_analysis=build_analysis,
+            coord_rename_fc=None,
+            coord_rename_an=None,
+        )
+
+        if mlfc_clim is not None:
+            mlfc_clim = mlfc_clim.assign_coords(
+                leadtime=s.leadtimes
+            )
+
+        leadtime_dim = fc.earthml.guessed_dims.leadtime
+
+        fc = fc.sel({leadtime_dim: s.leadtimes})
+        an = an.sel({leadtime_dim: s.leadtimes})
+        fc_clim = fc_clim.sel({leadtime_dim: s.leadtimes})
+        an_clim = an_clim.sel({leadtime_dim: s.leadtimes})
+
+        # ----------------------------------------------------------
+        # Forecast corrected only by replacing forecast climatology
+        # with analysis climatology.
+        # ----------------------------------------------------------
+
+        fc_clim_da = stack_hour_clim(
+            fc_clim[s.var_fc],
+            clim_period,
+        )
+
+        an_clim_da = stack_hour_clim(
+            an_clim[s.var_an],
+            clim_period,
+        )
+
+        fc_anom_da = (
+            groupby_period(
+                fc[s.var_fc],
+                fc.earthml.guessed_dims.time,
+                clim_period,
+            )
+            - fc_clim_da
+        )
+
+        clim_fc = (
+            groupby_period(
+                fc_anom_da,
+                fc.earthml.guessed_dims.time,
+                clim_period,
+            )
+            + an_clim_da
+        ).to_dataset(name=s.var_fc)
+
+        # Analysis climatology is the appropriate forecast
+        # climatology for clim-fc.
+        an_clim_for_fc = an_clim
+
+        realization_dim = fc.earthml.guessed_dims.realization
+
+        if (
+            realization_dim is not None
+            and realization_dim in fc.dims
+            and realization_dim not in an_clim_for_fc.dims
+        ):
+            an_clim_for_fc = an_clim_for_fc.expand_dims(
+                {
+                    realization_dim: fc[realization_dim]
+                }
+            )
+
+        datasets = {
+            "fc": (fc, fc_clim),
+            "clim-fc": (clim_fc, an_clim_for_fc),
+            "mlfc": (mlfc, mlfc_clim),
+        }
 
         if plot_mode in {"profiles", "all"}:
-            deterministic_metrics = [m for m in metrics if is_deterministic(m)]
-            probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
+            deterministic_metrics = [
+                m for m in metrics
+                if is_deterministic(m)
+            ]
 
-            metrics_fc_det, metrics_mlfc_det = xr.Dataset(), xr.Dataset()
-            metrics_fc_ds_members, metrics_mlfc_ds_members = xr.Dataset(), xr.Dataset()
-            metrics_fc_prob, metrics_mlfc_prob = xr.Dataset(), xr.Dataset()
-            if len(deterministic_metrics) != 0:
-                metrics_fc_det, metrics_mlfc_det = get_scalar_metrics(
-                    s=s,
-                    fc_metrics=deterministic_metrics,
-                    mlfc_metrics=deterministic_metrics,
-                    metric_agg_mode=metric_agg_mode,
-                    leadtime_agg=leadtime_agg_mode,
-                    realization_agg=True,
-                    lat_range=lat_range,
-                    lon_range=lon_range,
-                    time_range=time_range,
-                    clim_period=clim_period,
-                    clim_rolling_window=clim_rolling_window,
-                    clim_time_range=clim_time_range,
-                    leadtime_units=leadtime_units,
-                    force_clim_recalc=force_clim_recalc,
-                    period_dim=f"start_{leadtime_units}",
-                    wanted_start_periods=wanted_start_periods,
-                    interpolate=interpolate,
-                    build_analysis=build_analysis,
-                )
+            probabilistic_metrics = [
+                m for m in metrics
+                if is_probabilistic(m)
+            ]
 
-                if plot_members:
-                    metrics_fc_ds_members, metrics_mlfc_ds_members = get_scalar_metrics(
+            metrics_by_model: dict[str, xr.Dataset] = {}
+            members_by_model: dict[str, xr.Dataset] = {}
+
+            for model, (ds, ds_clim) in datasets.items():
+                if ds is None or ds_clim is None:
+                    continue
+
+                print(f"Get {model} profile metrics")
+
+                metric_parts = []
+
+                # --------------------------------------------------
+                # Deterministic / ensemble-mean metrics
+                # --------------------------------------------------
+
+                if deterministic_metrics:
+                    metric_parts.append(
+                        get_profile_metrics(
+                            s=s,
+                            an=an,
+                            fc=ds,
+                            an_clim=an_clim,
+                            fc_clim=ds_clim,
+                            metrics=deterministic_metrics,
+                            realization_agg=True,
+                            metric_agg_mode=metric_agg_mode,
+                            leadtime_agg_mode=leadtime_agg_mode,
+                            leadtime_agg_coord=leadtime_agg_coord,
+                            clim_period=clim_period,
+                            period_dim=f"start_{leadtime_units}",
+                            wanted_start_periods=wanted_start_periods,
+                        )
+                    )
+
+                # --------------------------------------------------
+                # Probabilistic metrics require realizations
+                # --------------------------------------------------
+
+                if probabilistic_metrics:
+                    metric_parts.append(
+                        get_profile_metrics(
+                            s=s,
+                            an=an,
+                            fc=ds,
+                            an_clim=an_clim,
+                            fc_clim=ds_clim,
+                            metrics=probabilistic_metrics,
+                            realization_agg=False,
+                            metric_agg_mode=metric_agg_mode,
+                            leadtime_agg_mode=leadtime_agg_mode,
+                            leadtime_agg_coord=leadtime_agg_coord,
+                            clim_period=clim_period,
+                            period_dim=f"start_{leadtime_units}",
+                            wanted_start_periods=wanted_start_periods,
+                        )
+                    )
+
+                if metric_parts:
+                    metrics_by_model[model] = xr.merge(metric_parts)
+
+                # --------------------------------------------------
+                # Individual-member deterministic metrics
+                # --------------------------------------------------
+
+                if plot_members and deterministic_metrics:
+                    members_by_model[model] = get_profile_metrics(
                         s=s,
-                        fc_metrics=deterministic_metrics,
-                        mlfc_metrics=deterministic_metrics,
-                        metric_agg_mode=metric_agg_mode,
-                        leadtime_agg=leadtime_agg_mode,
+                        an=an,
+                        fc=ds,
+                        an_clim=an_clim,
+                        fc_clim=ds_clim,
+                        metrics=deterministic_metrics,
                         realization_agg=False,
-                        lat_range=lat_range,
-                        lon_range=lon_range,
-                        time_range=time_range,
+                        metric_agg_mode=metric_agg_mode,
+                        leadtime_agg_mode=leadtime_agg_mode,
+                        leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        clim_rolling_window=clim_rolling_window,
-                        clim_time_range=clim_time_range,
-                        leadtime_units=leadtime_units,
-                        force_clim_recalc=force_clim_recalc,
                         period_dim=f"start_{leadtime_units}",
                         wanted_start_periods=wanted_start_periods,
-                        interpolate=interpolate,
-                        build_analysis=build_analysis,
                     )
-            if len(probabilistic_metrics) != 0:
-                metrics_fc_prob, metrics_mlfc_prob = get_scalar_metrics(
-                    s=s,
-                    fc_metrics=probabilistic_metrics,
-                    mlfc_metrics=probabilistic_metrics,
-                    metric_agg_mode=metric_agg_mode,
-                    leadtime_agg=leadtime_agg_mode,
-                    realization_agg=False,
-                    lat_range=lat_range,
-                    lon_range=lon_range,
-                    time_range=time_range,
-                    clim_period=clim_period,
-                    clim_rolling_window=clim_rolling_window,
-                    clim_time_range=clim_time_range,
-                    leadtime_units=leadtime_units,
-                    force_clim_recalc=force_clim_recalc,
-                    period_dim=f"start_{leadtime_units}",
-                    wanted_start_periods=wanted_start_periods,
-                    interpolate=interpolate,
-                    build_analysis=build_analysis,
-                )
 
-            metrics_fc_ds = xr.merge([metrics_fc_det, metrics_fc_prob])
-            metrics_mlfc_ds = xr.merge([metrics_mlfc_det, metrics_mlfc_prob])
+            if not metrics_by_model:
+                print(f"No metrics available for {s.output_name}")
+                continue
 
             if materialize_once:
                 with ProgressBar():
-                    metrics_fc_ds = metrics_fc_ds.compute()
-                    metrics_mlfc_ds = metrics_mlfc_ds.compute()
-                    metrics_fc_ds_members = metrics_fc_ds_members.compute()
-                    metrics_mlfc_ds_members = metrics_mlfc_ds_members.compute()
+                    metrics_by_model = {
+                        model: ds.compute()
+                        for model, ds in metrics_by_model.items()
+                    }
 
+                    members_by_model = {
+                        model: ds.compute()
+                        for model, ds in members_by_model.items()
+                    }
+
+            # Keep the requested model order.
+            available_models = tuple(
+                model
+                for model in datasets.keys()
+                if model in metrics_by_model
+            )
+
+            # Metric must be available for every plotted model.
             available_metrics = [
-                m for m in metrics
-                if m in metrics_fc_ds.data_vars
-                and m in metrics_mlfc_ds.data_vars
-                and m != "rank_histogram"
+                metric
+                for metric in metrics
+                if metric != "rank_histogram"
+                and all(
+                    metric in metrics_by_model[model].data_vars
+                    for model in available_models
+                )
             ]
 
+            reference_ds = metrics_by_model[available_models[0]]
+
             start_periods = [
-                str(x) for x in metrics_fc_ds[f"start_{leadtime_units}"].values
+                str(x)
+                for x in reference_ds[
+                    f"start_{leadtime_units}"
+                ].values
                 if str(x) in wanted_start_periods
             ]
 
-            print(f"Plotting metric profiles {available_metrics} for periods {start_periods} for exp {s.output_name}")
+            print(
+                f"Plotting metric profiles {available_metrics} "
+                f"for periods {start_periods} "
+                f"for exp {s.output_name}"
+            )
 
-            for m in available_metrics:
-                metrics_fc_da_members = (
-                    metrics_fc_ds_members[m]
-                    if m in metrics_fc_ds_members.data_vars
-                    else None
-                )
-                metrics_mlfc_da_members = (
-                    metrics_mlfc_ds_members[m]
-                    if m in metrics_mlfc_ds_members.data_vars
-                    else None
-                )
+            for metric in available_metrics:
+                das = [
+                    metrics_by_model[model][metric]
+                    for model in available_models
+                ]
+
+                das_member = []
+
+                for model in available_models:
+                    member_ds = members_by_model.get(model)
+
+                    if (
+                        member_ds is not None
+                        and metric in member_ds.data_vars
+                    ):
+                        das_member.append(member_ds[metric])
+                    else:
+                        das_member.append(None)
 
                 for start_period in start_periods:
                     out_file = (
-                        s.plot_dir / "profiles"
+                        s.plot_dir
+                        / "profiles"
                         / safe_label(start_period)
-                        / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
-                        / m
+                        / (
+                            f"time_{safe_label(valid_time_range)}"
+                            f"_lat_{safe_label(valid_lat_range)}"
+                            f"_lon_{safe_label(valid_lon_range)}"
+                        )
+                        / metric
                         / metric_agg_mode
-                        / f"{s.var_fc}_{m}_{leadtime_agg_mode}lt.png"
+                        / (
+                            f"{s.var_fc}_{metric}_"
+                            f"{leadtime_agg_mode}lt.png"
+                        )
                     )
 
-                    if out_file.exists() and regenerate_plots == False:
+                    if out_file.exists() and not regenerate_plots:
                         continue
 
                     print(f"Saving profile {out_file}")
 
                     plot_profile(
-                        das=[metrics_fc_ds[m], metrics_mlfc_ds[m]],
+                        das=das,
                         var=s.var_fc,
-                        metric=m,
+                        metric=metric,
                         start_period=start_period,
-                        models=("fc", "mlfc"),
+                        models=available_models,
                         out_file=out_file,
                         time_range=valid_time_range,
-                        das_member=[metrics_fc_da_members, metrics_mlfc_da_members],
+                        das_member=das_member,
                         leadtime_dim=leadtime_agg_coord,
                         leadtime_unit=leadtime_units,
                         period_dim=f"start_{leadtime_units}",
                         realization_dim="realization",
                         spread="std",
-                        plot_single_members=True,
+                        plot_single_members=plot_members,
                     )
 
                     n += 1
