@@ -38,6 +38,45 @@ from earthml.plots import (
 from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 
+ImprovementMode = Literal["difference", "percentage"]
+
+
+def metric_improvement(
+    baseline: xr.DataArray,
+    corrected: xr.DataArray,
+    metric: str,
+    mode: ImprovementMode,
+) -> xr.DataArray:
+    """Return improvement of corrected over baseline.
+
+    Bias is compared by magnitude; error metrics such as RMSE are already
+    non-negative. Positive values indicate an improvement, zero no change,
+    and negative values a degradation. Difference mode uses the metric's
+    native units; percentage mode is relative to the baseline magnitude.
+    """
+    baseline_score = abs(baseline) if metric in {"bias", "bias_anom"} else baseline
+    corrected_score = abs(corrected) if metric in {"bias", "bias_anom"} else corrected
+
+    difference = baseline_score - corrected_score
+
+    if mode == "difference":
+        improvement = difference
+    elif mode == "percentage":
+        improvement = xr.where(
+            baseline_score != 0,
+            100.0 * difference / baseline_score,
+            float("nan"),
+        )
+    else:
+        raise ValueError(f"Unsupported improvement mode: {mode}")
+
+    improvement.attrs = baseline.attrs.copy()
+    if mode == "percentage":
+        improvement.attrs["units"] = "%"
+    improvement.attrs["long_name"] = f"{metric} {mode} improvement"
+    return improvement
+
+
 def main() -> None:
     experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
     fc_plot_dir = Path("/Users/jacopodallaglio/ML/training/seasonal/plots")
@@ -63,7 +102,7 @@ def main() -> None:
         "bias",
         # "mae",
         # "mse",
-        # "rmse",
+        "rmse",
         # "nrmse",
         # "corr",
         # "r2",
@@ -77,7 +116,7 @@ def main() -> None:
         # "bias_anom",
         # "mae_anom",
         # "mse_anom",
-        # "rmse_anom",
+        "rmse_anom",
         # "nrmse_anom",
         # "acc",
         # "r2_anom",
@@ -126,12 +165,12 @@ def main() -> None:
     variables = [
         # Atmo
         "mslp",
-        # "t2m",
-        # "d2m",
-        # "u10",
-        # "v10",
-        # "sst",
-        # "tprate",
+        "t2m",
+        "d2m",
+        "u10",
+        "v10",
+        "sst",
+        "tprate",
         # "tcc",
         # Ocean
         # "mlotst",
@@ -178,21 +217,36 @@ def main() -> None:
     leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
     hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
 
+    baseline_model: Literal["fc", "clim-fc"] = "fc"
+    improvement_mode: ImprovementMode = "difference"
+
     settings = get_experiment_configs(
         experiments_root,
         var_fc=variables,
         region_name=regions,
-        net_name="SmaAt_UNet",
-        target_mode="anomaly_residual",
-        extra_suffix_folder="time_split",
-        # extra_suffix_folder="random_split",
+        net_name="ConvNeXt",
+        # net_name="SmaAt_UNet",
+        # target_mode="anomaly",
+        # seasonal_encoding=True,
+        # ensemble_encoding=True,
+        # channel_representation="variable",
+        # loss_name="VarNormMaskMSELoss",
+        # loss_name="GeoMaskedMSEMultiScaleLoss",
+        loss_name="SpatialDegradationMSELoss",
+        separate_training_by_init_period=None,
+        # separate_training_by_init_period=ClimPeriod.MONTH,
+        # pretrain_norm="full",
+        # extra_suffix_folder="target_scale_degrees_30_lambda_low_freq_05",
+        # extra_suffix_folder="",
     )
+
 
     print(f"Found {len(settings)} matching experiment(s).")
 
     n = 0
     for s in settings:
-        valid_time_range = (s.train_start, s.test_end) if time_range is None else time_range
+        # valid_time_range = (s.test_start, s.test_end) if time_range is None else time_range
+        valid_time_range = (s.train_start, s.train_end) if time_range is None else time_range
         clim_time_range = (s.train_start, s.train_end)
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
@@ -267,6 +321,7 @@ def main() -> None:
         }
         ds_plot = (fc, clim_fc, mlfc) if plot_mlfc else (fc, clim_fc)
         ds_clim_plot = (fc_clim, an_clim_for_fc, mlfc_clim) if plot_mlfc else (fc_clim, an_clim_for_fc,)
+        metric_maps_by_model: dict[str, xr.Dataset] = {}
 
         for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
             if ds is None or ds_clim is None:
@@ -333,6 +388,8 @@ def main() -> None:
                     # TODO support _hour groups
                     metric_maps = metric_maps.groupby(f"{time_dim}.{hovmoller_time_agg}").mean(time_dim, skipna=True)
 
+                metric_maps_by_model[model] = metric_maps
+
                 available_metrics = [
                     str(x) for x in metric_maps.data_vars
                     if str(x) in metrics and str(x) != "rank_histogram"
@@ -346,64 +403,80 @@ def main() -> None:
                 print(f"Plotting {model} metrics {available_metrics} for periods {start_periods} for exp {s.output_name}")
 
                 for m in available_metrics:
-
                     dataarrays_to_plot = {model: metric_maps[m]}
 
-                    # if m in METRIC_IMPROVEMENT:
-                    #     datasets_to_plot["mlfc_vs_fc"] = xr.Dataset(
-                    #         {m: METRIC_IMPROVEMENT[m](fc_ds[m], mlfc_ds[m])}
-                    #     )
+                    if (
+                        model == "mlfc"
+                        and baseline_model in metric_maps_by_model
+                        and m in metric_maps_by_model[baseline_model]
+                        and m in IMPROVEMENT_PLOT_CONFIG.get(s.var_fc, {})
+                    ):
+                        baseline, corrected = xr.align(
+                            metric_maps_by_model[baseline_model][m],
+                            metric_maps[m],
+                            join="exact",
+                        )
+                        improvement_model = (
+                            f"mlfc_vs_{baseline_model}_{improvement_mode}"
+                        )
+                        dataarrays_to_plot[improvement_model] = metric_improvement(
+                            baseline,
+                            corrected,
+                            m,
+                            mode=improvement_mode,
+                        )
 
-                    for start_period in start_periods:
-                        for lead_value in metric_maps[m][leadtime_agg_coord].values:
-                            label = safe_label(lead_label(metric_maps[m], lead_value, leadtime_agg_coord))
+                    for plot_model, dataarray in dataarrays_to_plot.items():
+                        for start_period in start_periods:
+                            for lead_value in dataarray[leadtime_agg_coord].values:
+                                label = safe_label(lead_label(dataarray, lead_value, leadtime_agg_coord))
 
-                            common_path = (
-                                Path(metric_kind)
-                                / safe_label(start_period)
-                                / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
-                                / m
-                                / leadtime_agg_mode
-                            )
+                                common_path = (
+                                    Path(metric_kind)
+                                    / safe_label(start_period)
+                                    / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
+                                    / m
+                                    / leadtime_agg_mode
+                                )
 
-                            filename = f"{s.var_fc}_{m}_{model}_lead_{label}.png"
+                                filename = f"{s.var_fc}_{m}_{plot_model}_lead_{label}.png"
 
-                            out_file = model_plot_folders[model] / common_path / filename
-                            link = s.plot_dir / common_path / filename
+                                out_file = model_plot_folders[model] / common_path / filename
+                                link = s.plot_dir / common_path / filename
 
-                            if out_file.exists() and model not in regenerate_plots:
+                                if out_file.exists() and model not in regenerate_plots:
+                                    if model in ("fc", "clim-fc") and not link.exists():
+                                        link.parent.mkdir(parents=True, exist_ok=True)
+                                        link.symlink_to(out_file.resolve())
+                                    continue
+
+                                print(f"Saving map {out_file}")
+
+                                plot_map(
+                                    dataarray,
+                                    var=s.var_fc,
+                                    metric=m,
+                                    model=plot_model,
+                                    start_period=start_period,
+                                    lead_value=lead_value,
+                                    out_file=out_file,
+                                    time_range=valid_time_range,
+                                    leadtime_dim=leadtime_agg_coord,
+                                    leadtime_units=leadtime_units,
+                                    period_dim=f"start_{leadtime_units}",
+                                    clim_period=None if metric_kind=="map" else hovmoller_time_agg,
+                                    var_plot_config=VARIABLE_PLOT_CONFIG,
+                                    impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
+                                    plot_kind=metric_kind,
+                                    plot_type="contourf",
+                                    title_strftime="%Y",
+                                )
+
                                 if model in ("fc", "clim-fc") and not link.exists():
                                     link.parent.mkdir(parents=True, exist_ok=True)
                                     link.symlink_to(out_file.resolve())
-                                continue
 
-                            print(f"Saving map {out_file}")
-
-                            plot_map(
-                                metric_maps[m],
-                                var=s.var_fc,
-                                metric=m,
-                                model=model,
-                                start_period=start_period,
-                                lead_value=lead_value,
-                                out_file=out_file,
-                                time_range=valid_time_range,
-                                leadtime_dim=leadtime_agg_coord,
-                                leadtime_units=leadtime_units,
-                                period_dim=f"start_{leadtime_units}",
-                                clim_period=None if metric_kind=="map" else hovmoller_time_agg,
-                                var_plot_config=VARIABLE_PLOT_CONFIG,
-                                impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
-                                plot_kind=metric_kind,
-                                plot_type="contourf",
-                                title_strftime="%Y",
-                            )
-
-                            if model in ("fc", "clim-fc") and not link.exists():
-                                link.parent.mkdir(parents=True, exist_ok=True)
-                                link.symlink_to(out_file.resolve())
-
-                            n += 1
+                                n += 1
 
 
     # if plot_mode in {"histograms", "all"} and "rank_histogram" in metrics:
