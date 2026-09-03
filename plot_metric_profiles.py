@@ -96,7 +96,7 @@ def get_profile_metrics(
 
 
 def main() -> None:
-    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments_geomaskedmsemultiscale")
+    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
 
     plot_mode: PlotMode = "profiles"
     regenerate_plots = False
@@ -234,7 +234,7 @@ def main() -> None:
         var_fc=variables,
         region_name=regions,
         # net_name="SmaAt_UNet",
-        net_name="ConvNeXt",
+        net_name="ConvNeXtTransformerUNet",
         # target_mode="anomaly_residual",
         # extra_suffix_folder="random_split",
     )
@@ -244,6 +244,7 @@ def main() -> None:
     n = 0
     for s in settings:
         valid_time_range = (s.train_start, s.train_end) if time_range is None else time_range
+        # valid_time_range = (s.test_start, s.test_end) if time_range is None else time_range
         clim_time_range = (s.train_start, s.train_end)
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]

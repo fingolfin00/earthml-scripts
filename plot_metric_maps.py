@@ -224,7 +224,7 @@ def main() -> None:
         experiments_root,
         var_fc=variables,
         region_name=regions,
-        net_name="ConvNeXt",
+        net_name="ConvNeXtTransformerUNet",
         # net_name="SmaAt_UNet",
         # target_mode="anomaly",
         # seasonal_encoding=True,
