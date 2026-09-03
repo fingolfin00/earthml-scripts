@@ -88,7 +88,8 @@ def main() -> None:
     regenerate_plots = (
         # "fc",
         # "clim-fc",
-        "mlfc",
+        # "mlfc",
+        # "improvement",
     )
 
     force_clim_recalc = False
@@ -409,7 +410,7 @@ def main() -> None:
                         model == "mlfc"
                         and baseline_model in metric_maps_by_model
                         and m in metric_maps_by_model[baseline_model]
-                        and m in IMPROVEMENT_PLOT_CONFIG.get(s.var_fc, {})
+                        # and m in IMPROVEMENT_PLOT_CONFIG.get(s.var_fc, {})
                     ):
                         baseline, corrected = xr.align(
                             metric_maps_by_model[baseline_model][m],
@@ -444,7 +445,15 @@ def main() -> None:
                                 out_file = model_plot_folders[model] / common_path / filename
                                 link = s.plot_dir / common_path / filename
 
-                                if out_file.exists() and model not in regenerate_plots:
+                                is_improvement = plot_model != model
+
+                                force_regenerate = (
+                                    "improvement" in regenerate_plots
+                                    if is_improvement
+                                    else model in regenerate_plots
+                                )
+
+                                if out_file.exists() and not force_regenerate:
                                     if model in ("fc", "clim-fc") and not link.exists():
                                         link.parent.mkdir(parents=True, exist_ok=True)
                                         link.symlink_to(out_file.resolve())
