@@ -180,6 +180,18 @@ def seasonal_cycle_encoder(
     )
 
 
+def average_input_realizations(ds: xr.Dataset) -> xr.Dataset:
+    realization_dim = ds.earthml.guessed_dims.realization
+
+    if realization_dim is None or realization_dim not in ds.dims:
+        return ds
+
+    return ds.mean(
+        dim=realization_dim,
+        skipna=True,
+        keep_attrs=True,
+    )
+
 def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
     realization_dim = ds.earthml.guessed_dims.realization
 
@@ -299,11 +311,30 @@ def make_leadtime_pair(
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
+    input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
     materialize: bool = False,
 ) -> tuple[xr.Dataset, xr.Dataset]:
+    if input_realization_avg and ensemble_encoding:
+        raise ValueError(
+            "input_realization_avg and ensemble_encoding are mutually exclusive. "
+            "The former retains only the ensemble mean, while the latter retains "
+            "the members and adds ensemble statistics."
+        )
+
+    if input_realization_avg and target_mode in {
+        "residual_realization",
+        "anomaly_residual_realization",
+    }:
+        raise ValueError(
+            f"input_realization_avg=True is incompatible with "
+            f"target_mode={target_mode!r}. Use the deterministic target variant."
+        )
+
     def _encode_input(ds: xr.Dataset) -> xr.Dataset:
-        if ensemble_encoding:
+        if input_realization_avg:
+            ds = average_input_realizations(ds)
+        elif ensemble_encoding:
             ds = ensemble_encoder(ds)
 
         if seasonal_encoding:
@@ -526,6 +557,7 @@ def make_train_test_datasets_for_leadtime(
     dataset_kwargs: dict | None = None,
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
+    input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
     materialize: bool = False,
     separate_training_by_init_period: ClimPeriod | None = None,
@@ -589,6 +621,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
+        input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
     )
@@ -614,6 +647,7 @@ def make_train_test_datasets_for_leadtime(
             clim_period=clim_period,
             seasonal_encoding=seasonal_encoding,
             ensemble_encoding=ensemble_encoding,
+            input_realization_avg=input_realization_avg,
             interpolate_analysis=interpolate_analysis,
             materialize=materialize,
         )
@@ -649,6 +683,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
+        input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
     )
@@ -1113,6 +1148,7 @@ def print_training_recap(
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
         "training.normalization_mode": s.normalization_mode,
         "training.seasonal_encoding": s.seasonal_encoding and s.channel_representation!="init_period",
+        "training.input_realization_avg": s.input_realization_avg,
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
@@ -2345,7 +2381,7 @@ def train(
 
     dry_run = False
     force_retrain = False
-    force_test = True
+    force_test = False
     interpolate_analysis = True
     log_monthly = True
 
@@ -2409,7 +2445,8 @@ def train(
         normalization_mode="channel",
 
         seasonal_encoding=True, # automatically set to False if channel_representation="init_period"
-        ensemble_encoding=True,
+        ensemble_encoding=False,
+        input_realization_avg=False, # pass esemble mean for input
 
         # NN
         # net_name="SmaAt_UNet",
@@ -2756,6 +2793,7 @@ def train(
                     and s.channel_representation != "init_period"
                 ),
                 ensemble_encoding=s.ensemble_encoding,
+                input_realization_avg=s.input_realization_avg,
                 interpolate_analysis=interpolate_analysis,
                 materialize=False,
                 separate_training_by_init_period=(
