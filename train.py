@@ -2449,54 +2449,54 @@ def train(
         input_realization_avg=False, # pass esemble mean for input
 
         # NN
-        # net_name="SmaAt_UNet",
-        # smaatunet_kwargs=dict(
-        #     reduction_ratio=16,
-        #     depth=5,
-        #     kernels_per_layer=2,
-        #     base_channels=64,
-        #     bilinear=True,
-        #     longitude_padding="zero",
-        #     # longitude_padding = "replicate",
-        # )
-
-        net_name="ConvNeXtTransformerUNet",
-        convnext_kwargs=dict(
-            encoder_depths=(1, 1, 1),
-            decoder_depths=(1, 1),
-            dims=(8, 16, 32),
-            drop_path_rate=0.0,
-            layer_scale_init_value=1e-6,
-
-            transformer_depth=0, # disable transform block
-            transformer_heads=8,
-            transformer_mlp_ratio=4.0,
-            transformer_dropout=0.0,
-
-            refinement_depth=2,
-
-            zero_init_output=True,
-            longitude_padding="circular",
+        net_name="SmaAt_UNet",
+        smaatunet_kwargs=dict(
+            reduction_ratio=16,
+            depth=5,
+            kernels_per_layer=2,
+            base_channels=64,
+            bilinear=True,
+            longitude_padding="zero",
+            # longitude_padding = "replicate",
         ),
 
-        convnext_kwargs = dict(
-            encoder_depths=(2, 2, 3, 3),
-            decoder_depths=(2, 2, 2),
-            dims=(32, 64, 128, 256),
+        # net_name="ConvNeXtTransformerUNet",
+        # convnext_kwargs=dict(
+        #     encoder_depths=(1, 1, 1),
+        #     decoder_depths=(1, 1),
+        #     dims=(8, 16, 32),
+        #     drop_path_rate=0.0,
+        #     layer_scale_init_value=1e-6,
 
-            drop_path_rate=0.2,
-            layer_scale_init_value=1e-6,
+        #     transformer_depth=0, # disable transform block
+        #     transformer_heads=8,
+        #     transformer_mlp_ratio=4.0,
+        #     transformer_dropout=0.0,
 
-            transformer_depth=1,
-            transformer_heads=8,
-            transformer_mlp_ratio=4.0,
-            transformer_dropout=0.0,
+        #     refinement_depth=2,
 
-            refinement_depth=2,
+        #     zero_init_output=True,
+        #     longitude_padding="circular",
+        # ),
 
-            zero_init_output=True,
-            longitude_padding="circular",
-        )
+        # convnext_kwargs = dict(
+        #     encoder_depths=(2, 2, 3, 3),
+        #     decoder_depths=(2, 2, 2),
+        #     dims=(32, 64, 128, 256),
+
+        #     drop_path_rate=0.2,
+        #     layer_scale_init_value=1e-6,
+
+        #     transformer_depth=1,
+        #     transformer_heads=8,
+        #     transformer_mlp_ratio=4.0,
+        #     transformer_dropout=0.0,
+
+        #     refinement_depth=2,
+
+        #     zero_init_output=True,
+        #     longitude_padding="circular",
+        # )
 
         # Loss
         # loss_name="MSELoss",
