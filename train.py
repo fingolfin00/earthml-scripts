@@ -132,6 +132,76 @@ def add_or_set_leadtime(ds: xr.Dataset, lt: int) -> xr.Dataset:
     return ds.expand_dims(leadtime=[lt])
 
 
+def spatial_position_encoder(
+    ds: xr.Dataset,
+    *,
+    latitude_dim: str | None = None,
+    longitude_dim: str | None = None,
+) -> xr.Dataset:
+    """
+    Add static spherical position channels.
+
+    Channels:
+        latitude_sin  = sin(latitude)
+        latitude_cos  = cos(latitude)
+        longitude_sin = sin(longitude)
+        longitude_cos = cos(longitude)
+
+    Latitude/longitude are interpreted in degrees.
+    """
+
+    if latitude_dim is None:
+        latitude_dim = ds.earthml.guessed_dims.latitude
+
+    if longitude_dim is None:
+        longitude_dim = ds.earthml.guessed_dims.longitude
+
+    if latitude_dim is None or latitude_dim not in ds.dims:
+        raise ValueError("Could not determine latitude dimension.")
+
+    if longitude_dim is None or longitude_dim not in ds.dims:
+        raise ValueError("Could not determine longitude dimension.")
+
+    latitude = np.deg2rad(
+        ds[latitude_dim].values.astype(np.float32)
+    )
+
+    longitude = np.deg2rad(
+        ds[longitude_dim].values.astype(np.float32)
+    )
+
+    spatial = xr.Dataset(
+        {
+            "latitude_sin": (
+                (latitude_dim,),
+                np.sin(latitude).astype(np.float32),
+            ),
+            "latitude_cos": (
+                (latitude_dim,),
+                np.cos(latitude).astype(np.float32),
+            ),
+            "longitude_sin": (
+                (longitude_dim,),
+                np.sin(longitude).astype(np.float32),
+            ),
+            "longitude_cos": (
+                (longitude_dim,),
+                np.cos(longitude).astype(np.float32),
+            ),
+        },
+        coords={
+            latitude_dim: ds[latitude_dim],
+            longitude_dim: ds[longitude_dim],
+        },
+    )
+
+    return xr.merge(
+        [ds, spatial],
+        compat="equals",
+        join="exact",
+    )
+
+
 def seasonal_cycle_encoder(
     ds: xr.Dataset,
     *,
@@ -310,6 +380,7 @@ def make_leadtime_pair(
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
+    spatial_encoding: bool = False,
     ensemble_encoding: bool = False,
     input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
@@ -343,6 +414,9 @@ def make_leadtime_pair(
                 leadtime=leadtime,
                 leadtime_unit=leadtime_unit,
             )
+
+        if spatial_encoding:
+            ds = spatial_position_encoder(ds)
 
         return ds
 
@@ -557,6 +631,7 @@ def make_train_test_datasets_for_leadtime(
     dataset_kwargs: dict | None = None,
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
+    spatial_encoding: bool = False,
     input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
     materialize: bool = False,
@@ -621,6 +696,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
+        spatial_encoding=spatial_encoding,
         input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
@@ -647,6 +723,7 @@ def make_train_test_datasets_for_leadtime(
             clim_period=clim_period,
             seasonal_encoding=seasonal_encoding,
             ensemble_encoding=ensemble_encoding,
+            spatial_encoding=spatial_encoding,
             input_realization_avg=input_realization_avg,
             interpolate_analysis=interpolate_analysis,
             materialize=materialize,
@@ -683,6 +760,7 @@ def make_train_test_datasets_for_leadtime(
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
+        spatial_encoding=spatial_encoding,
         input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
@@ -1148,6 +1226,7 @@ def print_training_recap(
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
         "training.normalization_mode": s.normalization_mode,
         "training.seasonal_encoding": s.seasonal_encoding and s.channel_representation!="init_period",
+        "training.spatial_encoding": s.spatial_encoding,
         "training.input_realization_avg": s.input_realization_avg,
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
@@ -1735,9 +1814,17 @@ def _core_train(
         else:
             raise ValueError(f"normalization={s.normalization} not supported.")
 
+        n_excluded_channels = 0
+
+        if s.seasonal_encoding and s.channel_representation != "init_period":
+            n_excluded_channels += 4
+
+        if s.spatial_encoding:
+            n_excluded_channels += 4
+
         input_excluded_channels = (
-            (-4, -3, -2, -1)
-            if s.seasonal_encoding and s.channel_representation!="init_period"
+            tuple(range(-n_excluded_channels, 0))
+            if n_excluded_channels > 0
             else None
         )
 
@@ -2446,6 +2533,7 @@ def train(
 
         seasonal_encoding=True, # automatically set to False if channel_representation="init_period"
         ensemble_encoding=False,
+        spatial_encoding=False,
         input_realization_avg=False, # pass esemble mean for input
 
         # NN
@@ -2796,6 +2884,7 @@ def train(
                     and s.channel_representation != "init_period"
                 ),
                 ensemble_encoding=s.ensemble_encoding,
+                spatial_encoding=s.spatial_encoding,
                 input_realization_avg=s.input_realization_avg,
                 interpolate_analysis=interpolate_analysis,
                 materialize=False,
