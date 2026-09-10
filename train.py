@@ -1731,6 +1731,7 @@ def _core_train(
     leadtime: int | float | str,
     log_monthly: bool = False,
     close_datasets: bool = True,
+    num_samples: int | None = None,
 ):
     logger = get_logger()
 
@@ -1992,6 +1993,7 @@ def _core_train(
             persistent_workers=None, # True if num_workers > 0
             drop_last_train=False,
             group_batches_by_month=True,
+            num_samples=num_samples,
         )
 
         if s.split_strategy == "explicit":
@@ -2674,6 +2676,9 @@ def train(
         trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
 
+    # num_samples = 295
+    num_samples = None
+
     dataset_kwargs = {
         "target_realization_avg": s.target_realization_avg,
         "channel_representation": s.channel_representation,
@@ -3092,6 +3097,7 @@ def train(
                     # datasets; close the bases once after all experiments for
                     # this leadtime have finished.
                     close_datasets=not defer_dataset_creation,
+                    num_samples=num_samples,
                 )
 
                 train_pred_paths.append(
