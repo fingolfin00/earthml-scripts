@@ -218,6 +218,7 @@ def main() -> None:
     # inference_period = None
     inference_period = ("2025-01-01", "2025-10-10")
 
+    leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
     hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
 
     baseline_model: Literal["fc", "clim-fc"] = "fc"
