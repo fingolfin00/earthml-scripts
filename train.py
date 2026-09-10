@@ -1837,6 +1837,9 @@ def _core_train(
             dim="x",
         )
 
+        # import copy
+        # normalize_target = copy.deepcopy(normalize_input) # NOAA behavior, target and input normalizers are the same
+
         normalize_target = NormClass(
             mode=s.normalization_mode,
             exclude_channels=None,
