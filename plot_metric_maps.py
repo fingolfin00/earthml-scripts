@@ -376,7 +376,7 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{leadtime_units}",
+                        period_dim=f"start_{clim_period}",
                         periods_requested=wanted_start_periods,
                         align=False,
                         fair_correction=False,
@@ -396,7 +396,7 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{leadtime_units}",
+                        period_dim=f"start_{clim_period}",
                         periods_requested=wanted_start_periods,
                         align=False,
                         fair_correction=False,
@@ -424,7 +424,7 @@ def main() -> None:
                 ]
 
                 start_periods = [
-                    str(x) for x in metric_maps[f"start_{leadtime_units}"].values
+                    str(x) for x in metric_maps[f"start_{clim_period}"].values
                     if str(x) in wanted_start_periods
                 ]
 
@@ -499,7 +499,7 @@ def main() -> None:
                                     time_range=valid_time_range,
                                     leadtime_dim=leadtime_agg_coord,
                                     leadtime_units=leadtime_units,
-                                    period_dim=f"start_{leadtime_units}",
+                                    period_dim=f"start_{clim_period}",
                                     clim_period=None if metric_kind=="map" else hovmoller_time_agg,
                                     var_plot_config=VARIABLE_PLOT_CONFIG,
                                     impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
