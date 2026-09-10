@@ -215,7 +215,9 @@ def main() -> None:
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
 
-    leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
+    # inference_period = None
+    inference_period = ("2025-01-01", "2025-10-10")
+
     hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
 
     baseline_model: Literal["fc", "clim-fc"] = "fc"
@@ -246,9 +248,32 @@ def main() -> None:
 
     n = 0
     for s in settings:
-        # valid_time_range = (s.test_start, s.test_end) if time_range is None else time_range
-        valid_time_range = (s.train_start, s.train_end) if time_range is None else time_range
-        clim_time_range = (s.train_start, s.train_end)
+        if inference_period is None:
+            valid_time_range = (
+                (s.test_start, s.test_end)
+                # (s.train_start, s.train_end)
+                if time_range is None
+                else time_range
+            )
+            mlfc_path = None
+
+        else:
+            valid_time_range = (
+                inference_period
+                if time_range is None
+                else time_range
+            )
+
+            inference_start, inference_end = inference_period
+
+            mlfc_path = (
+                s.exp_dir
+                / "inference"
+                / f"{inference_start}_{inference_end}"
+                / "test_corrected.zarr"
+            )
+        # clim_time_range = (s.train_start, s.train_end)
+        clim_time_range = (s.train_start, s.val_end)
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
@@ -265,6 +290,7 @@ def main() -> None:
             lon_range=valid_lon_range,
             time_range=valid_time_range,
             interpolate=interpolate,
+            mlfc_path=mlfc_path,
         )
         mlfc = mlfc.assign_coords(leadtime=s.leadtimes) if mlfc is not None else None
 
