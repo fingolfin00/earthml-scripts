@@ -925,7 +925,7 @@ def init_callbacks(
         dirpath=ckpt_folder_path,
         every_n_epochs=1,
         save_last=True,
-        save_top_k=0,
+        save_top_k=1,
         filename="checkpoint",
         enable_version_counter=False,
     )
