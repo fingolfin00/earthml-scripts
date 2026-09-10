@@ -1995,7 +1995,8 @@ def _core_train(
             pin_memory=None, # True if CUDA available
             persistent_workers=None, # True if num_workers > 0
             drop_last_train=False,
-            group_batches_by_month=(s.normalization == "monthly"),
+            group_batches_by_month=False,
+            # group_batches_by_month=(s.normalization == "monthly"),
             num_samples=num_samples,
         )
 
