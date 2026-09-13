@@ -221,6 +221,8 @@ def main() -> None:
     leadtime_units = LeadtimeUnit.MONTHS
     clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
     clim_rolling_window = None
+    # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
+    # clim_rolling_window = 31
 
     time_range = None
     # time_range = ("2018-01-01", "2022-12-31")
