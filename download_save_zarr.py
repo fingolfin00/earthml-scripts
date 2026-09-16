@@ -15,6 +15,9 @@ from rich import print
 
 from earthml import Settings
 
+# Run these in Juno
+# export SSL_CERT_FILE="$(uv run python -c 'import certifi; print(certifi.where())')"
+# export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
 
 # =============================================================================
 # Configuration
@@ -22,6 +25,7 @@ from earthml import Settings
 
 s = Settings()
 
+# OUTDIR_ROOT = Path("/work/cmcc/jd19424/ML/MLBC/data/seasonal/download")
 OUTDIR_ROOT = Path("/Users/jacopodallaglio/ML/training/seasonal/data/download")
 OUTDIR_SPS4 = OUTDIR_ROOT / "sps4_seasonal"
 OUTDIR_ERA5 = OUTDIR_ROOT / "era5_monthly"
@@ -101,9 +105,14 @@ CANONICAL_VARS = {
     "mlotstheta001": "mlotst",
     "somxl010": "mlotst",
 }
-
 OUTDIR_ZARR = Path("/Users/jacopodallaglio/ML/training/seasonal/data/input")
+# OUTDIR_ZARR = Path("/work/cmcc/jd19424/ML/MLBC/data/orography")
 OUTDIR_ZARR.mkdir(parents=True, exist_ok=True)
+
+ERA5_GEOPOTENTIAL_FILE = OUTDIR_ERA5 / "era5_geopotential.nc"
+ERA5_OROGRAPHY_ZARR = OUTDIR_ZARR / "era5_orography.zarr"
+
+GRAVITY = 9.80665
 
 # =============================================================================
 # Download
@@ -309,6 +318,19 @@ def era5_request(long_var: str, year: str) -> dict[str, Any]:
     }
 
 
+def era5_geopotential_request() -> dict[str, Any]:
+    return {
+        "product_type": ["reanalysis"],
+        "variable": ["geopotential"],
+        "year": ["2020"],
+        "month": ["01"],
+        "day": ["01"],
+        "time": ["00:00"],
+        "area": GLOBAL_AREA,
+        "data_format": "netcdf",
+    }
+
+
 def oras5_request(long_var: str, year: str, product_type: str) -> dict[str, Any]:
     return {
         "product_type": [product_type],
@@ -344,6 +366,18 @@ def download_sps4_ocean() -> None:
                 target = OUTDIR_SPS4 / f"cmcc_sps4_ocean_{short_var}_{year}_{month}.nc"
                 request = sps4_ocean_request(long_var, year, month)
                 download_file(dataset, request, target)
+
+
+def download_era5_geopotential() -> None:
+    dataset = "reanalysis-era5-single-levels"
+
+    request = era5_geopotential_request()
+
+    download_file(
+        dataset,
+        request,
+        ERA5_GEOPOTENTIAL_FILE,
+    )
 
 
 def download_era5_monthly() -> None:
@@ -609,6 +643,55 @@ def save_oras5_to_zarr():
     )
 
 
+def save_era5_orography_to_zarr() -> None:
+    print("[bold]Processing ERA5 orography[/bold]")
+
+    with xr.open_dataset(
+        ERA5_GEOPOTENTIAL_FILE,
+        decode_times=True,
+        decode_timedelta=False,
+    ) as ds:
+        ds = ds.load()
+
+    ds = ds.earthml.normalize_dims_and_coords()
+    ds = fix_lon(ds)
+    ds = clean_time_names(ds)
+
+    if "z" in ds:
+        geopotential = ds["z"]
+    elif "geopotential" in ds:
+        geopotential = ds["geopotential"]
+    else:
+        raise KeyError(
+            "Geopotential variable not found. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    # Geopotential is static: remove singleton time dimension.
+    if "time" in geopotential.dims:
+        geopotential = geopotential.isel(time=0, drop=True)
+
+    # Convert geopotential [m2 s-2] to geopotential height [m].
+    orography = geopotential / GRAVITY
+
+    orography = orography.rename("orography")
+
+    orography.attrs = {
+        **geopotential.attrs,
+        "units": "m",
+        "long_name": "ERA5 orography",
+        "description": "ERA5 surface geopotential divided by standard gravity",
+    }
+
+    save_zarr(
+        orography.to_dataset(),
+        ERA5_OROGRAPHY_ZARR,
+        chunks={
+            "latitude": -1,
+            "longitude": -1,
+        },
+    )
+
 # =============================================================================
 # Forecast helpers
 # =============================================================================
@@ -800,8 +883,11 @@ def main() -> None:
     # download_era5_monthly()
     # save_era5_to_zarr()
 
-    download_oras5_monthly()
-    save_oras5_to_zarr()
+    # download_oras5_monthly()
+    # save_oras5_to_zarr()
+
+    download_era5_geopotential()
+    save_era5_orography_to_zarr()
 
 if __name__ == "__main__":
     main()
