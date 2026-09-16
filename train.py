@@ -1733,7 +1733,8 @@ def _core_train(
     leadtime: int | float | str,
     log_monthly: bool = False,
     close_datasets: bool = True,
-    num_samples: int | None = None,
+    train_subsamples: int | None = None,
+    val_subsamples: int | None = None,
 ):
     logger = get_logger()
 
@@ -1999,7 +2000,8 @@ def _core_train(
             drop_last_train=False,
             group_batches_by_month=False,
             # group_batches_by_month=(s.normalization == "monthly"),
-            num_samples=num_samples,
+            train_subsamples=train_subsamples,
+            val_subsamples=val_subsamples,
         )
 
         train_datamodule.setup("fit")
@@ -2715,15 +2717,17 @@ def train(
         # training_norm="LayerNorm",
         train_fraction=0.90,
         accumulate_grad_batches=2,
-        early_stopping_patience=20,
-        # early_stopping_patience=30,
+        # early_stopping_patience=20,
+        early_stopping_patience=30,
 
         torch_workers=4,
         trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
 
-    # num_samples = 264
-    num_samples = None
+    # train_subsamples = 264
+    # val_subsamples = 72
+    train_subsamples = None
+    val_subsamples = None
 
     dataset_kwargs = {
         "target_realization_avg": s.target_realization_avg,
@@ -3143,7 +3147,8 @@ def train(
                     # datasets; close the bases once after all experiments for
                     # this leadtime have finished.
                     close_datasets=not defer_dataset_creation,
-                    num_samples=num_samples,
+                    train_subsamples=train_subsamples,
+                    val_subsamples=val_subsamples,
                 )
 
                 train_pred_paths.append(
