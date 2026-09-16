@@ -2475,6 +2475,7 @@ def train(
     force_test = False
     interpolate_analysis = True
     log_monthly = True
+    # log_monthly = False
 
     accelerator, device = resolve_accelerator_and_device()
 
@@ -2486,10 +2487,15 @@ def train(
         data_root_dir=None,
         exp_root_dir=None,
         plot_root_dir=None,
+        # root_dir=None,
+        # data_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo"),
+        # exp_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"),
+        # plot_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo"),
     
         extra_suffix_folder="",
 
         lead_period_offset=-1,
+        # lead_period_offset=0,
 
         var_file_fc=var,
         var_file_an=var,
@@ -2498,13 +2504,19 @@ def train(
 
         model_fc=f"sps4_{var_type_fc}",
         model_an=reanalysis_model,
+        # model_fc="forecast",
+        # model_an="analysis",
 
         leadtime_unit=LeadtimeUnit.MONTHS,
         # leadtimes=[3, 4, 5],
         leadtimes=[1, 2, 3, 4, 5, 6],
+        # leadtime_unit=LeadtimeUnit.HOURS,
+        # leadtimes=[12, 24, 36, 48, 60, 72],
+        # # leadtimes=[72,],
+        # seasonal_window_size = 1,
 
-        separate_training_by_init_period=ClimPeriod.MONTH,
-        # separate_training_by_init_period=None,
+        # separate_training_by_init_period=ClimPeriod.MONTH,
+        separate_training_by_init_period=None,
 
         regional_training=False,
         regional_training_lat_size=60.0,
@@ -2512,16 +2524,24 @@ def train(
         region_name=region_name,
         region=region_location,
 
-        train_start="1993-01-01",
-        # train_end="2020-12-01",
-        train_end="2014-12-01",
-        val_start="2015-01-01",
-        val_end="2020-12-01",
-        test_start="2021-01-01",
-        test_end="2025-12-01",
+        # short experiment
+        # train_start="2022-01-01",
+        # train_end="2022-05-12", # 132nd day of the year (264 train samples)
+        # val_start="2023-05-13",
+        # val_end="2023-06-13", # 164th day of the year (72 val samples)
+        # test_start="2025-01-01",
+        # test_end="2025-10-01",
 
-        target_mode="anomaly_residual_realization",
+        train_start="2019-10-14", # some data removed
+        train_end="2023-12-31", # ignored if split strategy is time/random
+        val_start="2024-01-01", # ignored if split strategy is time/random
+        val_end="2024-12-31",
+        test_start="2025-01-01",
+        test_end="2025-10-01",
 
+        target_mode="analysis",
+
+        # clim_period=ClimPeriod.DAYOFYEAR_HOUR,
         clim_period=ClimPeriod.MONTH,
 
         seed=42,
@@ -2535,7 +2555,7 @@ def train(
         normalization="full",
         normalization_mode="channel",
 
-        seasonal_encoding=True, # automatically set to False if channel_representation="init_period"
+        seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
         ensemble_encoding=False,
         spatial_encoding=False,
         input_realization_avg=False, # pass esemble mean for input
@@ -2549,6 +2569,7 @@ def train(
             base_channels=64,
             bilinear=True,
             longitude_padding="zero",
+            # longitude_padding = "circular",
             # longitude_padding = "replicate",
         ),
 
@@ -2561,13 +2582,16 @@ def train(
         #     layer_scale_init_value=1e-6,
 
         #     transformer_depth=0, # disable transform block
+        #     transformer_depth=1, # enable depth 1 transform block
         #     transformer_heads=8,
         #     transformer_mlp_ratio=4.0,
         #     transformer_dropout=0.0,
 
         #     refinement_depth=2,
 
-        #     zero_init_output=True,
+        #     # zero_init_output=True,
+        #     # longitude_padding="zero",
+        #     # longitude_padding = "replicate",
         #     longitude_padding="circular",
         # ),
 
@@ -2575,8 +2599,9 @@ def train(
         #     encoder_depths=(2, 2, 3, 3),
         #     decoder_depths=(2, 2, 2),
         #     dims=(32, 64, 128, 256),
+        #     stem_stride=1,
 
-        #     drop_path_rate=0.2,
+        #     drop_path_rate=0.1,
         #     layer_scale_init_value=1e-6,
 
         #     transformer_depth=1,
@@ -2586,9 +2611,11 @@ def train(
 
         #     refinement_depth=2,
 
-        #     zero_init_output=True,
-        #     longitude_padding="circular",
-        # )
+        #     # zero_init_output=True,
+        #     longitude_padding="zero",
+        #     # longitude_padding = "replicate",
+        #     # longitude_padding="circular",
+        # ),
 
         # Loss
         # loss_name="MSELoss",
@@ -2661,24 +2688,28 @@ def train(
         ),
 
         init_learning_rate=1e-4,
+        # init_learning_rate=1e-3,
         # weight_decay=1e-3,
         weight_decay=1e-4,
+        # weight_decay=0,
         batch_size=16,
         max_epochs=50,
+        # max_epochs=100,
         target_realization_avg=False,
         fill_nan_value=0.0,
         torch_mask="target",
-        training_norm="LayerNorm", # ignored for convnext (uses only LayerNorm)
-
-        train_fraction=0.85,
-        accumulate_grad_batches=1,
+        training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
+        # training_norm="LayerNorm",
+        train_fraction=0.90,
+        accumulate_grad_batches=2,
         early_stopping_patience=20,
+        # early_stopping_patience=30,
 
         torch_workers=4,
         trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
 
-    # num_samples = 295
+    # num_samples = 264
     num_samples = None
 
     dataset_kwargs = {
