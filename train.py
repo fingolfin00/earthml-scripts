@@ -2000,12 +2000,10 @@ def _core_train(
             num_samples=num_samples,
         )
 
-        if s.split_strategy == "explicit":
-            train_idx, val_idx = None, None
-        else:
-            train_datamodule.setup("fit")
-            train_idx = train_datamodule.train_indices
-            val_idx = train_datamodule.val_indices
+        train_datamodule.setup("fit")
+
+        train_idx = train_datamodule.train_indices
+        val_idx = train_datamodule.val_indices
 
         debug_month_sampler = False
 
