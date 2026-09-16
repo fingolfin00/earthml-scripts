@@ -1,4 +1,4 @@
-from typing import Sequence, Literal, TypedDict
+from typing import Sequence, Literal, TypedDict, Mapping
 
 from pathlib import Path
 
@@ -377,6 +377,8 @@ def make_leadtime_pair(
     end: str,
     fc_clim: xr.Dataset | None,
     an_clim: xr.Dataset | None,
+    target_forecast_var: str,
+    target_analysis_var: str,
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
@@ -403,6 +405,7 @@ def make_leadtime_pair(
         )
 
     def _encode_input(ds: xr.Dataset) -> xr.Dataset:
+        """Stack input channels"""
         if input_realization_avg:
             ds = average_input_realizations(ds)
         elif ensemble_encoding:
@@ -443,20 +446,45 @@ def make_leadtime_pair(
             f"leadtime={leadtime} {leadtime_unit.value}"
         )
 
+    if target_forecast_var not in fc_period_ds.data_vars:
+        raise KeyError(
+            f"Target forecast variable {target_forecast_var!r} is missing. "
+            f"Available forecast variables: {list(fc_period_ds.data_vars)}"
+        )
+
+    if target_analysis_var not in an_period_ds.data_vars:
+        raise KeyError(
+            f"Target analysis variable {target_analysis_var!r} is missing. "
+            f"Available analysis variables: {list(an_period_ds.data_vars)}"
+        )
+
     if target_mode == "analysis":
-        return _encode_input(fc_period_ds), an_period_ds
+        return (
+            _encode_input(fc_period_ds),
+            an_period_ds[[target_analysis_var]],
+        )
 
     if target_mode == "residual":
-        fc_base = (
-            fc_period_ds.mean("realization")
-            if "realization" in fc_period_ds.dims
-            else fc_period_ds
+        fc_target = fc_period_ds[target_forecast_var]
+        fc_target = (
+            fc_target.mean("realization")
+            if "realization" in fc_target.dims
+            else fc_target
         )
-        target_ds = an_period_ds - fc_base
+
+        target = (
+            an_period_ds[target_analysis_var]
+            - fc_target
+        )
+        target_ds = target.rename(target_analysis_var).to_dataset()
         return _encode_input(fc_period_ds), target_ds
 
     if target_mode == "residual_realization":
-        target_ds = an_period_ds - fc_period_ds
+        target = (
+            an_period_ds[target_analysis_var]
+            - fc_period_ds[target_forecast_var]
+        )
+        target_ds = target.rename(target_analysis_var).to_dataset()
         return _encode_input(fc_period_ds), target_ds
 
     if fc_clim is None or an_clim is None:
@@ -496,19 +524,36 @@ def make_leadtime_pair(
     an_anom = (an_period_ds - an_clim_for_period).unify_chunks()
 
     if target_mode == "anomaly":
-        return _encode_input(fc_anom), an_anom
+        return (
+            _encode_input(fc_anom),
+            an_anom[[target_analysis_var]],
+        )
 
     if target_mode == "anomaly_residual":
-        fc_anom_base = (
-            fc_anom.mean("realization")
-            if "realization" in fc_anom.dims
-            else fc_anom
+        fc_target_anom = fc_anom[target_forecast_var]
+        fc_target_anom = (
+            fc_target_anom.mean("realization")
+            if "realization" in fc_target_anom.dims
+            else fc_target_anom
         )
-        target_anom_ds = an_anom - fc_anom_base
+
+        target_anom = (
+            an_anom[target_analysis_var]
+            - fc_target_anom
+        )
+        target_anom_ds = target_anom.rename(
+            target_analysis_var
+        ).to_dataset()
         return _encode_input(fc_anom), target_anom_ds
 
     if target_mode == "anomaly_residual_realization":
-        target_anom_ds = an_anom - fc_anom
+        target_anom = (
+            an_anom[target_analysis_var]
+            - fc_anom[target_forecast_var]
+        )
+        target_anom_ds = target_anom.rename(
+            target_analysis_var
+        ).to_dataset()
         return _encode_input(fc_anom), target_anom_ds
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
@@ -612,9 +657,145 @@ def make_region_dataset(
     )
 
 
+def open_forecast_variables(
+    paths: Mapping[str, str | Path],
+) -> xr.Dataset:
+    """
+    Lazily open separate forecast Zarr stores and merge their requested
+    variables into a single multivariate dataset.
+
+    Forecast initialization times are intersected explicitly because variable
+    stores may cover slightly different periods. Every other coordinate must
+    match exactly, so grids, leads, and ensemble members cannot be silently
+    cropped.
+    """
+    if not paths:
+        raise ValueError(
+            "At least one forecast input variable is required"
+        )
+
+    opened_datasets: list[xr.Dataset] = []
+
+    try:
+        for variable, path in paths.items():
+            ds = open_zarr(path)
+
+            if variable not in ds.data_vars:
+                available = list(ds.data_vars)
+                ds.close()
+                raise KeyError(
+                    f"Variable {variable!r} not found in {path}. "
+                    f"Available variables: {available}"
+                )
+
+            opened_datasets.append(ds[[variable]])
+
+        time_dims = {
+            ds.earthml.guessed_dims.time
+            for ds in opened_datasets
+        }
+
+        if None in time_dims or len(time_dims) != 1:
+            raise ValueError(
+                "Forecast input stores do not use one common time "
+                f"dimension: {time_dims}"
+            )
+
+        time_dim = next(iter(time_dims))
+        common_time = opened_datasets[0].get_index(time_dim)
+
+        if not common_time.is_unique:
+            first_variable = next(iter(paths))
+            raise ValueError(
+                f"Forecast variable {first_variable!r} contains "
+                "duplicate time coordinates"
+            )
+
+        for variable, ds in zip(
+            list(paths)[1:],
+            opened_datasets[1:],
+            strict=True,
+        ):
+            variable_time = ds.get_index(time_dim)
+
+            if not variable_time.is_unique:
+                raise ValueError(
+                    f"Forecast variable {variable!r} contains "
+                    "duplicate time coordinates"
+                )
+
+            common_time = common_time.intersection(
+                variable_time,
+                sort=False,
+            )
+
+        if common_time.empty:
+            raise ValueError(
+                "Forecast input variables have no common time samples"
+            )
+
+        logger = get_logger()
+        time_aligned_datasets: list[xr.Dataset] = []
+
+        for (variable, _), ds in zip(
+            paths.items(),
+            opened_datasets,
+            strict=True,
+        ):
+            original_size = ds.sizes[time_dim]
+            dropped = original_size - len(common_time)
+
+            if dropped:
+                logger.print(
+                    f"[yellow]Multivariate time alignment: "
+                    f"{variable} keeps {len(common_time)}/{original_size} "
+                    f"samples ({dropped} dropped).[/yellow]"
+                )
+
+            time_aligned_datasets.append(
+                ds.sel({time_dim: common_time})
+            )
+
+        # Time now matches by construction. Exact alignment here verifies all
+        # remaining indexed coordinates, including lead time, realization,
+        # latitude, and longitude.
+        aligned_datasets = xr.align(
+            *time_aligned_datasets,
+            join="exact",
+            copy=False,
+        )
+
+        merged = xr.merge(
+            aligned_datasets,
+            join="exact",
+            compat="no_conflicts",
+            combine_attrs="drop_conflicts",
+        )
+
+    except Exception:
+        for ds in opened_datasets:
+            try:
+                ds.close()
+            except Exception:
+                pass
+        raise
+
+    def _close_sources() -> None:
+        for ds in opened_datasets:
+            try:
+                ds.close()
+            except Exception:
+                pass
+
+    merged.set_close(_close_sources)
+    return merged
+
+
 def make_train_test_datasets_for_leadtime(
-    forecast_ds_path: str | Path,
+    forecast_ds_paths: Mapping[str, str | Path],
     analysis_ds_path: str | Path,
+    target_forecast_var: str,
+    target_analysis_var: str,
     leadtime: int | float,
     leadtime_unit: LeadtimeUnit,
     train_start: str,
@@ -645,7 +826,7 @@ def make_train_test_datasets_for_leadtime(
     lon = region["lon"] if region is not None else None
     lat = region["lat"] if region is not None else None
 
-    fc_ds = open_zarr(forecast_ds_path)
+    fc_ds = open_forecast_variables(forecast_ds_paths)
     an_ds = open_zarr(analysis_ds_path)
 
     if forecast_vars is not None:
@@ -692,6 +873,8 @@ def make_train_test_datasets_for_leadtime(
         end=train_end,
         fc_clim=fc_clim,
         an_clim=an_clim,
+        target_forecast_var=target_forecast_var,
+        target_analysis_var=target_analysis_var,
         target_mode=target_mode,
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
@@ -719,6 +902,8 @@ def make_train_test_datasets_for_leadtime(
             end=val_end,
             fc_clim=fc_clim,
             an_clim=an_clim,
+            target_forecast_var=target_forecast_var,
+            target_analysis_var=target_analysis_var,
             target_mode=target_mode,
             clim_period=clim_period,
             seasonal_encoding=seasonal_encoding,
@@ -756,6 +941,8 @@ def make_train_test_datasets_for_leadtime(
         end=test_end,
         fc_clim=fc_clim,
         an_clim=an_clim,
+        target_forecast_var=target_forecast_var,
+        target_analysis_var=target_analysis_var,
         target_mode=target_mode,
         clim_period=clim_period,
         seasonal_encoding=seasonal_encoding,
@@ -1157,6 +1344,7 @@ def print_training_recap(
     normalization_name: str,
     n_channels: int,
     n_classes: int,
+    input_variables: Sequence[str],
     longitude_padding: str,
     dry_run: bool,
     force_retrain: bool,
@@ -1191,6 +1379,7 @@ def print_training_recap(
         "experiment.regional_training": f"{s.regional_training}, {region_name} [lat={s.regional_training_lat_size} x lon={s.regional_training_lon_size}]",
 
         "data.forecast": f"{s.model_fc}/{s.var_fc}",
+        "data.input_variables": tuple(input_variables),
         "data.analysis": f"{s.model_an}/{s.var_an}",
         "data.full_region": f"{s.region_name} {s.region}",
         "data.train_period": f"{s.train_start} → {s.train_end}",
@@ -2109,6 +2298,7 @@ def _core_train(
             normalization_name=type(normalize_input).__name__,
             n_channels=n_channels,
             n_classes=n_classes,
+            input_variables=tuple(train_dataset.input_ds.data_vars),
             longitude_padding=longitude_padding,
             dry_run=dry_run,
             force_retrain=force_retrain,
@@ -2151,6 +2341,9 @@ def _core_train(
                 "normalization_mode": s.normalization_mode,
                 "seasonal_encoding": s.seasonal_encoding,
                 "target_mode": s.target_mode,
+                "input_variables": ",".join(
+                    train_dataset.input_ds.data_vars
+                ),
             }
         )
 
@@ -2470,6 +2663,22 @@ def train(
         var_type_fc = "atmo"
         reanalysis_model = "era5"
 
+    # Use physically related forecast predictors for MSLP while keeping a
+    # single MSLP analysis target. Other variables preserve the original
+    # univariate behaviour.
+    if var == "mslp":
+        forecast_input_vars = (
+            "mslp",
+            # "u10",
+            # "v10",
+        )
+    else:
+        forecast_input_vars = (var,)
+
+    input_suffix = ""
+    if forecast_input_vars != (var,):
+        input_suffix = "inputs-" + "-".join(forecast_input_vars)
+
     dry_run = False
     force_retrain = False
     force_test = False
@@ -2492,7 +2701,7 @@ def train(
         # exp_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"),
         # plot_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo"),
     
-        extra_suffix_folder="",
+        extra_suffix_folder=input_suffix+"",
 
         lead_period_offset=-1,
         # lead_period_offset=0,
@@ -2906,12 +3115,18 @@ def train(
 
         try:
             dataset_d = make_train_test_datasets_for_leadtime(
-                forecast_ds_path=(
-                    s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
-                ),
+                forecast_ds_paths={
+                    input_var: (
+                        s.input_dir
+                        / f"{s.model_fc}_{input_var}.zarr"
+                    )
+                    for input_var in forecast_input_vars
+                },
                 analysis_ds_path=(
                     s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
                 ),
+                target_forecast_var=s.var_fc,
+                target_analysis_var=s.var_an,
                 leadtime=lt,
                 leadtime_unit=LeadtimeUnit(s.leadtime_unit),
                 train_start=s.train_start,
@@ -2922,7 +3137,7 @@ def train(
                 test_end=s.test_end,
                 target_mode=s.target_mode,
                 clim_period=s.clim_period,
-                forecast_vars=[s.var_fc],
+                forecast_vars=forecast_input_vars,
                 analysis_vars=[s.var_an],
                 # Build once for the complete requested domain. Individual
                 # regional boxes are selected below as cheap xarray views.
