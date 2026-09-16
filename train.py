@@ -2529,12 +2529,13 @@ def train(
         region=region_location,
 
         # short ECMWF experiment
-        # train_start="2022-01-01",
-        # train_end="2022-05-12", # 132nd day of the year (264 train samples)
-        # val_start="2023-05-13",
-        # val_end="2023-06-13", # 164th day of the year (72 val samples)
+        # train_start="2023-01-01",
+        # train_end="2023-05-12", # 132nd day of the year (264 train samples)
+        # val_start="2024-01-01",
+        # val_end="2024-02-05", # 36th day of the year (72 val samples)
         # test_start="2025-01-01",
-        # test_end="2025-10-01",
+        # # test_end="2025-10-01",
+        # test_end="2025-05-12", # same season of short exp train period
 
         # long ECMWF experiment
         # train_start="2019-10-14", # some data removed
@@ -2542,7 +2543,8 @@ def train(
         # val_start="2024-01-01", # ignored if split strategy is time/random
         # val_end="2024-12-31",
         # test_start="2025-01-01",
-        # test_end="2025-10-01",
+        # # test_end="2025-10-01",
+        # test_end="2025-05-12", # same season of short exp train period
 
         # SPS4 experiment
         train_start="1993-01-01",
