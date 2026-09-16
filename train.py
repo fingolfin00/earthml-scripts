@@ -464,6 +464,8 @@ def make_leadtime_pair(
             f"Climatologies are required for target_mode={target_mode!r}"
         )
 
+    # Anomaly target modes
+
     fc_clim_for_period = select_clim_for_time(
         fc_clim,
         fc_period_ds[fc_period_ds.earthml.guessed_dims.time].values,
@@ -2508,7 +2510,7 @@ def train(
         # model_an="analysis",
 
         leadtime_unit=LeadtimeUnit.MONTHS,
-        # leadtimes=[3, 4, 5],
+        # leadtimes=[4, 5, 6],
         leadtimes=[1, 2, 3, 4, 5, 6],
         # leadtime_unit=LeadtimeUnit.HOURS,
         # leadtimes=[12, 24, 36, 48, 60, 72],
@@ -2642,10 +2644,10 @@ def train(
         #     eps=1e-8,
         # ),
 
-        # loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
-        # loss_kwargs=dict(
-        #     eps=1e-8,
-        # ),
+        loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
+        loss_kwargs=dict(
+            eps=1e-8,
+        ),
 
         # loss_name="HuberLoss",
         # loss_kwargs=dict(
@@ -2676,27 +2678,27 @@ def train(
         #     eps=1e-8,
         # ),
         
-        loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
-        loss_kwargs=dict(
-            # Geographic size of each spatial patch used to compare
-            # corrected-model MSE against the zero-residual baseline MSE.
-            # Automatically converted to a grid-cell patch_size.
-            spatial_patch_size_degrees=10.0,
-            # Strength of the spatial degradation penalty relative to the
-            # global GeoMaskedMSE term. Larger values more strongly discourage
-            # local regions from becoming worse than the baseline forecast.
-            lambda_degradation=6.0,
-            # Fraction of spatial patches used for the degradation penalty.
-            # 0.2 means the loss focuses on the worst 20% of patches according
-            # to relative degradation.
-            degradation_fraction=0.2,
-            # Stabilizes relative degradation where baseline patch MSE is very
-            # small. The denominator is floored at 5% of the mean baseline
-            # patch MSE, avoiding excessively large relative penalties.
-            relative_floor_fraction=0.05,
-            # Numerical stability constant used in divisions and clamping.
-            eps=1e-8,
-        ),
+        # loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
+        # loss_kwargs=dict(
+        #     # Geographic size of each spatial patch used to compare
+        #     # corrected-model MSE against the zero-residual baseline MSE.
+        #     # Automatically converted to a grid-cell patch_size.
+        #     spatial_patch_size_degrees=10.0,
+        #     # Strength of the spatial degradation penalty relative to the
+        #     # global GeoMaskedMSE term. Larger values more strongly discourage
+        #     # local regions from becoming worse than the baseline forecast.
+        #     lambda_degradation=0.2,
+        #     # Fraction of spatial patches used for the degradation penalty.
+        #     # 0.2 means the loss focuses on the worst 20% of patches according
+        #     # to relative degradation.
+        #     degradation_fraction=0.2,
+        #     # Stabilizes relative degradation where baseline patch MSE is very
+        #     # small. The denominator is floored at 2% of the mean baseline
+        #     # patch MSE, avoiding excessively large relative penalties.
+        #     relative_floor_fraction=0.02,
+        #     # Numerical stability constant used in divisions and clamping.
+        #     eps=1e-8,
+        # ),
 
         init_learning_rate=1e-4,
         # init_learning_rate=1e-3,
