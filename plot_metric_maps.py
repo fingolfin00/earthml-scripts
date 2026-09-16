@@ -33,48 +33,14 @@ from earthml.plots import (
     lead_label,
     PlotMode,
     plot_map,
+    METRIC_IMPROVEMENT,
+    METRIC_SKILL_UNITS,
 )
 
 from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 
-ImprovementMode = Literal["difference", "percentage"]
-
-
-def metric_improvement(
-    baseline: xr.DataArray,
-    corrected: xr.DataArray,
-    metric: str,
-    mode: ImprovementMode,
-) -> xr.DataArray:
-    """Return improvement of corrected over baseline.
-
-    Bias is compared by magnitude; error metrics such as RMSE are already
-    non-negative. Positive values indicate an improvement, zero no change,
-    and negative values a degradation. Difference mode uses the metric's
-    native units; percentage mode is relative to the baseline magnitude.
-    """
-    baseline_score = abs(baseline) if metric in {"bias", "bias_anom"} else baseline
-    corrected_score = abs(corrected) if metric in {"bias", "bias_anom"} else corrected
-
-    difference = baseline_score - corrected_score
-
-    if mode == "difference":
-        improvement = difference
-    elif mode == "percentage":
-        improvement = xr.where(
-            baseline_score != 0,
-            100.0 * difference / baseline_score,
-            float("nan"),
-        )
-    else:
-        raise ValueError(f"Unsupported improvement mode: {mode}")
-
-    improvement.attrs = baseline.attrs.copy()
-    if mode == "percentage":
-        improvement.attrs["units"] = "%"
-    improvement.attrs["long_name"] = f"{metric} {mode} improvement"
-    return improvement
+OROGRAPHY_PATH = "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
 
 
 def main() -> None:
@@ -98,6 +64,12 @@ def main() -> None:
 
     metrics = [
         # ==========================================================
+        # Orography
+        # ==========================================================
+        # "orography",
+        # "orography_grad_mag",
+
+        # ==========================================================
         # Deterministic Metrics (Absolute Fields)
         # ==========================================================
         "bias",
@@ -111,19 +83,43 @@ def main() -> None:
         # "an_std",
         # "std_ratio",
 
+        # Gradient metrics
+        # "fc_grad_mag",
+        # "an_grad_mag",
+        # "grad_rmse",
+
+        # MSE decomposition / calibration diagnostics
+        # "mse_bias_component",
+        # "mse_std_component",
+        # "mse_corr_component",
+        # "crmse",
+        # "regression_slope",
+
         # ==========================================================
         # Deterministic Metrics (Anomaly Fields)
         # ==========================================================
         # "bias_anom",
         # "mae_anom",
         # "mse_anom",
-        "rmse_anom",
+        # "rmse_anom",
         # "nrmse_anom",
-        # "acc",
+        "acc",
         # "r2_anom",
         # "fc_anom_std",
         # "an_anom_std",
         # "std_ratio_anom",
+
+        # Gradient metrics
+        # "fc_anom_grad_mag",
+        # "an_anom_grad_mag",
+        # "grad_rmse_anom",
+
+        # Anomaly MSE decomposition / calibration diagnostics
+        # "mse_bias_component_anom",
+        # "mse_std_component_anom",
+        # "mse_corr_component_anom",
+        # "crmse_anom",
+        "regression_slope_anom",
 
         # ==========================================================
         # Skill Scores vs Climatology
@@ -374,6 +370,7 @@ def main() -> None:
                         realization_agg=True,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
+                        orography_path=OROGRAPHY_PATH,
                         metrics=deterministic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
@@ -394,6 +391,7 @@ def main() -> None:
                         realization_agg=False,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
+                        orography_path=OROGRAPHY_PATH,
                         metrics=probabilistic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
@@ -439,22 +437,33 @@ def main() -> None:
                         model == "mlfc"
                         and baseline_model in metric_maps_by_model
                         and m in metric_maps_by_model[baseline_model]
-                        # and m in IMPROVEMENT_PLOT_CONFIG.get(s.var_fc, {})
+                        and m in METRIC_IMPROVEMENT
                     ):
                         baseline, corrected = xr.align(
                             metric_maps_by_model[baseline_model][m],
                             metric_maps[m],
                             join="exact",
                         )
+
+                        improvement_unit = METRIC_SKILL_UNITS[m]
+
                         improvement_model = (
-                            f"mlfc_vs_{baseline_model}_{improvement_mode}"
+                            f"mlfc_vs_{baseline_model}_"
+                            f"{'percentage' if improvement_unit == '%' else 'difference'}"
                         )
-                        dataarrays_to_plot[improvement_model] = metric_improvement(
+
+                        improvement = METRIC_IMPROVEMENT[m](
                             baseline,
                             corrected,
-                            m,
-                            mode=improvement_mode,
                         )
+
+                        improvement.attrs = baseline.attrs.copy()
+                        improvement.attrs["units"] = improvement_unit
+                        improvement.attrs["long_name"] = (
+                            f"{m} improvement"
+                        )
+
+                        dataarrays_to_plot[improvement_model] = improvement
 
                     for plot_model, dataarray in dataarrays_to_plot.items():
                         for start_period in start_periods:
