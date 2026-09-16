@@ -2524,7 +2524,7 @@ def train(
         region_name=region_name,
         region=region_location,
 
-        # short experiment
+        # short ECMWF experiment
         # train_start="2022-01-01",
         # train_end="2022-05-12", # 132nd day of the year (264 train samples)
         # val_start="2023-05-13",
@@ -2532,12 +2532,22 @@ def train(
         # test_start="2025-01-01",
         # test_end="2025-10-01",
 
-        train_start="2019-10-14", # some data removed
-        train_end="2023-12-31", # ignored if split strategy is time/random
-        val_start="2024-01-01", # ignored if split strategy is time/random
-        val_end="2024-12-31",
-        test_start="2025-01-01",
-        test_end="2025-10-01",
+        # long ECMWF experiment
+        # train_start="2019-10-14", # some data removed
+        # train_end="2023-12-31", # ignored if split strategy is time/random
+        # val_start="2024-01-01", # ignored if split strategy is time/random
+        # val_end="2024-12-31",
+        # test_start="2025-01-01",
+        # test_end="2025-10-01",
+
+        # SPS4 experiment
+        train_start="1993-01-01",
+        # train_end="2020-12-01",
+        train_end="2014-12-01",
+        val_start="2015-01-01",
+        val_end="2020-12-01",
+        test_start="2021-01-01",
+        test_end="2024-12-01",
 
         target_mode="analysis",
 
@@ -2568,8 +2578,8 @@ def train(
             kernels_per_layer=2,
             base_channels=64,
             bilinear=True,
-            longitude_padding="zero",
-            # longitude_padding = "circular",
+            # longitude_padding="zero",
+            longitude_padding = "circular",
             # longitude_padding = "replicate",
         ),
 
@@ -2580,6 +2590,7 @@ def train(
         #     dims=(8, 16, 32),
         #     drop_path_rate=0.0,
         #     layer_scale_init_value=1e-6,
+        #     stem_stride=1,
 
         #     transformer_depth=0, # disable transform block
         #     transformer_depth=1, # enable depth 1 transform block
