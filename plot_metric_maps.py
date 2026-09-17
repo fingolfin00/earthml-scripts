@@ -38,7 +38,8 @@ from earthml.plots import (
     plot_map,
 )
 
-from settings_plot_weather_atmo import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
+from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
+# from settings_plot_weather_atmo import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 
 def main() -> None:
