@@ -350,13 +350,13 @@ def main() -> None:
     # ==========================================================
 
     experiments_root = Path(
-        "/Users/jacopodallaglio/ML/"
-        "training/seasonal/experiments"
+        "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
     )
 
     plot_dir = Path(
-        "/Users/jacopodallaglio/ML/"
-        "training/seasonal/plots/scatter"
+        "/Users/jacopodallaglio/ML/training/seasonal/plots/scatter"
+        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/scatter"
     )
 
 
@@ -386,6 +386,7 @@ def main() -> None:
     improvement_unit: ImprovementUnit = "%"
     # "%"
     # "Δ"
+    # "normalized"
 
     color_by = "variable"
     marker_by = "leadtime"
@@ -396,13 +397,14 @@ def main() -> None:
     # Data processing
     # ==========================================================
 
-    interpolate = True
+    interpolate = True # seasonal
+    # interpolate = False # weather
     build_analysis = True
 
     recalculate_climatology = False
 
-    realization_agg = True
-
+    realization_agg = True # seasonal
+    # realization_agg = False # weather
 
     # ==========================================================
     # Climatology
@@ -411,48 +413,52 @@ def main() -> None:
     clim_period: ClimPeriod = ClimPeriod.MONTH
     clim_rolling_window = None
 
-    # Alternative:
-    #
     # clim_period = ClimPeriod.DAYOFYEAR_HOUR
     # clim_rolling_window = 31
-
 
     # ==========================================================
     # Time selection
     # ==========================================================
 
     time_range = None
-    # time_range = (
-    #     "2018-01-01",
-    #     "2022-12-31",
-    # )
+    # time_range = ("2018-01-01", "2022-12-31")
 
     wanted_start_periods = [
+        # "01",
+        # "02",
+        # "03",
+        # "04",
+        # "05",
+        # "06",
+        # "07",
+        # "08",
+        # "09",
+        # "10",
+        # "11",
+        # "12",
         "all",
     ]
-
 
     # ==========================================================
     # Lead-time aggregation
     # ==========================================================
 
-    leadtime_units = LeadtimeUnit.MONTHS
+    leadtime_units = LeadtimeUnit.MONTHS # seasonal
+    # leadtime_units = LeadtimeUnit.HOURS # weather
 
-    leadtime_agg_mode: LeadtimeAgg = "single"
-    # "single"
-    # "aggregated"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    # "single" for weather
+    # "aggregated" for seasonal
     # "seasonal_window"
-
 
     # ==========================================================
     # Metric aggregation
     # ==========================================================
 
-    metric_agg_mode: MetricAgg = "global"
+    metric_agg_mode: MetricAgg = "spatial_avg"
     # "global"
     # "spatial_avg"
     # "spatial_rmse"
-
 
     # ==========================================================
     # Variables and regions
@@ -460,8 +466,8 @@ def main() -> None:
 
     variables = [
         # Atmosphere
-        "mslp",
-        # "t2m",
+        # "mslp",
+        "t2m",
         # "d2m",
         # "u10",
         # "v10",
@@ -484,7 +490,6 @@ def main() -> None:
         # None,
     ]
 
-
     # ==========================================================
     # Spatial subset
     # ==========================================================
@@ -505,7 +510,6 @@ def main() -> None:
     lat_range = None
     lon_range = None
 
-
     # ==========================================================
     # Experiment selection
     # ==========================================================
@@ -517,9 +521,10 @@ def main() -> None:
 
         net_name="SmaAt_UNet",
 
-        target_mode="anomaly_residual",
+        # target_mode="analysis",
 
-        extra_suffix_folder="random_split",
+        # extra_suffix_folder="random_split",
+        # extra_suffix_folder="",
 
         # seasonal_encoding=True,
         # ensemble_encoding=True,
@@ -531,7 +536,6 @@ def main() -> None:
         f"Found {len(settings)} "
         f"matching experiment(s)."
     )
-
 
     # ==========================================================
     # Group comparable experiments
@@ -557,7 +561,6 @@ def main() -> None:
         f"Found {len(groups)} groups"
     )
 
-
     # ==========================================================
     # Dimension names
     # ==========================================================
@@ -570,7 +573,6 @@ def main() -> None:
 
     period_dim = f"start_{clim_period}"
 
-
     # ==========================================================
     # Collect scatter points
     # ==========================================================
@@ -581,13 +583,11 @@ def main() -> None:
         tuple[str, str]
     ] = set()
 
-
     for group in groups.values():
 
         common_s: Settings = next(
             iter(group)
         )
-
 
         # ------------------------------------------------------
         # Evaluation range
@@ -595,7 +595,8 @@ def main() -> None:
 
         valid_time_range = (
             (
-                common_s.train_start,
+                # common_s.train_start,
+                common_s.test_start,
                 common_s.test_end,
             )
             if time_range is None
@@ -606,19 +607,14 @@ def main() -> None:
             tuple(valid_time_range)
         )
 
-
         # ------------------------------------------------------
         # Climatology range
-        #
-        # Deliberately stop at train_end to avoid using
-        # validation/test information in the climatology.
         # ------------------------------------------------------
 
         clim_time_range = (
             common_s.train_start,
             common_s.train_end,
         )
-
 
         points = iter_scalar_points(
             group,
@@ -651,7 +647,6 @@ def main() -> None:
 
         all_points.extend(points)
 
-
     # ==========================================================
     # Output naming
     # ==========================================================
@@ -659,8 +654,8 @@ def main() -> None:
     improvement_suffix = {
         "%": "percentage",
         "Δ": "difference",
+        "": "normalized",
     }[improvement_unit]
-
 
     if len(used_time_ranges) == 1:
         output_time_range: object = next(
@@ -668,7 +663,6 @@ def main() -> None:
         )
     else:
         output_time_range = "mixed"
-
 
     common_path = (
         Path(
@@ -680,7 +674,6 @@ def main() -> None:
         / metric_agg_mode
     )
 
-
     filename = (
         f"{forecast_metric}_vs_"
         f"{diff_metric}_"
@@ -688,13 +681,11 @@ def main() -> None:
         f"all_variables.png"
     )
 
-
     out_file = (
         plot_dir
         / common_path
         / filename
     )
-
 
     if (
         out_file.exists()
@@ -705,7 +696,6 @@ def main() -> None:
             f"{out_file}"
         )
         return
-
 
     # ==========================================================
     # Labels
@@ -750,7 +740,6 @@ def main() -> None:
         else None
     )
 
-
     # ==========================================================
     # Plot
     # ==========================================================
@@ -790,12 +779,10 @@ def main() -> None:
         shade_improvement_region=True,
     )
 
-
     print(
         f"Done. Saved combined scatter "
         f"with {len(all_points)} points."
     )
-
 
 if __name__ == "__main__":
     main()

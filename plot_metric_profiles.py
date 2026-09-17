@@ -198,12 +198,13 @@ def main() -> None:
     # ==========================================================
 
     experiments_root = Path(
+        "/Users/jacopodallaglio/ML/training/seasonal/experiments_plots"
         # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
-        "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo_exploration"
     )
 
-    fc_plot_dir = Path(
-        "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo_profile_test/common"
+    common_plot_dir = Path(
+        "/Users/jacopodallaglio/ML/training/seasonal/plots"
+        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
     )
 
     # ==========================================================
@@ -213,7 +214,8 @@ def main() -> None:
     plot_mode: PlotMode = "profiles"
 
     plot_title = True
-    title_strftime = "%m.%Y"
+    title_strftime = "%Y" # seasonal
+    # title_strftime = "%m.%Y" # weather
 
     # Optional y-axis limits by profile representation and metric.
     # Missing metrics (or explicit None values) use automatic limits.
@@ -247,21 +249,20 @@ def main() -> None:
     # Profile orientation.
     #
     # Lead-time profile:
-    #   x = lead time, one curve for a selected climatological start period.
+    #   x = lead time, one curve for a selected climatological start period
     #
     # Climatological profile:
     #   x = climatological period (e.g. month), one curve for a selected
     #   lead time.
-    plot_leadtime_profiles = False
+    plot_leadtime_profiles = True
     plot_climatological_profiles = True
 
-    # None -> create one climatological profile for every available lead time.
-    # Example:
+    # None -> create one climatological profile for every available lead time
     # wanted_climatological_profile_leadtimes = [24, 48, 72,]
     # wanted_climatological_profile_leadtimes = [72,]
     wanted_climatological_profile_leadtimes = None
 
-    regenerate_plots = True
+    regenerate_plots = False
 
     # ==========================================================
     # Model settings
@@ -318,7 +319,8 @@ def main() -> None:
     # Data processing
     # ==========================================================
 
-    interpolate = False
+    interpolate = True # seasonal
+    # interpolate = False # weather
     build_analysis = True
 
     recalculate_climatology = False
@@ -350,25 +352,20 @@ def main() -> None:
     # inference_period = ("2025-01-01", "2025-10-31")
 
     wanted_start_periods = [
-        # "01",
-        # "05",
-        # "08",
-        # "10",
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "10",
+        "11",
+        "12",
         "all",
     ]
-
-    # Climatological profiles require every individual climatological period.
-    # Keep the old subset when only lead-time profiles are requested.
-    if plot_climatological_profiles and clim_period == ClimPeriod.MONTH:
-        metric_periods_requested = [
-            f"{month:02d}"
-            for month in range(1, 13)
-        ] + ["all"]
-    elif plot_climatological_profiles:
-        # For non-monthly climatologies, let get_metrics keep all periods.
-        metric_periods_requested = None
-    else:
-        metric_periods_requested = wanted_start_periods
 
     # ==========================================================
     # Metric aggregation
@@ -378,12 +375,13 @@ def main() -> None:
     # "spatial_avg"
     # "global"
 
-    leadtime_agg_mode: LeadtimeAgg = "single"
-    # "single"
-    # "aggregated"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    # "single" for weather
+    # "aggregated" for seasonal
     # "seasonal_window"
 
-    leadtime_units = LeadtimeUnit.HOURS
+    leadtime_units = LeadtimeUnit.MONTHS # seasonal
+    # leadtime_units = LeadtimeUnit.HOURS # weather
 
     # ==========================================================
     # Metrics
@@ -398,11 +396,11 @@ def main() -> None:
         # "mse",
         "rmse",
         # "nrmse",
-        "corr",
-        "r2",
+        # "corr",
+        # "r2",
         # "fc_std",
         # "an_std",
-        "std_ratio",
+        # "std_ratio",
 
         # Gradient metrics
         # "fc_grad_mag",
@@ -410,9 +408,9 @@ def main() -> None:
         # "grad_rmse",
 
         # MSE decomposition / calibration diagnostics
-        "mse_bias_component",
-        "mse_std_component",
-        "mse_corr_component",
+        # "mse_bias_component",
+        # "mse_std_component",
+        # "mse_corr_component",
         # "crmse",
         # "regression_slope",
 
@@ -503,10 +501,10 @@ def main() -> None:
     ]
 
     regions = [
-        "ConUS",
+        # "ConUS",
         # "Europe",
         # "Pacific",
-        # "World",
+        "World",
         # None,
     ]
 
@@ -515,8 +513,8 @@ def main() -> None:
     # ==========================================================
 
     # ConUS
-    lat_range = (50, 25)
-    lon_range = (-130, -60)
+    # lat_range = (50, 25)
+    # lon_range = (-130, -60)
 
     # Europe
     # lat_range = (80, 30)
@@ -527,8 +525,8 @@ def main() -> None:
     # lon_range = (-195, -135)
 
     # Whole configured region
-    # lat_range = None
-    # lon_range = None
+    lat_range = None
+    lon_range = None
 
     # ==========================================================
     # Experiment selection
@@ -558,8 +556,8 @@ def main() -> None:
         # pretrain_norm="full",
 
         # extra_suffix_folder="264samples_consecutive",
-        extra_suffix_folder="NOAA_copy",
-        # extra_suffix_folder="",
+        # extra_suffix_folder="NOAA_copy",
+        extra_suffix_folder="",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -649,8 +647,8 @@ def main() -> None:
                 / "test_corrected.zarr"
             )
 
-        clim_time_range = (s.train_start, s.val_end)
-        # clim_time_range = (s.train_start, s.train_end)
+        # clim_time_range = (s.train_start, s.val_end) # weather (very few years)
+        clim_time_range = (s.train_start, s.train_end) # seasonal
 
         # ======================================================
         # Spatial range
@@ -914,7 +912,7 @@ def main() -> None:
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
                         period_dim=period_dim,
-                        wanted_start_periods=metric_periods_requested,
+                        wanted_start_periods=wanted_start_periods,
                     )
                 )
 
@@ -937,7 +935,7 @@ def main() -> None:
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
                         period_dim=period_dim,
-                        wanted_start_periods=metric_periods_requested,
+                        wanted_start_periods=wanted_start_periods,
                     )
                 )
 
@@ -968,7 +966,7 @@ def main() -> None:
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
                         period_dim=period_dim,
-                        wanted_start_periods=metric_periods_requested,
+                        wanted_start_periods=wanted_start_periods,
                     )
                 )
 
@@ -1868,7 +1866,7 @@ def main() -> None:
                     )
 
                     out_file = (
-                        fc_plot_dir
+                        common_plot_dir
                         / common_path
                         / filename
                     )
@@ -1965,7 +1963,7 @@ def main() -> None:
                         )
 
                         out_file = (
-                            fc_plot_dir
+                            common_plot_dir
                             / common_path
                             / filename
                         )
@@ -2189,7 +2187,7 @@ def main() -> None:
                                 )
 
                                 out_file = (
-                                    fc_plot_dir
+                                    common_plot_dir
                                     / common_path
                                     / filename
                                 )
@@ -2293,7 +2291,7 @@ def main() -> None:
                                     )
 
                                     out_file = (
-                                        fc_plot_dir
+                                        common_plot_dir
                                         / common_path
                                         / filename
                                     )
@@ -2440,7 +2438,7 @@ def main() -> None:
                                 )
 
                                 out_file = (
-                                    fc_plot_dir
+                                    common_plot_dir
                                     / common_path
                                     / filename
                                 )
@@ -2542,7 +2540,7 @@ def main() -> None:
                                     )
 
                                     out_file = (
-                                        fc_plot_dir
+                                        common_plot_dir
                                         / common_path
                                         / filename
                                     )

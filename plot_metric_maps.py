@@ -46,21 +46,19 @@ def main() -> None:
     # Paths
     # ==========================================================
 
-    # experiments_root = Path(
-    #     "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
-    # )
-    # fc_plot_dir = Path(
-    #     "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
-    # )
-
     experiments_root = Path(
-        "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo_train_sample_size"
+        "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
     )
-    fc_plot_dir = Path(
-        "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo_train_sample_size"
+    common_plot_dir = Path(
+        "/Users/jacopodallaglio/ML/training/seasonal/plots"
+        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
     )
 
-    orography_path = "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+    orography_path = Path(
+        "/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"
+        # "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+    )
 
     # ==========================================================
     # Plot settings
@@ -72,7 +70,8 @@ def main() -> None:
     plot_type: Literal["pcolormesh", "contourf"] = "contourf"
 
     plot_title = True
-    title_strftime = "%m.%Y"
+    title_strftime = "%Y" # seasonal
+    # title_strftime = "%m.%Y" # weather
 
     plot_mlfc = True
 
@@ -80,7 +79,7 @@ def main() -> None:
         # "fc",
         # "clim-fc",
         # "mlfc",
-        "improvement",
+        # "improvement",
     )
 
     # ==========================================================
@@ -97,7 +96,7 @@ def main() -> None:
     # Statistical significance
     # ==========================================================
 
-    plot_significance = True
+    plot_significance = False
 
     significance_n_bootstrap = 200
     significance_block_size = 1
@@ -112,7 +111,8 @@ def main() -> None:
     # Data processing
     # ==========================================================
 
-    interpolate = False
+    interpolate = True # seasonal
+    # interpolate = False # weather
     build_analysis = True
 
     recalculate_climatology = False
@@ -148,6 +148,9 @@ def main() -> None:
         "07",
         "08",
         "09",
+        "10",
+        "11",
+        "12",
         "all",
     ]
 
@@ -157,9 +160,9 @@ def main() -> None:
 
     leadtime_units = LeadtimeUnit.HOURS
 
-    leadtime_agg_mode: LeadtimeAgg = "single"
-    # "single"
-    # "aggregated"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    # "single" for weather
+    # "aggregated". for seasonal
     # "seasonal_window"
 
     hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
@@ -271,8 +274,8 @@ def main() -> None:
 
     variables = [
         # Atmosphere
-        "mslp",
-        # "t2m",
+        # "mslp",
+        "t2m",
         # "d2m",
         # "u10",
         # "v10",
@@ -288,10 +291,10 @@ def main() -> None:
     ]
 
     regions = [
-        "ConUS",
+        # "ConUS",
         # "Europe",
         # "Pacific",
-        # "World",
+        "World",
         # None,
     ]
 
@@ -300,8 +303,8 @@ def main() -> None:
     # ==========================================================
 
     # ConUS
-    lat_range = (50, 25)
-    lon_range = (-130, -60)
+    # lat_range = (50, 25)
+    # lon_range = (-130, -60)
 
     # Europe
     # lat_range = (80, 30)
@@ -312,8 +315,8 @@ def main() -> None:
     # lon_range = (-195, -135)
 
     # Whole configured region
-    # lat_range = None
-    # lon_range = None
+    lat_range = None
+    lon_range = None
 
     # ==========================================================
     # Experiment selection
@@ -327,18 +330,22 @@ def main() -> None:
         # net_name="ConvNeXtTransformerUNet",
         net_name="SmaAt_UNet",
 
-        test_end="2025-10-01",
+        # test_end="2025-10-01",
 
         # target_mode="anomaly",
+
         # seasonal_encoding=True,
         # ensemble_encoding=True,
+
         # channel_representation="variable",
+
         # loss_name="VarNormMaskMSELoss",
         # loss_name="GeoMaskedMSEMultiScaleLoss",
         # loss_name="SpatialDegradationMSELoss",
+
         # separate_training_by_init_period=None,
         # separate_training_by_init_period=ClimPeriod.MONTH,
-        # pretrain_norm="full",
+
         # extra_suffix_folder="264samples_randomsamples",
         # extra_suffix_folder="264samples_consecutive",
         # extra_suffix_folder="NOAA_copy",
@@ -464,8 +471,8 @@ def main() -> None:
         }
 
         model_plot_folders = {
-            "fc": fc_plot_dir,
-            "clim-fc": fc_plot_dir,
+            "fc": common_plot_dir,
+            "clim-fc": common_plot_dir,
             "mlfc": s.plot_dir,
         }
 

@@ -59,7 +59,8 @@ def main() -> None:
     # ==========================================================
 
     experiments_root = Path(
-        "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
     )
 
 
@@ -81,7 +82,6 @@ def main() -> None:
 
     regenerate_plots = True
 
-
     # ==========================================================
     # Timeseries representation
     # ==========================================================
@@ -91,18 +91,18 @@ def main() -> None:
         "residual",
         "anomaly",
         "anomaly_residual",
-    ] = "residual"
-
+    ] = "raw"
 
     # ==========================================================
     # Rolling mean
     # ==========================================================
 
+    rolling_mean_window = None
     # Number of samples, not number of days.
     # Example for 12-hour data:
     #     30 samples = 15 days
     #     60 samples = 30 days
-    rolling_mean_window = 30
+    # rolling_mean_window = 30
 
     rolling_mean_center = True
     rolling_mean_min_periods = 1
@@ -119,29 +119,25 @@ def main() -> None:
         "Analysis": 6.0,
     }
 
-
     # ==========================================================
     # Data processing
     # ==========================================================
 
-    interpolate = False
+    interpolate = True # seasonal
+    # interpolate = False # weather
     build_analysis = True
 
     recalculate_climatology = False
-
 
     # ==========================================================
     # Climatology
     # ==========================================================
 
-    clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR
-    clim_rolling_window = 31
+    clim_period: ClimPeriod = ClimPeriod.MONTH
+    clim_rolling_window = None
 
-    # Alternative:
-    #
-    # clim_period: ClimPeriod = ClimPeriod.MONTH
-    # clim_rolling_window = None
-
+    # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR
+    # clim_rolling_window = 31
 
     # ==========================================================
     # Time selection
@@ -153,18 +149,17 @@ def main() -> None:
     inference_period = None
     # inference_period = ("2025-01-01", "2025-10-31")
 
-
     # ==========================================================
     # Lead-time aggregation
     # ==========================================================
 
-    leadtime_units = LeadtimeUnit.HOURS
+    leadtime_units = LeadtimeUnit.MONTHS # seasonal
+    # leadtime_units = LeadtimeUnit.HOURS # weather
 
-    leadtime_agg_mode: LeadtimeAgg = "single"
-    # "single"
-    # "aggregated"
+    leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    # "single" for weather
+    # "aggregated" for seasonal
     # "seasonal_window"
-
 
     # ==========================================================
     # Variables and regions
@@ -172,8 +167,8 @@ def main() -> None:
 
     variables = [
         # Atmosphere
-        "mslp",
-        # "t2m",
+        # "mslp",
+        "t2m",
         # "d2m",
         # "u10",
         # "v10",
@@ -189,13 +184,12 @@ def main() -> None:
     ]
 
     regions = [
-        "ConUS",
+        # "ConUS",
         # "Europe",
         # "Pacific",
-        # "World",
+        "World",
         # None,
     ]
-
 
     # ==========================================================
     # Spatial subset
@@ -216,7 +210,6 @@ def main() -> None:
     # Whole configured region
     lat_range = None
     lon_range = None
-
 
     # ==========================================================
     # Experiment selection
@@ -276,7 +269,6 @@ def main() -> None:
             s.train_end,
         )
 
-
         # ======================================================
         # Spatial range
         # ======================================================
@@ -299,7 +291,6 @@ def main() -> None:
             else lon_range
         )
 
-
         # ======================================================
         # Lead-time dimension
         # ======================================================
@@ -315,7 +306,6 @@ def main() -> None:
             f"for {(s.var_an, s.var_fc)} in {s.region_name} "
             f"(lon={valid_lon_range}, lat={valid_lat_range})"
         )
-
 
         # ======================================================
         # Data
@@ -338,7 +328,6 @@ def main() -> None:
 
         if not plot_mlfc:
             mlfc = None
-
 
         # ======================================================
         # Climatologies
@@ -372,7 +361,6 @@ def main() -> None:
 
         if not plot_mlfc:
             mlfc_clim = None
-
 
         # ======================================================
         # Lead-time aggregation
@@ -428,7 +416,6 @@ def main() -> None:
                     leadtime_agg_coord=leadtime_agg_coord,
                 )
 
-
         # ======================================================
         # Dimensions
         # ======================================================
@@ -437,7 +424,6 @@ def main() -> None:
         lat_dim = fc.earthml.guessed_dims.latitude
         lon_dim = fc.earthml.guessed_dims.longitude
         realization_dim = fc.earthml.guessed_dims.realization
-
 
         # ======================================================
         # Fields and climatologies
@@ -499,7 +485,6 @@ def main() -> None:
             else None
         )
 
-
         # ======================================================
         # Anomalies
         # ======================================================
@@ -536,7 +521,6 @@ def main() -> None:
             else None
         )
 
-
         # ======================================================
         # Climatology-corrected forecast
         # ======================================================
@@ -554,7 +538,6 @@ def main() -> None:
             fc_anom_da
             + an_clim_for_time_da
         )
-
 
         # ======================================================
         # Timeseries category
@@ -614,7 +597,6 @@ def main() -> None:
             mlfc_ts_da = mlfc_da
             category_title = ""
 
-
         # ======================================================
         # Lead-time plots
         # ======================================================
@@ -654,7 +636,6 @@ def main() -> None:
                     fc_ts_lead_da
                 )
 
-
             # --------------------------------------------------
             # Analysis
             # --------------------------------------------------
@@ -674,7 +655,6 @@ def main() -> None:
                 center=rolling_mean_center,
                 min_periods=rolling_mean_min_periods,
             )
-
 
             # --------------------------------------------------
             # ML-corrected forecast
@@ -718,7 +698,6 @@ def main() -> None:
             else:
                 mlfc_ts_lead_da_ens_mean = None
 
-
             # --------------------------------------------------
             # Climatology-corrected forecast
             # --------------------------------------------------
@@ -756,7 +735,6 @@ def main() -> None:
                 fc_ts_lead_clim_corrected_da_ens_mean = (
                     fc_ts_lead_clim_corrected_da
                 )
-
 
             # ==================================================
             # Series to plot
@@ -802,7 +780,6 @@ def main() -> None:
                 ] = (
                     fc_ts_lead_clim_corrected_da
                 )
-
 
             # ==================================================
             # Output
@@ -893,7 +870,6 @@ def main() -> None:
             n += 1
 
     print(f"Done. Saved {n} plots.")
-
 
 if __name__ == "__main__":
     main()
