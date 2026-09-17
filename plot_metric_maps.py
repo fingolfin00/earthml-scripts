@@ -27,52 +27,158 @@ from earthml.metrics import (
     calculate_save_and_subset_climatologies,
     stack_hour_clim,
     groupby_period,
+    build_metric_improvements,
+    get_required_improvement_metrics,
+    get_metric_improvement_significance,
 )
 from earthml.plots import (
     safe_label,
     lead_label,
     PlotMode,
     plot_map,
-    METRIC_IMPROVEMENT,
-    METRIC_SKILL_UNITS,
 )
 
-from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
-
-
-OROGRAPHY_PATH = "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+from settings_plot_weather_atmo import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
 
 def main() -> None:
-    experiments_root = Path("/Users/jacopodallaglio/ML/training/seasonal/experiments")
-    fc_plot_dir = Path("/Users/jacopodallaglio/ML/training/seasonal/plots")
+    # ==========================================================
+    # Paths
+    # ==========================================================
+
+    # experiments_root = Path(
+    #     "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+    # )
+    # fc_plot_dir = Path(
+    #     "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
+    # )
+
+    experiments_root = Path(
+        "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo_train_sample_size"
+    )
+    fc_plot_dir = Path(
+        "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo_train_sample_size"
+    )
+
+    orography_path = "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+
+    # ==========================================================
+    # Plot settings
+    # ==========================================================
 
     plot_mode: PlotMode = "maps"
     metric_kind: MetricKind = "maps"
 
+    plot_type: Literal["pcolormesh", "contourf"] = "contourf"
+
+    plot_title = True
+    title_strftime = "%m.%Y"
+
     plot_mlfc = True
+
     regenerate_plots = (
         # "fc",
         # "clim-fc",
         # "mlfc",
-        # "improvement",
+        "improvement",
     )
 
-    force_clim_recalc = False
-    interpolate = True
+    # ==========================================================
+    # Model comparisons
+    # ==========================================================
+
+    model_comparisons = (
+        ("fc", "mlfc"),
+        # ("clim-fc", "mlfc"),
+        # ("fc", "clim-fc"),
+    )
+
+    # ==========================================================
+    # Statistical significance
+    # ==========================================================
+
+    plot_significance = True
+
+    significance_n_bootstrap = 200
+    significance_block_size = 1
+    significance_confidence_level = 0.95
+    significance_seed = 42
+
+    significance_stride = 3
+    significance_size = 2.0
+    significance_alpha = 0.6
+
+    # ==========================================================
+    # Data processing
+    # ==========================================================
+
+    interpolate = False
     build_analysis = True
 
+    recalculate_climatology = False
+
+    # ==========================================================
+    # Climatology
+    # ==========================================================
+
+    clim_period: ClimPeriod = ClimPeriod.MONTH
+    clim_rolling_window = None
+
+    # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR
+    # clim_rolling_window = 31
+
+    # ==========================================================
+    # Time selection
+    # ==========================================================
+
+    time_range = None
+    # time_range = ("2018-01-01", "2022-12-31")
+
+    inference_period = None
+    # inference_period = ("2025-01-01", "2025-10-10")
+    # inference_period = ("2025-01-01", "2025-05-12")
+
+    wanted_start_periods = [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "all",
+    ]
+
+    # ==========================================================
+    # Lead-time aggregation
+    # ==========================================================
+
+    leadtime_units = LeadtimeUnit.HOURS
+
+    leadtime_agg_mode: LeadtimeAgg = "single"
+    # "single"
+    # "aggregated"
+    # "seasonal_window"
+
+    hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
+
+    # ==========================================================
+    # Metrics
+    # ==========================================================
+
     metrics = [
-        # ==========================================================
+        # ======================================================
         # Orography
-        # ==========================================================
+        # ======================================================
         # "orography",
         # "orography_grad_mag",
 
-        # ==========================================================
-        # Deterministic Metrics (Absolute Fields)
-        # ==========================================================
-        "bias",
+        # ======================================================
+        # Deterministic metrics - absolute fields
+        # ======================================================
+        # "bias",
         # "mae",
         # "mse",
         "rmse",
@@ -95,15 +201,15 @@ def main() -> None:
         # "crmse",
         # "regression_slope",
 
-        # ==========================================================
-        # Deterministic Metrics (Anomaly Fields)
-        # ==========================================================
+        # ======================================================
+        # Deterministic metrics - anomaly fields
+        # ======================================================
         # "bias_anom",
         # "mae_anom",
         # "mse_anom",
         # "rmse_anom",
         # "nrmse_anom",
-        "acc",
+        # "acc",
         # "r2_anom",
         # "fc_anom_std",
         # "an_anom_std",
@@ -119,11 +225,11 @@ def main() -> None:
         # "mse_std_component_anom",
         # "mse_corr_component_anom",
         # "crmse_anom",
-        "regression_slope_anom",
+        # "regression_slope_anom",
 
-        # ==========================================================
-        # Skill Scores vs Climatology
-        # ==========================================================
+        # ======================================================
+        # Skill scores vs climatology
+        # ======================================================
         # "mse_skill_clim",
         # "mae_anom_skill_clim",
         # "mse_anom_skill_clim",
@@ -131,9 +237,9 @@ def main() -> None:
         # "ens_member_mse_anom_skill_clim",
         # "mean_member_mse_anom_skill_clim",
 
-        # ==========================================================
-        # Ensemble / Probabilistic Metrics (Absolute Fields)
-        # ==========================================================
+        # ======================================================
+        # Ensemble / probabilistic metrics - absolute fields
+        # ======================================================
         # "ens_member_rmse",
         # "mean_member_rmse",
         # "spread",
@@ -141,9 +247,9 @@ def main() -> None:
         # "crps",
         # "rank_histogram",
 
-        # ==========================================================
-        # Ensemble / Probabilistic Metrics (Anomaly Fields)
-        # ==========================================================
+        # ======================================================
+        # Ensemble / probabilistic metrics - anomaly fields
+        # ======================================================
         # "ens_member_rmse_anom",
         # "mean_member_rmse_anom",
         # "spread_anom",
@@ -151,109 +257,93 @@ def main() -> None:
         # "crps_anom",
         # "rank_histogram_anom",
 
-        # ==========================================================
-        # ROC AUC (Anomaly Terciles)
-        # ==========================================================
+        # ======================================================
+        # ROC AUC - anomaly terciles
+        # ======================================================
         # "roc_anom_lower",
         # "roc_anom_middle",
         # "roc_anom_upper",
     ]
 
+    # ==========================================================
+    # Variables and regions
+    # ==========================================================
+
     variables = [
-        # Atmo
+        # Atmosphere
         "mslp",
-        "t2m",
-        "d2m",
-        "u10",
-        "v10",
-        "sst",
-        "tprate",
+        # "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
+        # "tprate",
         # "tcc",
+
         # Ocean
         # "mlotst",
         # "ssh",
         # "sss",
         # "t20d",
     ]
+
     regions = [
-        # "ConUS",
+        "ConUS",
         # "Europe",
         # "Pacific",
-        "World",
-        # None, # accept all
+        # "World",
+        # None,
     ]
 
+    # ==========================================================
+    # Spatial subset
+    # ==========================================================
+
     # ConUS
-    # lat_range = (50, 25)
-    # lon_range = (-130, -60)
+    lat_range = (50, 25)
+    lon_range = (-130, -60)
+
     # Europe
     # lat_range = (80, 30)
     # lon_range = (-30, 60)
+
     # Pacific
     # lat_range = (20, -20)
     # lon_range = (-195, -135)
-    # World or whole region
-    lat_range = None
-    lon_range = None
 
-    wanted_start_periods = [
-        "01",
-        "05",
-        "08",
-        "10",
-        "all",
-    ]
+    # Whole configured region
+    # lat_range = None
+    # lon_range = None
 
-    leadtime_units = LeadtimeUnit.MONTHS
-    clim_period: ClimPeriod = ClimPeriod.MONTH # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
-    clim_rolling_window = None
-    # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR # "dayofyear", "day", "month", "year", "day_hour", "dayofyear_hour", "month_hour"
-    # clim_rolling_window = 31
-
-    time_range = None
-    # time_range = ("2018-01-01", "2022-12-31")
-
-    inference_period = None
-    # inference_period = ("2025-01-01", "2025-10-10")
-    # inference_period = ("2025-01-01", "2025-05-12")
-
-    leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
-    hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
-
-    baseline_model: Literal["fc", "clim-fc"] = "fc"
-
-    # Bootstrap significance
-    plot_significance = True
-
-    significance_n_bootstrap = 200
-    significance_block_size = 1
-    significance_confidence_level = 0.95
-    significance_seed = 42
-
-    significance_stride = 3
-    significance_size = 2.0
-    significance_alpha = 0.6
+    # ==========================================================
+    # Experiment selection
+    # ==========================================================
 
     settings = get_experiment_configs(
         experiments_root,
         var_fc=variables,
         region_name=regions,
-        net_name="ConvNeXtTransformerUNet",
-        # net_name="SmaAt_UNet",
+
+        # net_name="ConvNeXtTransformerUNet",
+        net_name="SmaAt_UNet",
+
+        test_end="2025-10-01",
+
         # target_mode="anomaly",
         # seasonal_encoding=True,
         # ensemble_encoding=True,
         # channel_representation="variable",
         # loss_name="VarNormMaskMSELoss",
         # loss_name="GeoMaskedMSEMultiScaleLoss",
-        loss_name="SpatialDegradationMSELoss",
-        separate_training_by_init_period=None,
+        # loss_name="SpatialDegradationMSELoss",
+        # separate_training_by_init_period=None,
         # separate_training_by_init_period=ClimPeriod.MONTH,
         # pretrain_norm="full",
-        # extra_suffix_folder="target_scale_degrees_30_lambda_low_freq_05",
+        # extra_suffix_folder="264samples_randomsamples",
+        # extra_suffix_folder="264samples_consecutive",
+        # extra_suffix_folder="NOAA_copy",
         # extra_suffix_folder="",
     )
-
 
     print(f"Found {len(settings)} matching experiment(s).")
 
@@ -287,7 +377,8 @@ def main() -> None:
                 / "test_corrected.zarr"
             )
         # clim_time_range = (s.train_start, s.train_end)
-        clim_time_range = (s.train_start, s.val_end)
+        # clim_time_range = (s.train_start, s.val_end)
+        clim_time_range = ("2019-10-14", "2024-12-31")
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
@@ -311,7 +402,7 @@ def main() -> None:
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
             leadtime_units=leadtime_units,
-            force=force_clim_recalc,
+            force=recalculate_climatology,
             clim_period=clim_period,
             rolling_window=clim_rolling_window,
             rolling_center=True,
@@ -354,19 +445,37 @@ def main() -> None:
                 }
             )
 
-        models = ("fc", "clim-fc", "mlfc")
+        models = (
+            ("fc", "clim-fc", "mlfc")
+            if plot_mlfc
+            else ("fc", "clim-fc")
+        )
+
+        model_datasets = {
+            "fc": fc,
+            "clim-fc": clim_fc,
+            "mlfc": mlfc,
+        }
+
+        model_climatologies = {
+            "fc": fc_clim,
+            "clim-fc": an_clim_for_fc,
+            "mlfc": mlfc_clim,
+        }
+
         model_plot_folders = {
             "fc": fc_plot_dir,
             "clim-fc": fc_plot_dir,
             "mlfc": s.plot_dir,
         }
-        ds_plot = (fc, clim_fc, mlfc) if plot_mlfc else (fc, clim_fc)
-        ds_clim_plot = (fc_clim, an_clim_for_fc, mlfc_clim) if plot_mlfc else (fc_clim, an_clim_for_fc,)
 
         metric_maps_by_model: dict[str, xr.Dataset] = {}
-        significance_by_metric: dict[str, xr.Dataset] = {}
+        significance_by_comparison: dict[tuple[str, str, str], xr.Dataset] = {}
 
-        for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
+        for model in models:
+            ds = model_datasets[model]
+            ds_clim = model_climatologies[model]
+
             if ds is None or ds_clim is None:
                 continue
 
@@ -391,10 +500,10 @@ def main() -> None:
                         var=s.var_fc,
                         metric_kind=metric_kind,
                         leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
-                        realization_agg=True,
+                        realization_agg=False,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
-                        orography_path=OROGRAPHY_PATH,
+                        orography_path=orography_path,
                         metrics=deterministic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
@@ -415,7 +524,7 @@ def main() -> None:
                         realization_agg=False,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
-                        orography_path=OROGRAPHY_PATH,
+                        orography_path=orography_path,
                         metrics=probabilistic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
@@ -440,10 +549,8 @@ def main() -> None:
                     # TODO support _hour groups
                     metric_maps = metric_maps.groupby(f"{time_dim}.{hovmoller_time_agg}").mean(time_dim, skipna=True)
 
-                metric_maps_by_model[model] = metric_maps
-
                 # =====================================================
-                # Statistical significance of FC -> MLFC improvement
+                # Statistical significance of model comparisons
                 # =====================================================
 
                 metric_maps_by_model[model] = metric_maps
@@ -451,48 +558,53 @@ def main() -> None:
                 if (
                     plot_significance
                     and metric_kind == "maps"
-                    and model == "mlfc"
-                    and baseline_model in metric_maps_by_model
-                    and mlfc is not None
-                    and mlfc_clim is not None
                 ):
-                    if baseline_model == "fc":
-                        baseline_ds = fc
-                        baseline_clim_ds = fc_clim
+                    for baseline_model, target_model in model_comparisons:
 
-                    elif baseline_model == "clim-fc":
-                        baseline_ds = clim_fc
-                        baseline_clim_ds = an_clim_for_fc
+                        if target_model != model:
+                            continue
 
-                    else:
-                        raise ValueError(
-                            f"Unsupported baseline_model="
-                            f"{baseline_model!r}"
-                        )
+                        if baseline_model not in metric_maps_by_model:
+                            continue
 
-                    significance_metrics = [
-                        m
-                        for m in metrics
+                        baseline_ds = model_datasets[baseline_model]
+                        target_ds = model_datasets[target_model]
+
+                        baseline_clim_ds = model_climatologies[baseline_model]
+                        target_clim_ds = model_climatologies[target_model]
+
                         if (
-                            m != "rank_histogram"
-                            and m in metric_maps_by_model[
-                                baseline_model
-                            ]
-                            and m in metric_maps_by_model["mlfc"]
-                        )
-                    ]
+                            baseline_ds is None
+                            or target_ds is None
+                            or baseline_clim_ds is None
+                            or target_clim_ds is None
+                        ):
+                            continue
 
-                    for m in significance_metrics:
-                        print(
-                            f"Get significance for {m} "
-                            f"({baseline_model} -> mlfc)"
-                        )
+                        significance_metrics = [
+                            m
+                            for m in metrics
+                            if (
+                                m != "rank_histogram"
+                                and m in metric_maps_by_model[baseline_model]
+                                and m in metric_maps_by_model[target_model]
+                            )
+                        ]
 
-                        significance_by_metric[m] = (
-                            get_metric_improvement_significance(
+                        for m in significance_metrics:
+                            print(
+                                f"Get significance for {m} "
+                                f"({baseline_model} -> {target_model})"
+                            )
+
+                            significance_by_comparison[
+                                baseline_model,
+                                target_model,
+                                m,
+                            ] = get_metric_improvement_significance(
                                 an=an,
                                 fc=baseline_ds,
-                                mlfc=mlfc,
+                                mlfc=target_ds,
                                 var_fc=s.var_fc,
                                 var_an=s.var_an,
                                 metric=m,
@@ -500,7 +612,7 @@ def main() -> None:
                                 leadtime_agg=leadtime_agg_mode,
                                 realization_agg=False,
                                 fc_clim=baseline_clim_ds,
-                                mlfc_clim=mlfc_clim,
+                                mlfc_clim=target_clim_ds,
                                 an_clim=an_clim,
                                 leadtime_windows=s.seasonal_leadtime_windows,
                                 leadtime_agg_coord=leadtime_agg_coord,
@@ -514,7 +626,7 @@ def main() -> None:
                                 align=False,
                                 fair_correction=False,
                             )
-                        )
+
                 available_metrics = [
                     str(x) for x in metric_maps.data_vars
                     if str(x) in metrics and str(x) != "rank_histogram"
@@ -528,54 +640,144 @@ def main() -> None:
                 print(f"Plotting {model} metrics {available_metrics} for periods {start_periods} for exp {s.output_name}")
 
                 for m in available_metrics:
-                    dataarrays_to_plot = {model: metric_maps[m]}
+                    # ----------------------------------------------------------
+                    # DataArrays to plot
+                    #
+                    # value:
+                    #   (
+                    #       dataarray,
+                    #       baseline_model,
+                    #       target_model,
+                    #   )
+                    #
+                    # baseline/target are None for ordinary metric maps.
+                    # ----------------------------------------------------------
 
-                    if (
-                        model == "mlfc"
-                        and baseline_model in metric_maps_by_model
-                        and m in metric_maps_by_model[baseline_model]
-                    ):
-                        dataarrays_to_plot.update(
-                            build_metric_improvements(
-                                metric_maps_by_model[baseline_model],
-                                metric_maps,
-                                metric=m,
-                                baseline_model=baseline_model,
-                            )
+                    dataarrays_to_plot: dict[
+                        str,
+                        tuple[xr.DataArray, str | None, str | None],
+                    ] = {
+                        model: (
+                            metric_maps[m],
+                            None,
+                            None,
+                        ),
+                    }
+
+                    # ==========================================================
+                    # Build requested model comparisons
+                    # ==========================================================
+
+                    for baseline_model, target_model in model_comparisons:
+
+                        # Comparison is generated when its target model
+                        # is the model currently being processed.
+                        if target_model != model:
+                            continue
+
+                        if baseline_model not in metric_maps_by_model:
+                            continue
+
+                        if m not in metric_maps_by_model[baseline_model]:
+                            continue
+
+                        improvements = build_metric_improvements(
+                            metric_maps_by_model[baseline_model],
+                            metric_maps_by_model[target_model],
+                            metric=m,
+                            baseline_model=baseline_model,
+                            target_model=target_model,
                         )
 
-                    for plot_model, dataarray in dataarrays_to_plot.items():
+                        for plot_model, dataarray in improvements.items():
+                            dataarrays_to_plot[plot_model] = (
+                                dataarray,
+                                baseline_model,
+                                target_model,
+                            )
+
+                    # ==========================================================
+                    # Plot
+                    # ==========================================================
+
+                    for (
+                        plot_model,
+                        (
+                            dataarray,
+                            comparison_baseline,
+                            comparison_target,
+                        ),
+                    ) in dataarrays_to_plot.items():
+
+                        is_improvement = (
+                            comparison_baseline is not None
+                            and comparison_target is not None
+                        )
+
                         for start_period in start_periods:
                             for lead_value in dataarray[leadtime_agg_coord].values:
-                                label = safe_label(lead_label(dataarray, lead_value, leadtime_agg_coord))
+                                label = safe_label(
+                                    lead_label(
+                                        dataarray,
+                                        lead_value,
+                                        leadtime_agg_coord,
+                                    )
+                                )
 
                                 common_path = (
                                     Path(metric_kind)
                                     / safe_label(start_period)
-                                    / f"time_{safe_label(valid_time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
+                                    / (
+                                        f"time_{safe_label(valid_time_range)}"
+                                        f"_lat_{safe_label(lat_range)}"
+                                        f"_lon_{safe_label(lon_range)}"
+                                    )
                                     / m
                                     / leadtime_agg_mode
                                 )
 
-                                filename = f"{s.var_fc}_{m}_{plot_model}_lead_{label}.png"
+                                filename = (
+                                    f"{s.var_fc}_{m}_{plot_model}"
+                                    f"_lead_{label}.png"
+                                )
 
-                                out_file = model_plot_folders[model] / common_path / filename
-                                link = s.plot_dir / common_path / filename
+                                out_file = (
+                                    model_plot_folders[model]
+                                    / common_path
+                                    / filename
+                                )
 
-                                is_improvement = plot_model != model
+                                link = (
+                                    s.plot_dir
+                                    / common_path
+                                    / filename
+                                )
+
+                                # ==================================================
+                                # Significance for this exact comparison
+                                # ==================================================
 
                                 significance = None
 
                                 if (
                                     plot_significance
                                     and is_improvement
-                                    and m in significance_by_metric
                                 ):
-                                    significance = (
-                                        significance_by_metric[m][
-                                            "significant"
-                                        ]
+                                    significance_key = (
+                                        comparison_baseline,
+                                        comparison_target,
+                                        m,
                                     )
+
+                                    if (
+                                        significance_key
+                                        in significance_by_comparison
+                                    ):
+                                        significance = (
+                                            significance_by_comparison[
+                                                significance_key
+                                            ]["significant"]
+                                        )
 
                                 force_regenerate = (
                                     "improvement" in regenerate_plots
@@ -583,47 +785,116 @@ def main() -> None:
                                     else model in regenerate_plots
                                 )
 
-                                if out_file.exists() and not force_regenerate:
-                                    if model in ("fc", "clim-fc") and not link.exists():
-                                        link.parent.mkdir(parents=True, exist_ok=True)
-                                        link.symlink_to(out_file.resolve())
-                                    continue
+                                # ==================================================
+                                # Normal plot
+                                # ==================================================
 
-                                print(f"Saving map {out_file}")
+                                if (
+                                    not out_file.exists()
+                                    or force_regenerate
+                                ):
+                                    print(f"Saving map {out_file}")
 
-                                plot_map(
-                                    dataarray,
-                                    var=s.var_fc,
-                                    metric=m,
-                                    model=plot_model,
-                                    start_period=start_period,
-                                    lead_value=lead_value,
-                                    out_file=out_file,
-                                    time_range=valid_time_range,
-                                    leadtime_dim=leadtime_agg_coord,
-                                    leadtime_units=leadtime_units,
-                                    period_dim=f"start_{clim_period}",
-                                    clim_period=(
-                                        None
-                                        if metric_kind == "map"
-                                        else hovmoller_time_agg
-                                    ),
-                                    var_plot_config=VARIABLE_PLOT_CONFIG,
-                                    impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
-                                    plot_kind=metric_kind,
-                                    plot_type="contourf",
-                                    title_strftime="%Y",
-                                    significance=significance,
-                                    significance_stride=significance_stride,
-                                    significance_size=significance_size,
-                                    significance_alpha=significance_alpha,
-                                )
+                                    plot_map(
+                                        dataarray,
+                                        var=s.var_fc,
+                                        metric=m,
+                                        model=plot_model,
+                                        start_period=start_period,
+                                        lead_value=lead_value,
+                                        out_file=out_file,
+                                        time_range=valid_time_range,
+                                        leadtime_dim=leadtime_agg_coord,
+                                        leadtime_units=leadtime_units,
+                                        period_dim=f"start_{clim_period}",
+                                        clim_period=(
+                                            None
+                                            if metric_kind == "map"
+                                            else hovmoller_time_agg
+                                        ),
+                                        var_plot_config=VARIABLE_PLOT_CONFIG,
+                                        impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
+                                        plot_kind=metric_kind,
+                                        plot_type=plot_type,
+                                        plot_title=plot_title,
+                                        title_strftime=title_strftime,
+                                        significance=None,
+                                    )
 
-                                if model in ("fc", "clim-fc") and not link.exists():
-                                    link.parent.mkdir(parents=True, exist_ok=True)
-                                    link.symlink_to(out_file.resolve())
+                                    n += 1
 
-                                n += 1
+                                # ==================================================
+                                # Additional plot with significance stippling
+                                # ==================================================
+
+                                if significance is not None:
+                                    significance_out_file = (
+                                        out_file.parent
+                                        / (
+                                            f"{out_file.stem}"
+                                            f"_significance"
+                                            f"{out_file.suffix}"
+                                        )
+                                    )
+
+                                    if (
+                                        not significance_out_file.exists()
+                                        or force_regenerate
+                                    ):
+                                        print(
+                                            "Saving significance map "
+                                            f"{significance_out_file}"
+                                        )
+
+                                        plot_map(
+                                            dataarray,
+                                            var=s.var_fc,
+                                            metric=m,
+                                            model=plot_model,
+                                            start_period=start_period,
+                                            lead_value=lead_value,
+                                            out_file=significance_out_file,
+                                            time_range=valid_time_range,
+                                            leadtime_dim=leadtime_agg_coord,
+                                            leadtime_units=leadtime_units,
+                                            period_dim=f"start_{clim_period}",
+                                            clim_period=(
+                                                None
+                                                if metric_kind == "map"
+                                                else hovmoller_time_agg
+                                            ),
+                                            var_plot_config=VARIABLE_PLOT_CONFIG,
+                                            impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
+                                            plot_kind=metric_kind,
+                                            plot_type=plot_type,
+                                            plot_title=plot_title,
+                                            title_strftime=title_strftime,
+                                            significance=significance,
+                                            significance_stride=(
+                                                significance_stride
+                                            ),
+                                            significance_size=(
+                                                significance_size
+                                            ),
+                                            significance_alpha=(
+                                                significance_alpha
+                                            ),
+                                        )
+
+                                        n += 1
+
+                                if (
+                                    model in ("fc", "clim-fc")
+                                    and not link.exists()
+                                ):
+                                    link.parent.mkdir(
+                                        parents=True,
+                                        exist_ok=True,
+                                    )
+                                    link.symlink_to(
+                                        out_file.resolve()
+                                    )
+
 
 
     # if plot_mode in {"histograms", "all"} and "rank_histogram" in metrics:
@@ -661,89 +932,6 @@ def main() -> None:
     #             time_range=time_range,
     #         )
     #         n += 1
-        
-    # if plot_mode in {"timeseries", "all"}:
-    #     groups = defaultdict(list)
-    #     for s in settings:
-    #         groups[
-    #             s.comparison_key(
-    #                 ignore={"root_dir", "region_name", "region"}
-    #             )
-    #         ].append(s)
-        
-    #     for group in groups.values():
-    #         metric_ts_ens_mean_fc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_ts_ens_mean_mlfc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_ts_members_fc_by_region: dict[str, xr.Dataset] = {}
-    #         metric_ts_members_mlfc_by_region: dict[str, xr.Dataset] = {}
-
-    #         common_s: Settings = next(iter(group))
-    #         time_range = (common_s.train_start, common_s.test_end)
-    #         for s in group:
-    #             print("Get metrics for:", s.var_fc, s.region_name)
-    #             metric_ts_ens_mean = calculate_metric_kind(
-    #                 s,
-    #                 metric_kind="timeseries",
-    #                 leadtime_agg="leadtime_month",
-    #                 realization_agg="ensemble_mean",
-    #                 lat_range=lat_range,
-    #                 lon_range=lon_range,
-    #                 time_range=time_range,
-    #             )["leadtime_month"]["timeseries"]
-
-    #             metric_ts_members = calculate_metric_kind(
-    #                 s,
-    #                 metric_kind="timeseries",
-    #                 leadtime_agg="leadtime_month",
-    #                 realization_agg="member",
-    #                 lat_range=lat_range,
-    #                 lon_range=lon_range,
-    #                 time_range=time_range,
-    #             )["leadtime_month"]["timeseries"]
-
-    #             metric_ts_ens_mean_fc_by_region[s.region_name] = metric_ts_ens_mean["fc_ens_mean"]
-    #             metric_ts_ens_mean_mlfc_by_region[s.region_name] = metric_ts_ens_mean["mlfc_ens_mean"]
-    #             metric_ts_members_fc_by_region[s.region_name] = metric_ts_members["fc"]
-    #             metric_ts_members_mlfc_by_region[s.region_name] = metric_ts_members["mlfc"]
-
-    #         available_metrics = [str(x) for x in next(iter(metric_ts_ens_mean_fc_by_region.values())).data_vars if str(x) in metrics]
-    #         print("Available metrics for timeseries", available_metrics)
-    #         models = ["fc"] + [str(region_name) + "_mlfc" for region_name in regions]
-    #         print("Models compared in timeseries", models)
-
-    #         section = "all_dims"
-    #         kind = "timeseries"
-    #         start_period = "all"
-    #         for m in available_metrics:
-    #             das_ens_mean = [metric_ts_ens_mean_fc_by_region[regions[0]][m]] + [ds[m] for ds in metric_ts_ens_mean_mlfc_by_region.values()]
-    #             das_member = [metric_ts_members_fc_by_region[regions[0]][m]] + [ds[m] for ds in metric_ts_members_mlfc_by_region.values()]
-
-    #             for lead_value in das_ens_mean[0][leadtime_dim].values:
-    #                 label = safe_label(lead_label(das_ens_mean[0], lead_value, leadtime_dim))
-    #                 out_file = (
-    #                     common_s.plot_dir / "timeseries"/ common_s.var_fc / "leadtime_month"
-    #                     / "all_months"
-    #                     / f"time_{safe_label(time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
-    #                     / f"{common_s.var_fc}_{m}_{section}_{kind}_lead_{label}.png"
-    #                 )
-
-    #                 print(f"Saving timeseries {out_file}")
-
-    #                 plot_timeseries(
-    #                     das=das_ens_mean,
-    #                     var=common_s.var_fc,
-    #                     metric=m,
-    #                     start_period="all",
-    #                     models=models,
-    #                     out_file=out_file,
-    #                     lead_value=lead_value,
-    #                     time_range=time_range,
-    #                     das_member=das_member,
-    #                     leadtime_dim=leadtime_dim,
-    #                     realization_dim=realization_dim,
-    #                     spread="std",
-    #                 )
-    #                 n += 1
 
     print(f"Done. Saved {n} plots.")
 
