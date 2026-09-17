@@ -159,7 +159,8 @@ def main() -> None:
     # Lead-time aggregation
     # ==========================================================
 
-    leadtime_units = LeadtimeUnit.HOURS
+    leadtime_units = LeadtimeUnit.MONTHS # seasonal
+    # leadtime_units = LeadtimeUnit.HOURS # weather
 
     leadtime_agg_mode: LeadtimeAgg = "aggregated"
     # "single" for weather
@@ -508,7 +509,7 @@ def main() -> None:
                         var=s.var_fc,
                         metric_kind=metric_kind,
                         leadtime_agg=leadtime_agg_mode, # "single", "aggregated", "seasonal_window"
-                        realization_agg=False,
+                        realization_agg=True,
                         an_clim=an_clim,
                         fc_clim=ds_clim,
                         orography_path=orography_path,
@@ -618,7 +619,7 @@ def main() -> None:
                                 metric=m,
                                 metric_kind="maps",
                                 leadtime_agg=leadtime_agg_mode,
-                                realization_agg=False,
+                                realization_agg=is_deterministic(m),
                                 fc_clim=baseline_clim_ds,
                                 mlfc_clim=target_clim_ds,
                                 an_clim=an_clim,
