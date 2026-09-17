@@ -2,991 +2,402 @@ from earthml import (
     SeqBYRd,
 )
 
-# =============================================================================
-# Colormaps and plotting configuration
-# =============================================================================
-
 VARIABLE_PLOT_CONFIG = {
     "mslp": {
-        "bias": {
-            "vmin": -12,
-            "vmax": 12,
-            "ticks": [-12, -10, -8, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 8, 10, 12],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 10,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 9,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 10,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-            # "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 9,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 9,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 9,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 10,
-            "ticks": 11,
-        },
-        "crps_anom": {
-            "vmin": 0,
-            "vmax": 9,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": 11,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": 11,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": 11,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": 11,
-        },
+        "bias": {"vmin": -12, "vmax": 12, "ticks": [-12, -10, -8, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6, 8, 10, 12]},
+        "mae": {"vmin": 0, "vmax": 10, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10]},
+        "mae_anom": {"vmin": 0, "vmax": 9, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+        "rmse": {"vmin": 0, "vmax": 10, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10]},
+        "rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 9, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 9, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 9, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+        "crps": {"vmin": 0, "vmax": 10, "ticks": 11},
+        "crps_anom": {"vmin": 0, "vmax": 9, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
+        "an_std": {"vmin": 0, "vmax": 5, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 5, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 5, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 5, "ticks": 11},
     },
 
     "t2m": {
-        "bias": {
-            "vmin": -6,
-            "vmax": 6,
-            "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6],
-            "cmap": SeqBYRd,
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 8,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8],
-        },
-        "crps_anom": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
+        "bias": {"vmin": -6, "vmax": 6, "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6], "cmap": SeqBYRd},
+        "mae": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5]},
+        "crps": {"vmin": 0, "vmax": 8, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6, 7, 8]},
+        "crps_anom": {"vmin": 0, "vmax": 3, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3]},
+        "an_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
     },
 
     "d2m": {
-        "bias": {
-            "vmin": -6,
-            "vmax": 6,
-            "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-             "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "crps_anom": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 12,
-            "ticks": 7,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 12,
-            "ticks": 7,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": 7,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": 7,
-        },
+        "bias": {"vmin": -6, "vmax": 6, "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "crps": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 4, 6]},
+        "crps_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]},
+        "an_std": {"vmin": 0, "vmax": 12, "ticks": 7},
+        "fc_std": {"vmin": 0, "vmax": 12, "ticks": 7},
+        "an_anom_std": {"vmin": 0, "vmax": 3, "ticks": 7},
+        "fc_anom_std": {"vmin": 0, "vmax": 3, "ticks": 7},
     },
 
     "u10": {
-        "bias": {
-            "vmin": -4,
-            "vmax": 4,
-            "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
-        },
-        "crps_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
+        "bias": {"vmin": -4, "vmax": 4, "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4]},
+        "mae": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 2, 3, 4, 5]},
+        "mae_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "crps": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 2, 3, 4, 5]},
+        "crps_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "an_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "fc_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 9},
     },
 
     "v10": {
-        "bias": {
-            "vmin": -4,
-            "vmax": 4,
-            "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 5,
-            "ticks": [0, 0.5, 1, 2, 3, 4, 5],
-        },
-        "crps_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 9,
-        },
+        "bias": {"vmin": -4, "vmax": 4, "ticks": [-4, -3, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 3, 4]},
+        "mae": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 2, 3, 4, 5]},
+        "mae_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 2, 3, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "crps": {"vmin": 0, "vmax": 5, "ticks": [0, 0.5, 1, 2, 3, 4, 5]},
+        "crps_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2]},
+        "an_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "fc_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 9},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 9},
     },
 
     "sst": {
-        "bias": {
-            "vmin": -6,
-            "vmax": 6,
-            "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 3,
-            "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "crps_anom": {
-             "vmin": 0,
-            "vmax": 1,
-            "ticks": 7,
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
+        "bias": {"vmin": -6, "vmax": 6, "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 3, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 3, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 3, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3]},
+        "crps": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "crps_anom": {"vmin": 0, "vmax": 1, "ticks": 7},
+        "an_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
     },
 
-    "tprate": { # mm/day
-        "bias": {
-            "vmin": -10,
-            "vmax": 10,
-            "ticks": [-10, -8, -6, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 6, 8, 10],
-        },
-        "mae": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 4, 6],
-        },
-        "mae_anom": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "rmse_anom": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "ens_member_rmse": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "ens_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "mean_member_rmse_anom": {
-            "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "crps": {
-            "vmin": 0,
-            "vmax": 10,
-            "ticks": 11,
-        },
-        "crps_anom": {
-             "vmin": 0,
-            "vmax": 6,
-            "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6],
-        },
-        "an_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "an_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
-        "fc_anom_std": {
-            "vmin": 0,
-            "vmax": 2,
-            "ticks": 11,
-        },
+    "tprate": {  # mm/day
+        "bias": {"vmin": -10, "vmax": 10, "ticks": [-10, -8, -6, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 6, 8, 10]},
+        "mae": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "rmse_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "crps": {"vmin": 0, "vmax": 10, "ticks": 11},
+        "crps_anom": {"vmin": 0, "vmax": 6, "ticks": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6]},
+        "an_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+    },
+
+    "mlotst": {
+        "bias": {"vmin": -20, "vmax": 20, "ticks": [-20, -15, -10, -5, -2, -1, 1, 2, 5, 10, 15, 20]},
+        "mae": {"vmin": 0, "vmax": 20, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20]},
+        "mae_anom": {"vmin": 0, "vmax": 15, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 12.5, 15]},
+        "rmse": {"vmin": 0, "vmax": 25, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20, 25]},
+        "rmse_anom": {"vmin": 0, "vmax": 20, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 25, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20, 25]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 20, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 20, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20]},
+        "crps": {"vmin": 0, "vmax": 20, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 15, 20]},
+        "crps_anom": {"vmin": 0, "vmax": 15, "ticks": [0, 1, 2, 3, 5, 7.5, 10, 12.5, 15]},
+        "an_std": {"vmin": 0, "vmax": 30, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 30, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 20, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 20, "ticks": 11},
+    },
+
+    "ssh": {
+        "bias": {"vmin": -0.3, "vmax": 0.3, "ticks": [-0.3, -0.2, -0.15, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]},
+        "mae": {"vmin": 0, "vmax": 0.3, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3]},
+        "mae_anom": {"vmin": 0, "vmax": 0.2, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2]},
+        "rmse": {"vmin": 0, "vmax": 0.4, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4]},
+        "rmse_anom": {"vmin": 0, "vmax": 0.25, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.2, 0.25]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 0.4, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 0.25, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.2, 0.25]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 0.25, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.2, 0.25]},
+        "crps": {"vmin": 0, "vmax": 0.3, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3]},
+        "crps_anom": {"vmin": 0, "vmax": 0.2, "ticks": [0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2]},
+        "an_std": {"vmin": 0, "vmax": 0.5, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 0.5, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 0.3, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 0.3, "ticks": 11},
+    },
+
+    "sss": {
+        "bias": {"vmin": -2, "vmax": 2, "ticks": [-2, -1.5, -1, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1, 1.5, 2]},
+        "mae": {"vmin": 0, "vmax": 2, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]},
+        "mae_anom": {"vmin": 0, "vmax": 1.5, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5]},
+        "rmse": {"vmin": 0, "vmax": 2.5, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5]},
+        "rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 2.5, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 2, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]},
+        "crps": {"vmin": 0, "vmax": 2, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]},
+        "crps_anom": {"vmin": 0, "vmax": 1.5, "ticks": [0, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5]},
+        "an_std": {"vmin": 0, "vmax": 3, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 3, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 2, "ticks": 11},
+    },
+
+    "t20d": {
+        "bias": {"vmin": -6, "vmax": 6, "ticks": [-6, -4, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 4, 6]},
+        "mae": {"vmin": 0, "vmax": 6, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6]},
+        "mae_anom": {"vmin": 0, "vmax": 4, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4]},
+        "rmse": {"vmin": 0, "vmax": 7, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7]},
+        "rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]},
+        "ens_member_rmse": {"vmin": 0, "vmax": 7, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7]},
+        "ens_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]},
+        "mean_member_rmse_anom": {"vmin": 0, "vmax": 5, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5]},
+        "crps": {"vmin": 0, "vmax": 6, "ticks": [0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6]},
+        "crps_anom": {"vmin": 0, "vmax": 4, "ticks": [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4]},
+        "an_std": {"vmin": 0, "vmax": 5, "ticks": 11},
+        "fc_std": {"vmin": 0, "vmax": 5, "ticks": 11},
+        "an_anom_std": {"vmin": 0, "vmax": 4, "ticks": 11},
+        "fc_anom_std": {"vmin": 0, "vmax": 4, "ticks": 11},
     },
 }
+
+
+NORMALIZED_IMPROVEMENT_CONFIG = {
+    "vmin": -1,
+    "vmax": 1,
+    "ticks": [-1, -0.75, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 0.75, 1],
+}
+
 
 IMPROVEMENT_PLOT_CONFIG = {
     "mslp": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -7,
-                "vmax": 7,
-                "ticks": [-7, -6, -5, -4, -3, -2, -1, -0.5, -0.2, -0.1, 0.1, 0.2, 0.5, 1, 2, 3, 4, 5, 6, 7],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -7, "vmax": 7, "ticks": [-7, -6, -5, -4, -3, -2, -1, -0.5, -0.2, -0.1, 0.1, 0.2, 0.5, 1, 2, 3, 4, 5, 6, 7]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -200,
-                "vmax": 100,
-                "ticks": [-200, -150, -100, -50, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -4,
-                "vmax": 4,
-                "ticks": [-4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4],
-            },
+            "%": {"vmin": -200, "vmax": 100, "ticks": [-200, -150, -100, -50, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -4, "vmax": 4, "ticks": [-4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.5,
-                "vmax": 0.5,
-                "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "t2m": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -2,
-                "vmax": 2,
-                "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -4, "vmax": 4, "ticks": [-4, -2, -1, -0.9, -0.7, -0.5, -0.4, -0.3, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 2, 4]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -3, "vmax": 3, "ticks": [-3, -2, -1, -0.9, -0.7, -0.5, -0.4, -0.3, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 2, 3]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
+        },
+        "acc": {
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5]},
         },
     },
 
     "d2m": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -2,
-                "vmax": 2,
-                "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -2, "vmax": 2, "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1, "vmax": 1, "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.75, "vmax": 0.75, "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "u10": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1.5,
-                "vmax": 1.5,
-                "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1.5, "vmax": 1.5, "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1, "vmax": 1, "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.75, "vmax": 0.75, "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "v10": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1.5,
-                "vmax": 1.5,
-                "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1.5, "vmax": 1.5, "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1, "vmax": 1, "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.75, "vmax": 0.75, "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "sst": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.75, "vmax": 0.75, "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.5,
-                "vmax": 0.5,
-                "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.4,
-                "vmax": 0.4,
-                "ticks": [-0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.4, "vmax": 0.4, "ticks": [-0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "tprate": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -2,
-                "vmax": 2,
-                "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -2, "vmax": 2, "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -200,
-                "vmax": 100,
-                "ticks": [-200, -150, -100, -50, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -2,
-                "vmax": 2,
-                "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2],
-            },
+            "%": {"vmin": -200, "vmax": 100, "ticks": [-200, -150, -100, -50, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -2, "vmax": 2, "ticks": [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
-        },
-    },
-
-    "tcc": {
-        "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -20,
-                "vmax": 20,
-                "ticks": [-20, -15, -10, -5, 0, 5, 10, 15, 20],
-            },
-        },
-        "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -10,
-                "vmax": 10,
-                "ticks": [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10],
-            },
-        },
-        "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -10,
-                "vmax": 10,
-                "ticks": [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1, "vmax": 1, "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "mlotst": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -10,
-                "vmax": 10,
-                "ticks": [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -10, "vmax": 10, "ticks": [-10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -5,
-                "vmax": 5,
-                "ticks": [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -5, "vmax": 5, "ticks": [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -5,
-                "vmax": 5,
-                "ticks": [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -5, "vmax": 5, "ticks": [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "ssh": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.2,
-                "vmax": 0.2,
-                "ticks": [-0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.2, "vmax": 0.2, "ticks": [-0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.1,
-                "vmax": 0.1,
-                "ticks": [-0.1, -0.075, -0.05, -0.025, 0, 0.025, 0.05, 0.075, 0.1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.1, "vmax": 0.1, "ticks": [-0.1, -0.075, -0.05, -0.025, 0, 0.025, 0.05, 0.075, 0.1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.1,
-                "vmax": 0.1,
-                "ticks": [-0.1, -0.075, -0.05, -0.025, 0, 0.025, 0.05, 0.075, 0.1],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.1, "vmax": 0.1, "ticks": [-0.1, -0.075, -0.05, -0.025, 0, 0.025, 0.05, 0.075, 0.1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "sss": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1,
-                "vmax": 1,
-                "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1, "vmax": 1, "ticks": [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.5,
-                "vmax": 0.5,
-                "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.5,
-                "vmax": 0.5,
-                "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 
     "t20d": {
         "bias": {
-            "%": {
-                "vmin": -400,
-                "vmax": 100,
-                "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -1.5,
-                "vmax": 1.5,
-                "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5],
-            },
+            "%": {"vmin": -400, "vmax": 100, "ticks": [-400, -300, -200, -100, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -1.5, "vmax": 1.5, "ticks": [-1.5, -1, -0.5, 0, 0.5, 1, 1.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.75,
-                "vmax": 0.75,
-                "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.75, "vmax": 0.75, "ticks": [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
         "rmse_anom": {
-            "%": {
-                "vmin": -100,
-                "vmax": 100,
-                "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100],
-            },
-            "Δ": {
-                "vmin": -0.5,
-                "vmax": 0.5,
-                "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5],
-            },
+            "%": {"vmin": -100, "vmax": 100, "ticks": [-100, -75, -50, -25, 0, 25, 50, 75, 100]},
+            "Δ": {"vmin": -0.5, "vmax": 0.5, "ticks": [-0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5]},
+            "normalized": NORMALIZED_IMPROVEMENT_CONFIG,
         },
     },
 }
