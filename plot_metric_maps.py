@@ -215,12 +215,24 @@ def main() -> None:
 
     inference_period = None
     # inference_period = ("2025-01-01", "2025-10-10")
+    # inference_period = ("2025-01-01", "2025-05-12")
 
     leadtime_agg_mode: LeadtimeAgg = "aggregated" # "single", "aggregated", "seasonal_window"
     hovmoller_time_agg: ClimPeriod | None = ClimPeriod.MONTH
 
     baseline_model: Literal["fc", "clim-fc"] = "fc"
-    improvement_mode: ImprovementMode = "difference"
+
+    # Bootstrap significance
+    plot_significance = True
+
+    significance_n_bootstrap = 200
+    significance_block_size = 1
+    significance_confidence_level = 0.95
+    significance_seed = 42
+
+    significance_stride = 3
+    significance_size = 2.0
+    significance_alpha = 0.6
 
     settings = get_experiment_configs(
         experiments_root,
@@ -244,6 +256,9 @@ def main() -> None:
 
 
     print(f"Found {len(settings)} matching experiment(s).")
+
+    # Add std to compute normalized diff metrics
+    metrics_to_compute = get_required_improvement_metrics(list(metrics))
 
     n = 0
     for s in settings:
@@ -347,15 +362,24 @@ def main() -> None:
         }
         ds_plot = (fc, clim_fc, mlfc) if plot_mlfc else (fc, clim_fc)
         ds_clim_plot = (fc_clim, an_clim_for_fc, mlfc_clim) if plot_mlfc else (fc_clim, an_clim_for_fc,)
+
         metric_maps_by_model: dict[str, xr.Dataset] = {}
+        significance_by_metric: dict[str, xr.Dataset] = {}
 
         for ds, ds_clim, model in zip(ds_plot, ds_clim_plot, models):
             if ds is None or ds_clim is None:
                 continue
 
             if plot_mode in {"maps", "all"}:
-                deterministic_metrics = [m for m in metrics if is_deterministic(m)]
-                probabilistic_metrics = [m for m in metrics if is_probabilistic(m)]
+                deterministic_metrics = [
+                    m for m in metrics_to_compute
+                    if is_deterministic(m)
+                ]
+
+                probabilistic_metrics = [
+                    m for m in metrics_to_compute
+                    if is_probabilistic(m)
+                ]
 
                 metric_maps_det = xr.Dataset()
                 metric_maps_prob = xr.Dataset()
@@ -418,6 +442,79 @@ def main() -> None:
 
                 metric_maps_by_model[model] = metric_maps
 
+                # =====================================================
+                # Statistical significance of FC -> MLFC improvement
+                # =====================================================
+
+                metric_maps_by_model[model] = metric_maps
+
+                if (
+                    plot_significance
+                    and metric_kind == "maps"
+                    and model == "mlfc"
+                    and baseline_model in metric_maps_by_model
+                    and mlfc is not None
+                    and mlfc_clim is not None
+                ):
+                    if baseline_model == "fc":
+                        baseline_ds = fc
+                        baseline_clim_ds = fc_clim
+
+                    elif baseline_model == "clim-fc":
+                        baseline_ds = clim_fc
+                        baseline_clim_ds = an_clim_for_fc
+
+                    else:
+                        raise ValueError(
+                            f"Unsupported baseline_model="
+                            f"{baseline_model!r}"
+                        )
+
+                    significance_metrics = [
+                        m
+                        for m in metrics
+                        if (
+                            m != "rank_histogram"
+                            and m in metric_maps_by_model[
+                                baseline_model
+                            ]
+                            and m in metric_maps_by_model["mlfc"]
+                        )
+                    ]
+
+                    for m in significance_metrics:
+                        print(
+                            f"Get significance for {m} "
+                            f"({baseline_model} -> mlfc)"
+                        )
+
+                        significance_by_metric[m] = (
+                            get_metric_improvement_significance(
+                                an=an,
+                                fc=baseline_ds,
+                                mlfc=mlfc,
+                                var_fc=s.var_fc,
+                                var_an=s.var_an,
+                                metric=m,
+                                metric_kind="maps",
+                                leadtime_agg=leadtime_agg_mode,
+                                realization_agg=False,
+                                fc_clim=baseline_clim_ds,
+                                mlfc_clim=mlfc_clim,
+                                an_clim=an_clim,
+                                leadtime_windows=s.seasonal_leadtime_windows,
+                                leadtime_agg_coord=leadtime_agg_coord,
+                                clim_period=clim_period,
+                                period_dim=f"start_{clim_period}",
+                                periods_requested=wanted_start_periods,
+                                n_bootstrap=significance_n_bootstrap,
+                                block_size=significance_block_size,
+                                confidence_level=significance_confidence_level,
+                                seed=significance_seed,
+                                align=False,
+                                fair_correction=False,
+                            )
+                        )
                 available_metrics = [
                     str(x) for x in metric_maps.data_vars
                     if str(x) in metrics and str(x) != "rank_histogram"
@@ -437,33 +534,15 @@ def main() -> None:
                         model == "mlfc"
                         and baseline_model in metric_maps_by_model
                         and m in metric_maps_by_model[baseline_model]
-                        and m in METRIC_IMPROVEMENT
                     ):
-                        baseline, corrected = xr.align(
-                            metric_maps_by_model[baseline_model][m],
-                            metric_maps[m],
-                            join="exact",
+                        dataarrays_to_plot.update(
+                            build_metric_improvements(
+                                metric_maps_by_model[baseline_model],
+                                metric_maps,
+                                metric=m,
+                                baseline_model=baseline_model,
+                            )
                         )
-
-                        improvement_unit = METRIC_SKILL_UNITS[m]
-
-                        improvement_model = (
-                            f"mlfc_vs_{baseline_model}_"
-                            f"{'percentage' if improvement_unit == '%' else 'difference'}"
-                        )
-
-                        improvement = METRIC_IMPROVEMENT[m](
-                            baseline,
-                            corrected,
-                        )
-
-                        improvement.attrs = baseline.attrs.copy()
-                        improvement.attrs["units"] = improvement_unit
-                        improvement.attrs["long_name"] = (
-                            f"{m} improvement"
-                        )
-
-                        dataarrays_to_plot[improvement_model] = improvement
 
                     for plot_model, dataarray in dataarrays_to_plot.items():
                         for start_period in start_periods:
@@ -484,6 +563,19 @@ def main() -> None:
                                 link = s.plot_dir / common_path / filename
 
                                 is_improvement = plot_model != model
+
+                                significance = None
+
+                                if (
+                                    plot_significance
+                                    and is_improvement
+                                    and m in significance_by_metric
+                                ):
+                                    significance = (
+                                        significance_by_metric[m][
+                                            "significant"
+                                        ]
+                                    )
 
                                 force_regenerate = (
                                     "improvement" in regenerate_plots
@@ -511,12 +603,20 @@ def main() -> None:
                                     leadtime_dim=leadtime_agg_coord,
                                     leadtime_units=leadtime_units,
                                     period_dim=f"start_{clim_period}",
-                                    clim_period=None if metric_kind=="map" else hovmoller_time_agg,
+                                    clim_period=(
+                                        None
+                                        if metric_kind == "map"
+                                        else hovmoller_time_agg
+                                    ),
                                     var_plot_config=VARIABLE_PLOT_CONFIG,
                                     impro_plot_config=IMPROVEMENT_PLOT_CONFIG,
                                     plot_kind=metric_kind,
                                     plot_type="contourf",
                                     title_strftime="%Y",
+                                    significance=significance,
+                                    significance_stride=significance_stride,
+                                    significance_size=significance_size,
+                                    significance_alpha=significance_alpha,
                                 )
 
                                 if model in ("fc", "clim-fc") and not link.exists():
