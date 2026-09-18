@@ -37,6 +37,7 @@ FieldDifference = Literal[
     "mlfc-fc",
     "mlfc-clim-fc",
     "mlfc-fc-abs-error",
+    "mlfc-fc-abs-anomaly-error",
 ]
 
 
@@ -197,7 +198,10 @@ def _build_field_differences(
     ] = {}
 
     for name in requested:
-        if name == "mlfc-fc-abs-error":
+        if name in {
+            "mlfc-fc-abs-error",
+            "mlfc-fc-abs-anomaly-error",
+        }:
             required = ("mlfc", "fc", "an")
 
             if any(field not in fields for field in required):
@@ -215,7 +219,7 @@ def _build_field_differences(
                 - abs(fc - an)
             )
 
-            continue
+        continue
 
         lhs_name, rhs_name = pairs[name]
 
@@ -393,7 +397,7 @@ def main() -> None:
         # "clim-fc-fc",
         "mlfc-fc",
         # "mlfc-clim-fc",
-        # "mlfc-fc-abs-error",
+        "mlfc-fc-abs-error",
     )
 
     # Unique anomaly differences. Since clim-fc anomaly == fc anomaly,
@@ -402,6 +406,7 @@ def main() -> None:
         "fc-an",
         "mlfc-an",
         "mlfc-fc",
+        "mlfc-fc-abs-anomaly-error",
     )
 
     # ==========================================================
@@ -442,10 +447,14 @@ def main() -> None:
 
     wanted_times = [
         # seasonal
+        "1993-01-01", # first train
         "1994-01-01",
         "2000-01-01",
         "2012-01-01",
+        "2014-12-01",
         "2024-01-01",
+        "1993-05-01",
+        "1994-05-01",
         "1994-05-01",
         "2000-05-01",
         "2012-05-01",
@@ -956,6 +965,7 @@ def main() -> None:
             "fc-an": "Forecast anomaly - Analysis anomaly",
             "mlfc-an": "ML-corrected anomaly - Analysis anomaly",
             "mlfc-fc": "ML-corrected anomaly - Forecast anomaly",
+            "mlfc-fc-abs-anomaly-error": "ML-corrected - Forecast absolute anomaly error",
         }
 
         for time_value in selected_times:
