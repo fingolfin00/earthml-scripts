@@ -253,9 +253,17 @@ def main() -> None:
     # ==========================================================
     # Plot settings
     # ==========================================================
-    plot_type = "contourf"
+    plot_type = "pcolormesh"
     plot_figsize = (12, 8)
-    cmap = "jet"
+
+    # cmap = "cmocean:thermal"
+    cmap = "cmasher:pride"
+    # cmap = "cmasher:torch"
+    # anomaly_cmap = "cmasher:fusion"
+    anomaly_cmap = "cmocean:balance"
+    # difference_cmap = "cmasher:fusion"
+    difference_cmap = "cmocean:balance"
+
     plot_title = True
     plot_title_strftime = "%m.%Y" # seasonal
     # plot_title_strftime = "%d.%m.%Y %H:%M" # weather
@@ -268,24 +276,36 @@ def main() -> None:
 
     # Raw fields
     common_scale = True
-    robust_quantiles = (0.01, 0.99)  # None -> true min/max
-    vmin = None
-    vmax = None
+    # robust_quantiles = (0.01, 0.99)  # None -> true min/max
+    robust_quantiles = None  # None -> true min/max
+    vmin, vmax = -50, 50 # t2m
+    # vmin, vmax = None, None
+    raw_levels = 21
+    raw_centered = True
 
     # Anomalies
     common_anomaly_scale = True
-    anomaly_quantile = 0.99          # None -> true max(abs(x))
-    anomaly_vmax = None
+    # anomaly_quantile = 0.99 # None -> true max(abs(x))
+    anomaly_quantile = None
+    anomaly_vmax = 6 # t2m
+    # anomaly_vmax = None
+    anomaly_levels = 13
 
     # Raw differences
     common_difference_scale = True
-    difference_quantile = 0.99
-    difference_vmax = None
+    # difference_quantile = 0.99
+    difference_quantile = None
+    difference_vmax = 7 # t2m
+    # difference_vmax = None
+    difference_levels = 15
 
     # Anomaly differences
     common_anomaly_difference_scale = True
-    anomaly_difference_quantile = 0.99
-    anomaly_difference_vmax = None
+    # anomaly_difference_quantile = 0.99
+    anomaly_difference_quantile = None
+    anomaly_difference_vmax = 6 # t2m
+    # anomaly_difference_vmax = None
+    anomaly_difference_levels = 13
 
     # ==========================================================
     # Fields to plot
@@ -300,10 +320,7 @@ def main() -> None:
 
     plot_anomaly_models: tuple[FieldModel, ...] = plot_models
 
-    anomaly_cmap = "RdBu_r"
     common_anomaly_scale = True
-    anomaly_quantile = 0.99
-    anomaly_vmax = None
 
     # Forecasts with realizations:
     #
@@ -317,7 +334,7 @@ def main() -> None:
     realization = 0
 
     # ==========================================================
-    # Differences to plot
+    # Differences
     # ==========================================================
 
     plot_differences: tuple[FieldDifference, ...] = (
@@ -336,19 +353,6 @@ def main() -> None:
         "mlfc-an",
         "mlfc-fc",
     )
-
-    difference_cmap = "RdBu_r"
-
-    # Use the same symmetric range for all differences belonging
-    # to one initialization/leadtime.
-    common_difference_scale = True
-
-    # Robust symmetric scaling.
-    difference_quantile = 0.99
-
-    # Optional manual symmetric limit.
-    # e.g. difference_vmax = 5
-    difference_vmax = None
 
     # ==========================================================
     # Climatology
@@ -387,10 +391,14 @@ def main() -> None:
     # wanted_times = None
 
     wanted_times = [
+        "1994-01-01",
         "2000-01-01",
         "2012-01-01",
         "2024-01-01",
-        "2025-02-01",
+        "1994-05-01",
+        "2000-05-01",
+        "2012-05-01",
+        "2024-05-01",
     ]
 
     # Individual lead times.
@@ -476,9 +484,9 @@ def main() -> None:
         # net_name="ConvNeXtTransformerUNet",
         net_name="SmaAt_UNet",
 
-        target_mode="analysis",
+        # target_mode="analysis",
 
-        input_realization_avg=False,
+        # input_realization_avg=False,
 
         # seasonal_encoding=True,
         # ensemble_encoding=True,
@@ -930,18 +938,20 @@ def main() -> None:
                         "fields",
                         raw_fields,
                         cmap,
-                        False,
+                        raw_centered, # centered
                         plot_vmin,
                         plot_vmax,
+                        raw_levels,
                         model_names,
                     ),
                     (
                         "anomalies",
                         selected_anomalies,
                         anomaly_cmap,
-                        True,
+                        True, # centered
                         -anom_vmax if anom_vmax is not None else None,
                         anom_vmax,
+                        anomaly_levels,
                         {
                             model: f"{name} anomaly"
                             for model, name in model_names.items()
@@ -956,6 +966,7 @@ def main() -> None:
                     centered,
                     map_vmin,
                     map_vmax,
+                    map_levels,
                     names,
                 ) in collections:
                     for model, field in fields.items():
@@ -1003,6 +1014,7 @@ def main() -> None:
                             centered=centered,
                             vmin=map_vmin,
                             vmax=map_vmax,
+                            levels=map_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
                         )
@@ -1038,10 +1050,12 @@ def main() -> None:
 
                     if kind == "anomaly_differences":
                         manual_vmax = anomaly_difference_vmax
+                        diff_levels = anomaly_difference_levels
                         use_common_scale = common_anomaly_difference_scale
                         quantile = anomaly_difference_quantile
                     else:
                         manual_vmax = difference_vmax
+                        diff_levels = difference_levels
                         use_common_scale = common_difference_scale
                         quantile = difference_quantile
 
@@ -1103,6 +1117,7 @@ def main() -> None:
                             centered=True,
                             vmin=-diff_vmax if diff_vmax is not None else None,
                             vmax=diff_vmax,
+                            levels=diff_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
                         )
