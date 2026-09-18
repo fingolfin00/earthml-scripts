@@ -982,8 +982,8 @@ def main() -> None:
                         lon_dim,
                     ),
                     realization_dim=realization_dim,
-                    train_end=s.train_end,
-                    val_end=s.val_end,
+                    train_end=s.train_end if valid_time_range[0] <= s.train_end <= valid_time_range[1] else None,
+                    val_end=s.val_end if valid_time_range[0] <= s.val_end <= valid_time_range[1] else None,
                     plot_single_members=(
                         plot_single_members
                     ),
