@@ -34,6 +34,7 @@ FieldDifference = Literal[
     "clim-fc-fc",
     "mlfc-fc",
     "mlfc-clim-fc",
+    "mlfc-fc-abs-error",
 ]
 
 
@@ -194,6 +195,26 @@ def _build_field_differences(
     ] = {}
 
     for name in requested:
+        if name == "mlfc-fc-abs-error":
+            required = ("mlfc", "fc", "an")
+
+            if any(field not in fields for field in required):
+                continue
+
+            mlfc, fc, an = xr.align(
+                fields["mlfc"],
+                fields["fc"],
+                fields["an"],
+                join="exact",
+            )
+
+            differences[name] = (
+                abs(mlfc - an)
+                - abs(fc - an)
+            )
+
+            continue
+
         lhs_name, rhs_name = pairs[name]
 
         if (
@@ -245,11 +266,6 @@ def main() -> None:
         # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
     )
 
-    common_plot_dir = Path(
-        "/Users/jacopodallaglio/ML/training/seasonal/plots"
-        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
-    )
-
     # ==========================================================
     # Plot settings
     # ==========================================================
@@ -268,7 +284,7 @@ def main() -> None:
     plot_title_strftime = "%m.%Y" # seasonal
     # plot_title_strftime = "%d.%m.%Y %H:%M" # weather
 
-    regenerate_plots = True
+    regenerate_plots = False
 
     # ==========================================================
     # Plot limits
@@ -278,7 +294,8 @@ def main() -> None:
     common_scale = True
     # robust_quantiles = (0.01, 0.99)  # None -> true min/max
     robust_quantiles = None  # None -> true min/max
-    vmin, vmax = -50, 50 # t2m
+    vmin, vmax = -50, 50 # t2m seasonal
+    # vmin, vmax = -30, 30 # t2m weather
     # vmin, vmax = None, None
     raw_levels = 21
     raw_centered = True
@@ -314,11 +331,16 @@ def main() -> None:
     plot_models: tuple[FieldModel, ...] = (
         "an",
         "fc",
-        "clim-fc",
+        # "clim-fc",
         "mlfc",
     )
 
-    plot_anomaly_models: tuple[FieldModel, ...] = plot_models
+    plot_anomaly_models: tuple[FieldModel, ...] = (
+        "an",
+        "fc",
+        # "clim-fc",
+        "mlfc",
+    )
 
     common_anomaly_scale = True
 
@@ -339,11 +361,12 @@ def main() -> None:
 
     plot_differences: tuple[FieldDifference, ...] = (
         "fc-an",
-        "clim-fc-an",
+        # "clim-fc-an",
         "mlfc-an",
-        "clim-fc-fc",
+        # "clim-fc-fc",
         "mlfc-fc",
-        "mlfc-clim-fc",
+        # "mlfc-clim-fc",
+        # "mlfc-fc-abs-error",
     )
 
     # Unique anomaly differences. Since clim-fc anomaly == fc anomaly,
@@ -391,6 +414,7 @@ def main() -> None:
     # wanted_times = None
 
     wanted_times = [
+        # seasonal
         "1994-01-01",
         "2000-01-01",
         "2012-01-01",
@@ -399,6 +423,43 @@ def main() -> None:
         "2000-05-01",
         "2012-05-01",
         "2024-05-01",
+        # weather
+        # "2019-10-14", # first train
+        # "2020-01-01",
+        # "2020-03-01",
+        # "2020-05-01",
+        # "2020-08-01",
+        # "2020-10-01",
+        # "2020-12-01",
+        # "2021-01-01",
+        # "2021-03-01",
+        # "2021-05-01",
+        # "2021-08-01",
+        # "2021-10-01",
+        # "2021-12-01",
+        # "2022-01-01",
+        # "2022-03-01",
+        # "2022-05-01",
+        # "2022-08-01",
+        # "2022-10-01",
+        # "2022-12-01",
+        # "2023-01-01",
+        # "2023-03-01",
+        # "2023-05-01",
+        # "2023-08-01",
+        # "2023-10-01",
+        # "2023-12-01",
+        # "2023-12-31", # last train
+        # "2024-01-01", # first val
+        # "2024-03-01",
+        # "2024-05-01",
+        # "2024-08-01",
+        # "2024-12-31", # last val
+        # "2025-01-01", # first test
+        # "2025-03-01",
+        # "2025-05-01",
+        # "2025-08-01",
+        # "2025-09-30" # last test
     ]
 
     # Individual lead times.
@@ -417,11 +478,11 @@ def main() -> None:
     # Data processing
     # ==========================================================
 
-    interpolate = True  # seasonal
-    # interpolate = False  # weather
+    interpolate = True # seasonal
+    # interpolate = False # weather
 
-    leadtime_units = LeadtimeUnit.MONTHS
-    # leadtime_units = LeadtimeUnit.HOURS
+    leadtime_units = LeadtimeUnit.MONTHS # seasonal
+    # leadtime_units = LeadtimeUnit.HOURS # weather
 
     # ==========================================================
     # Variables and regions
@@ -488,6 +549,8 @@ def main() -> None:
 
         # input_realization_avg=False,
 
+        # loss_name="GeoMaskedMSELoss",
+
         # seasonal_encoding=True,
         # ensemble_encoding=True,
 
@@ -495,6 +558,7 @@ def main() -> None:
         # separate_training_by_init_period=ClimPeriod.MONTH,
 
         # extra_suffix_folder="",
+        # extra_suffix_folder="NOAA_copy",
     )
 
     print(
@@ -844,9 +908,8 @@ def main() -> None:
             "mlfc-an": "ML-corrected forecast - Analysis",
             "clim-fc-fc": "Climatology correction",
             "mlfc-fc": "ML correction",
-            "mlfc-clim-fc": (
-                "ML-corrected - Climatology-corrected forecast"
-            ),
+            "mlfc-clim-fc": "ML-corrected - Climatology-corrected forecast",
+            "mlfc-fc-abs-error": "ML-corrected - Forecast absolute error",
         }
 
         anomaly_difference_names = {
@@ -935,7 +998,7 @@ def main() -> None:
 
                 collections = (
                     (
-                        "fields",
+                        "absolute",
                         raw_fields,
                         cmap,
                         raw_centered, # centered
@@ -972,11 +1035,8 @@ def main() -> None:
                     for model, field in fields.items():
                         common_path = (
                             Path("fields")
-                            / (
-                                Path(model)
-                                if kind == "fields"
-                                else Path("anomalies") / model
-                            )
+                            / kind
+                            / model
                             / s.var_fc
                             / (
                                 f"time_{safe_label(valid_time_range)}"
