@@ -287,6 +287,65 @@ def main() -> None:
     regenerate_plots = False
 
     # ==========================================================
+    # Spatial subregion
+    # ==========================================================
+
+    locations = {
+        "newyork": {
+            "lat_range": (42.0, 39.5),
+            "lon_range": (-75.0, -72.0),
+        },
+        "boston": {
+            "lat_range": (43.5, 41.0),
+            "lon_range": (-72.5, -69.5),
+        },
+        "washington_dc": {
+            "lat_range": (40.0, 37.5),
+            "lon_range": (-78.5, -75.5),
+        },
+        "miami": {
+            "lat_range": (27.0, 24.5),
+            "lon_range": (-82.0, -79.0),
+        },
+        "chicago": {
+            "lat_range": (43.0, 40.5),
+            "lon_range": (-89.5, -86.5),
+        },
+        "houston": {
+            "lat_range": (31.0, 28.5),
+            "lon_range": (-97.0, -94.0),
+        },
+        "denver": {
+            "lat_range": (41.0, 38.5),
+            "lon_range": (-106.0, -103.0),
+        },
+        "seattle": {
+            "lat_range": (48.5, 46.0),
+            "lon_range": (-124.0, -121.0),
+        },
+        "sanfrancisco": {
+            "lat_range": (39.0, 36.5),
+            "lon_range": (-123.5, -120.5),
+        },
+        "losangeles": {
+            "lat_range": (35.5, 33.0),
+            "lon_range": (-120.0, -117.0),
+        },
+    }
+
+    location = "newyork"
+
+    # Rectangle overlay
+    rectangle = {
+        "lon_range": locations[location]["lon_range"],
+        "lat_range": locations[location]["lat_range"],
+        "edgecolor": "black",
+        "facecolor": "none",
+        "linewidth": 3,
+        "linestyle": "-",
+    }
+
+    # ==========================================================
     # Plot limits
     # ==========================================================
 
@@ -658,7 +717,7 @@ def main() -> None:
         # Climatologies
         # ======================================================
 
-        fc_clim, an_clim, _ = (
+        fc_clim, an_clim, mlfc_clim = (
             calculate_save_and_subset_climatologies(
                 s,
                 leadtime_units=leadtime_units,
@@ -722,6 +781,13 @@ def main() -> None:
             mlfc = mlfc.sel(
                 {leadtime_dim: s.leadtimes}
             )
+
+        if mlfc_clim is not None:
+            mlfc_clim[s.var_fc] = _convert_kelvin_to_celsius(
+                mlfc_clim[s.var_fc],
+                var=s.var_fc,
+            )
+
 
         # ======================================================
         # Unit conversion
@@ -794,16 +860,22 @@ def main() -> None:
             + an_clim_da
         )
 
-        mlfc_anom_da = (
-            groupby_period(
-                mlfc[s.var_fc],
-                time_dim,
+        if mlfc is not None and mlfc_clim is not None:
+            mlfc_clim_da = stack_hour_clim(
+                mlfc_clim[s.var_fc],
                 clim_period,
             )
-            - an_clim_da
-            if mlfc is not None
-            else None
-        )
+
+            mlfc_anom_da = (
+                groupby_period(
+                    mlfc[s.var_fc],
+                    time_dim,
+                    clim_period,
+                )
+                - mlfc_clim_da
+            )
+        else:
+            mlfc_anom_da = None
 
         # ======================================================
         # Dataset collections
@@ -1077,6 +1149,7 @@ def main() -> None:
                             levels=map_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
+                            rectangle=rectangle,
                         )
                         n += 1
 
@@ -1180,6 +1253,7 @@ def main() -> None:
                             levels=diff_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
+                            rectangle=rectangle,
                         )
 
                         n += 1
