@@ -25,6 +25,7 @@ from earthml.plots import (
     PlotMode,
     plot_field_timeseries,
     VARIABLE_NAMES,
+    VARIABLE_UNITS,
 )
 
 warnings.simplefilter("ignore", FutureWarning)
@@ -50,6 +51,46 @@ def apply_rolling_mean(
         center=center,
         min_periods=min_periods,
     ).mean()
+
+
+def subset_timeseries_region(
+    da: xr.DataArray | None,
+    lat_range: tuple | None,
+    lon_range: tuple | None,
+) -> xr.DataArray | None:
+    if da is None:
+        return None
+
+    lat_dim = da.earthml.guessed_dims.latitude
+    lon_dim = da.earthml.guessed_dims.longitude
+
+    if lat_range is not None:
+        da = da.sel({
+            lat_dim: slice(*lat_range)
+        })
+
+    if lon_range is not None:
+        da = da.sel({
+            lon_dim: slice(*lon_range)
+        })
+
+    return da
+
+
+def _convert_kelvin_to_celsius(
+    da: xr.DataArray,
+    *,
+    var: str,
+) -> xr.DataArray:
+    unit = da.attrs.get("units") or VARIABLE_UNITS.get(var, "")
+
+    if unit not in {"K", "Kelvin", "kelvin"}:
+        return da
+
+    da = da - 273.15
+    da.attrs["units"] = "°C"
+
+    return da
 
 
 def main() -> None:
@@ -88,10 +129,11 @@ def main() -> None:
 
     category: Literal[
         "raw",
-        "residual",
+        "error",
+        "absolute_error",
         "anomaly",
-        "anomaly_residual",
-    ] = "raw"
+        "anomaly_error",
+    ] = "absolute_error"
 
     # ==========================================================
     # Rolling mean
@@ -192,7 +234,7 @@ def main() -> None:
     ]
 
     # ==========================================================
-    # Spatial subset
+    # Spatial subset (from training experiment)
     # ==========================================================
 
     # ConUS
@@ -210,6 +252,62 @@ def main() -> None:
     # Whole configured region
     lat_range = None
     lon_range = None
+
+    # ==========================================================
+    # Timeseries spatial subregion
+    # ==========================================================
+
+    locations = {
+        "newyork": {
+            "lat_range": (42.0, 39.5),
+            "lon_range": (-75.0, -72.0),
+        },
+        "boston": {
+            "lat_range": (43.5, 41.0),
+            "lon_range": (-72.5, -69.5),
+        },
+        "washington_dc": {
+            "lat_range": (40.0, 37.5),
+            "lon_range": (-78.5, -75.5),
+        },
+        "miami": {
+            "lat_range": (27.0, 24.5),
+            "lon_range": (-82.0, -79.0),
+        },
+        "chicago": {
+            "lat_range": (43.0, 40.5),
+            "lon_range": (-89.5, -86.5),
+        },
+        "houston": {
+            "lat_range": (31.0, 28.5),
+            "lon_range": (-97.0, -94.0),
+        },
+        "denver": {
+            "lat_range": (41.0, 38.5),
+            "lon_range": (-106.0, -103.0),
+        },
+        "seattle": {
+            "lat_range": (48.5, 46.0),
+            "lon_range": (-124.0, -121.0),
+        },
+        "sanfrancisco": {
+            "lat_range": (39.0, 36.5),
+            "lon_range": (-123.5, -120.5),
+        },
+        "losangeles": {
+            "lat_range": (35.5, 33.0),
+            "lon_range": (-120.0, -117.0),
+        },
+    }
+
+    location = "newyork"
+
+    timeseries_lat_range = locations[location]["lat_range"]
+    timeseries_lon_range = locations[location]["lon_range"]
+
+    # None use the whole loaded spatial domain
+    # timeseries_lat_range = None
+    # timeseries_lon_range = None
 
     # ==========================================================
     # Experiment selection
@@ -417,6 +515,42 @@ def main() -> None:
                 )
 
         # ======================================================
+        # Unit conversion
+        # ======================================================
+
+        fc[s.var_fc] = _convert_kelvin_to_celsius(
+            fc[s.var_fc],
+            var=s.var_fc,
+        )
+
+        an[s.var_an] = _convert_kelvin_to_celsius(
+            an[s.var_an],
+            var=s.var_an,
+        )
+
+        if mlfc is not None:
+            mlfc[s.var_fc] = _convert_kelvin_to_celsius(
+                mlfc[s.var_fc],
+                var=s.var_fc,
+            )
+
+        fc_clim[s.var_fc] = _convert_kelvin_to_celsius(
+            fc_clim[s.var_fc],
+            var=s.var_fc,
+        )
+
+        an_clim[s.var_an] = _convert_kelvin_to_celsius(
+            an_clim[s.var_an],
+            var=s.var_an,
+        )
+
+        if mlfc_clim is not None:
+            mlfc_clim[s.var_fc] = _convert_kelvin_to_celsius(
+                mlfc_clim[s.var_fc],
+                var=s.var_fc,
+            )
+
+        # ======================================================
         # Dimensions
         # ======================================================
 
@@ -550,7 +684,7 @@ def main() -> None:
             mlfc_ts_da = mlfc_anom_da
             category_title = " anomaly "
 
-        elif category == "anomaly_residual":
+        elif category == "anomaly_error":
             fc_ts_da = (
                 fc_anom_da - an_anom_da
             )
@@ -568,9 +702,9 @@ def main() -> None:
             )
 
             an_ts_da = None
-            category_title = " anomaly residual "
+            category_title = " anomaly error "
 
-        elif category == "residual":
+        elif category == "error":
             fc_ts_da = (
                 fc_da - an_da
             )
@@ -586,7 +720,25 @@ def main() -> None:
             )
 
             an_ts_da = None
-            category_title = " residual "
+            category_title = " error "
+
+        elif category == "absolute_error":
+            fc_ts_da = abs(
+                fc_da - an_da
+            )
+
+            fc_ts_clim_corrected_da = abs(
+                fc_clim_corrected_da - an_da
+            )
+
+            mlfc_ts_da = (
+                abs(mlfc_da - an_da)
+                if mlfc_da is not None
+                else None
+            )
+
+            an_ts_da = None
+            category_title = " absolute error "
 
         else:
             fc_ts_da = fc_da
@@ -596,6 +748,31 @@ def main() -> None:
             an_ts_da = an_da
             mlfc_ts_da = mlfc_da
             category_title = ""
+
+        # Restrict timeseries to selected rectangular region
+        fc_ts_da = subset_timeseries_region(
+            fc_ts_da,
+            timeseries_lat_range,
+            timeseries_lon_range,
+        )
+
+        fc_ts_clim_corrected_da = subset_timeseries_region(
+            fc_ts_clim_corrected_da,
+            timeseries_lat_range,
+            timeseries_lon_range,
+        )
+
+        an_ts_da = subset_timeseries_region(
+            an_ts_da,
+            timeseries_lat_range,
+            timeseries_lon_range,
+        )
+
+        mlfc_ts_da = subset_timeseries_region(
+            mlfc_ts_da,
+            timeseries_lat_range,
+            timeseries_lon_range,
+        )
 
         # ======================================================
         # Lead-time plots
@@ -766,7 +943,8 @@ def main() -> None:
                 include_clim_fc
                 and category in (
                     "raw",
-                    "residual",
+                    "error",
+                    "absolute_error",
                 )
             ):
                 series[
@@ -811,8 +989,7 @@ def main() -> None:
                 / category
                 / (
                     f"time_{safe_label(valid_time_range)}"
-                    f"_lat_{safe_label(valid_lat_range)}"
-                    f"_lon_{safe_label(valid_lon_range)}"
+                    f"_loc_{location}"
                 )
                 / leadtime_agg_mode
                 / (
