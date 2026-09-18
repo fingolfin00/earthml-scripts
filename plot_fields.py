@@ -26,6 +26,8 @@ from earthml.plots import (
     VARIABLE_UNITS,
 )
 
+from cities import CITY_LOCATIONS
+
 
 FieldDifference = Literal[
     "fc-an",
@@ -290,60 +292,26 @@ def main() -> None:
     # Spatial subregion
     # ==========================================================
 
-    locations = {
-        "newyork": {
-            "lat_range": (42.0, 39.5),
-            "lon_range": (-75.0, -72.0),
-        },
-        "boston": {
-            "lat_range": (43.5, 41.0),
-            "lon_range": (-72.5, -69.5),
-        },
-        "washington_dc": {
-            "lat_range": (40.0, 37.5),
-            "lon_range": (-78.5, -75.5),
-        },
-        "miami": {
-            "lat_range": (27.0, 24.5),
-            "lon_range": (-82.0, -79.0),
-        },
-        "chicago": {
-            "lat_range": (43.0, 40.5),
-            "lon_range": (-89.5, -86.5),
-        },
-        "houston": {
-            "lat_range": (31.0, 28.5),
-            "lon_range": (-97.0, -94.0),
-        },
-        "denver": {
-            "lat_range": (41.0, 38.5),
-            "lon_range": (-106.0, -103.0),
-        },
-        "seattle": {
-            "lat_range": (48.5, 46.0),
-            "lon_range": (-124.0, -121.0),
-        },
-        "sanfrancisco": {
-            "lat_range": (39.0, 36.5),
-            "lon_range": (-123.5, -120.5),
-        },
-        "losangeles": {
-            "lat_range": (35.5, 33.0),
-            "lon_range": (-120.0, -117.0),
-        },
-    }
+    locations = CITY_LOCATIONS
 
-    location = "newyork"
+    plot_locations = [
+        "newyork",
+        "miami",
+        "chicago",
+        "denver",
+    ]
 
-    # Rectangle overlay
-    rectangle = {
-        "lon_range": locations[location]["lon_range"],
-        "lat_range": locations[location]["lat_range"],
-        "edgecolor": "black",
-        "facecolor": "none",
-        "linewidth": 3,
-        "linestyle": "-",
-    }
+    rectangles = [
+        {
+            "lon_range": locations[location]["lon_range"],
+            "lat_range": locations[location]["lat_range"],
+            "edgecolor": "black",
+            "facecolor": "none",
+            "linewidth": 3,
+            "linestyle": "-",
+        }
+        for location in plot_locations
+    ]
 
     # ==========================================================
     # Plot limits
@@ -1149,7 +1117,7 @@ def main() -> None:
                             levels=map_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
-                            rectangle=rectangle,
+                            rectangles=rectangles,
                         )
                         n += 1
 
@@ -1253,7 +1221,7 @@ def main() -> None:
                             levels=diff_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
-                            rectangle=rectangle,
+                            rectangles=rectangles,
                         )
 
                         n += 1
