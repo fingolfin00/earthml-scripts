@@ -299,10 +299,13 @@ def main() -> None:
     locations = CITY_LOCATIONS
 
     plot_locations = [
-        "newyork",
-        "miami",
-        "chicago",
-        "denver",
+        # "newyork",
+        # "miami",
+        # "chicago",
+        # "denver",
+        # "losangeles",
+        # "seattle",
+        # "houston",
     ]
 
     rectangles = [
@@ -972,6 +975,21 @@ def main() -> None:
 
             for lead_value in selected_leads:
 
+                # Init and valid times
+                init_time = pd.Timestamp(time_value)
+
+                if leadtime_units == LeadtimeUnit.HOURS:
+                    valid_time = init_time + pd.to_timedelta(lead_value, unit="h")
+
+                elif leadtime_units == LeadtimeUnit.MONTHS:
+                    valid_time = init_time + pd.DateOffset(months=int(lead_value))
+
+                else:
+                    raise ValueError(f"Unsupported leadtime unit: {leadtime_units}")
+
+                init_title = init_time.strftime(plot_title_strftime)
+                valid_title = valid_time.strftime(plot_title_strftime)
+
                 time_label = pd.Timestamp(time_value).strftime(
                     "%Y%m%dT%H%M"
                 )
@@ -1106,13 +1124,18 @@ def main() -> None:
                         if out_file.exists() and not regenerate_plots:
                             continue
 
+                        lead_unit_label = (
+                            "h"
+                            if leadtime_units == LeadtimeUnit.HOURS
+                            else "month"
+                        )
+
                         title = (
-                            f"{names[model]} · {time_title} · "
-                            f"lead {lead_value}"
+                            f"{names[model]} · valid {valid_title} · "
+                            f"init {init_title} · lead {lead_value} {lead_unit_label}"
                             if plot_title
                             else None
                         )
-
                         print(f"Saving {kind} map {out_file}")
 
                         plot_field_map(
