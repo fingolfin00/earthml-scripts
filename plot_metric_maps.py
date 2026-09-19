@@ -74,7 +74,11 @@ def main() -> None:
     title_strftime = "%Y" # seasonal
     # title_strftime = "%m.%Y" # weather
 
-    plot_mlfc = True
+    plot_models = (
+        "fc",
+        # "clim-fc",
+        # "mlfc",
+    )
 
     regenerate_plots = (
         # "fc",
@@ -454,12 +458,6 @@ def main() -> None:
                 }
             )
 
-        models = (
-            ("fc", "clim-fc", "mlfc")
-            if plot_mlfc
-            else ("fc", "clim-fc")
-        )
-
         model_datasets = {
             "fc": fc,
             "clim-fc": clim_fc,
@@ -481,7 +479,7 @@ def main() -> None:
         metric_maps_by_model: dict[str, xr.Dataset] = {}
         significance_by_comparison: dict[tuple[str, str, str], xr.Dataset] = {}
 
-        for model in models:
+        for model in plot_models:
             ds = model_datasets[model]
             ds_clim = model_climatologies[model]
 
