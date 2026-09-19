@@ -100,7 +100,8 @@ def main() -> None:
             "bias": (-0.5, 0.5),
             "rmse": (0.8, 1.8), # only fc
             # "rmse": (0.5, 1.8),
-            "corr": (0.5, 1.0),
+            "corr": (0.8, 1.0), # only fc
+            # "corr": (0.5, 1.0),
         },
         "percentage": {
             # "rmse": (-50, 50),
@@ -133,6 +134,11 @@ def main() -> None:
     plot_climatological_profiles = True
     # Combine all selected lead times in one climatological profile.
     combine_climatological_profile_leadtimes = True
+
+    # How combined climatological-profile lead times are distinguished:
+    #   "shades" -> shades of each model color
+    #   "colors" -> one distinct color per lead time
+    climatological_leadtime_colors = "shades"
 
     # None -> create one climatological profile for every available lead time
     # wanted_climatological_profile_leadtimes = [24, 48, 72,]
@@ -1159,6 +1165,7 @@ def main() -> None:
                                 lead_values,
                                 leadtime_dim=leadtime_agg_coord,
                                 leadtime_unit=leadtime_units.value,
+                                color_mode=climatological_leadtime_colors,
                                 labels=plot_labels_current,
                                 das_member=climatological_das_member,
                             )
@@ -1463,6 +1470,7 @@ def main() -> None:
                                         lead_values,
                                         leadtime_dim=leadtime_agg_coord,
                                         leadtime_unit=leadtime_units.value,
+                                        color_mode=climatological_leadtime_colors,
                                         labels=plot_labels_current,
                                     )
 
@@ -2044,6 +2052,7 @@ def main() -> None:
                                 lead_values,
                                 leadtime_dim=leadtime_agg_coord,
                                 leadtime_unit=leadtime_units.value,
+                                color_mode=climatological_leadtime_colors,
                                 labels=plot_labels_current,
                                 das_member=climatological_das_member,
                                 model_colors=comparison_colors,
@@ -2971,6 +2980,7 @@ def expand_climatological_leadtimes(
     *,
     leadtime_dim: str,
     leadtime_unit: str | None,
+    color_mode: str = "shades",
     das_member=None,
     labels=None,
     model_colors: dict[str, object] | None = None,
@@ -2991,6 +3001,12 @@ def expand_climatological_leadtimes(
         if das_member is None
         else list(das_member)
     )
+
+    if color_mode not in {"shades", "colors"}:
+        raise ValueError(
+            f"Unsupported color_mode={color_mode!r}. "
+            "Choose 'shades' or 'colors'."
+        )
 
     default_colors = matplotlib.rcParams[
         "axes.prop_cycle"
@@ -3051,15 +3067,21 @@ def expand_climatological_leadtimes(
         for lead_index, lead_value in enumerate(
             lead_values
         ):
-            fraction = shade_fractions[
-                lead_index
-            ]
+            if color_mode == "shades":
+                fraction = shade_fractions[
+                    lead_index
+                ]
 
-            color = tuple(
-                1.0
-                - (1.0 - base_rgb)
-                * fraction
-            )
+                color = tuple(
+                    1.0
+                    - (1.0 - base_rgb)
+                    * fraction
+                )
+
+            else:
+                color = default_colors[
+                    lead_index % len(default_colors)
+                ]
 
             label = (
                 f"{model} · {lead_value}{unit}"
