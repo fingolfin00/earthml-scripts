@@ -219,7 +219,7 @@ def _build_field_differences(
                 - abs(fc - an)
             )
 
-        continue
+            continue
 
         lhs_name, rhs_name = pairs[name]
 
@@ -971,11 +971,18 @@ def main() -> None:
             "mlfc-fc-abs-anomaly-error": "ML-corrected - Forecast absolute anomaly error",
         }
 
+        if leadtime_units == LeadtimeUnit.HOURS:
+            lead_unit_label = "h"
+        elif leadtime_units == LeadtimeUnit.MONTHS:
+            lead_unit_label = "M"
+        else:
+            lead_unit_label = ""
+
         for time_value in selected_times:
 
             for lead_value in selected_leads:
 
-                # Init and valid times
+                # Labels
                 init_time = pd.Timestamp(time_value)
 
                 if leadtime_units == LeadtimeUnit.HOURS:
@@ -1124,15 +1131,9 @@ def main() -> None:
                         if out_file.exists() and not regenerate_plots:
                             continue
 
-                        lead_unit_label = (
-                            "h"
-                            if leadtime_units == LeadtimeUnit.HOURS
-                            else "month"
-                        )
-
                         title = (
-                            f"{names[model]} · valid {valid_title} · "
-                            f"init {init_title} · lead {lead_value} {lead_unit_label}"
+                            f"{names[model]} · start {init_title} · "
+                            f"valid {valid_title} · lead {lead_value}{lead_unit_label}"
                             if plot_title
                             else None
                         )
@@ -1234,8 +1235,8 @@ def main() -> None:
                             continue
 
                         title = (
-                            f"{names[diff_name]} · {time_title} · "
-                            f"lead {lead_value}"
+                            f"{names[diff_name]} · start {init_title} · "
+                            f"valid {valid_title} · lead {lead_value}{lead_unit_label}"
                             if plot_title
                             else None
                         )
