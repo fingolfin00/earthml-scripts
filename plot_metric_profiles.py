@@ -230,6 +230,16 @@ def main() -> None:
     clim_period: ClimPeriod = ClimPeriod.MONTH
     clim_rolling_window = None
 
+    # Period grouping reference:
+    #   "init"  -> group metrics by forecast initialization time
+    #   "valid" -> group metrics by forecast valid time (init + lead time)
+    period_reference = "valid"
+
+    period_profile_label = get_period_profile_label(
+        period_reference,
+        clim_period,
+    )
+
     # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR
     # clim_rolling_window = 31
 
@@ -246,7 +256,7 @@ def main() -> None:
     inference_period = None
     # inference_period = ("2025-01-01", "2025-10-31")
 
-    wanted_start_periods = [
+    periods_requested = [
         "01",
         "02",
         "03",
@@ -270,13 +280,15 @@ def main() -> None:
     # "spatial_avg"
     # "global"
 
-    leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    leadtime_agg_mode: LeadtimeAgg = "single"
     # "single" for weather
     # "aggregated" for seasonal
     # "seasonal_window"
 
     leadtime_units = LeadtimeUnit.MONTHS # seasonal
     # leadtime_units = LeadtimeUnit.HOURS # weather
+
+    leadtime_profile_label = f"Lead time [{leadtime_units.value}]"
 
     # ==========================================================
     # Metrics
@@ -559,7 +571,7 @@ def main() -> None:
             else "leadtime_seasonal"
         )
 
-        period_dim = f"start_{clim_period}"
+        period_dim = f"{period_reference}_{clim_period.value}"
 
         print(
             f"Generate {leadtime_agg_mode} {plot_mode} "
@@ -788,8 +800,10 @@ def main() -> None:
                         leadtime_agg_mode=leadtime_agg_mode,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
+                        period_reference=period_reference,
                         period_dim=period_dim,
-                        wanted_start_periods=wanted_start_periods,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
                     )
                 )
 
@@ -811,8 +825,10 @@ def main() -> None:
                         leadtime_agg_mode=leadtime_agg_mode,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
+                        period_reference=period_reference,
                         period_dim=period_dim,
-                        wanted_start_periods=wanted_start_periods,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
                     )
                 )
 
@@ -842,8 +858,10 @@ def main() -> None:
                         leadtime_agg_mode=leadtime_agg_mode,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
+                        period_reference=period_reference,
                         period_dim=period_dim,
-                        wanted_start_periods=wanted_start_periods,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
                     )
                 )
 
@@ -874,23 +892,23 @@ def main() -> None:
                 }
 
         # ======================================================
-        # Available start periods
+        # Available periods
         # ======================================================
 
         reference_ds = next(
             iter(metrics_by_model.values())
         )
 
-        start_periods = [
+        available_periods = [
             str(value)
             for value in reference_ds[
                 period_dim
             ].values
-            if str(value) in wanted_start_periods
+            if str(value) in periods_requested
         ]
 
         leadtime_profile_periods = (
-            start_periods
+            available_periods
             if plot_leadtime_profiles
             else []
         )
@@ -941,7 +959,7 @@ def main() -> None:
             print(
                 f"Plotting absolute metric profiles "
                 f"{available_metrics} "
-                f"for periods {start_periods} "
+                f"for periods {available_periods} "
                 f"for exp {s.output_name}"
             )
 
@@ -976,13 +994,14 @@ def main() -> None:
                         das_member.append(None)
 
 
-                for start_period in leadtime_profile_periods:
+                for period_value in leadtime_profile_periods:
 
                     common_path = (
                         Path("profiles")
                         / "absolute"
+                        / safe_label(period_dim)
                         / safe_label(
-                            start_period
+                            period_value
                         )
                         / (
                             f"time_"
@@ -1023,7 +1042,7 @@ def main() -> None:
                         das=das,
                         var=s.var_fc,
                         metric=metric,
-                        select_value=start_period,
+                        select_value=period_value,
                         models=available_models,
                         labels=tuple(
                             model_labels.get(model, model)
@@ -1033,7 +1052,7 @@ def main() -> None:
                         time_range=valid_time_range,
                         das_member=das_member,
                         profile_dim=leadtime_agg_coord,
-                        profile_unit=leadtime_units,
+                        profile_label=leadtime_profile_label,
                         select_dim=period_dim,
                         select_unit=clim_period.value,
                         realization_dim="realization",
@@ -1184,7 +1203,7 @@ def main() -> None:
                             time_range=valid_time_range,
                             das_member=plot_das_member,
                             profile_dim=period_dim,
-                            profile_unit=clim_period.value,
+                            profile_label=period_profile_label,
                             select_dim=plot_select_dim,
                             select_value=plot_select_value,
                             select_unit=plot_select_unit,
@@ -1280,7 +1299,7 @@ def main() -> None:
                             comparison_labels_map,
                         )
 
-                        for start_period in leadtime_profile_periods:
+                        for period_value in leadtime_profile_periods:
 
                             common_path = (
                                 Path("profiles")
@@ -1288,8 +1307,9 @@ def main() -> None:
                                 / safe_label(
                                     comparison_model
                                 )
+                                / safe_label(period_dim)
                                 / safe_label(
-                                    start_period
+                                    period_value
                                 )
                                 / (
                                     f"time_"
@@ -1341,8 +1361,8 @@ def main() -> None:
                                 time_range=valid_time_range,
                                 das_member=[None],
                                 profile_dim=leadtime_agg_coord,
-                                profile_unit=leadtime_units,
-                                select_value=start_period,
+                                profile_label=leadtime_profile_label,
+                                select_value=period_value,
                                 select_dim=period_dim,
                                 select_unit=clim_period.value,
                                 realization_dim="realization",
@@ -1489,7 +1509,7 @@ def main() -> None:
                                     time_range=valid_time_range,
                                     das_member=[None] * len(plot_das),
                                     profile_dim=period_dim,
-                                    profile_unit=None,
+                                    profile_label=period_profile_label,
                                     select_dim=plot_select_dim,
                                     select_value=plot_select_value,
                                     select_unit=plot_select_unit,
@@ -1539,6 +1559,7 @@ def main() -> None:
                 leadtime_agg_mode,
                 metric_agg_mode,
                 str(clim_period),
+                period_reference,
             )
 
             group = combined_groups[
@@ -1761,18 +1782,18 @@ def main() -> None:
                 iter(das_by_model.values())
             )
 
-            start_periods = [
+            available_periods = [
                 str(value)
                 for value
                 in reference_ds[
                     period_dim
                 ].values
                 if str(value)
-                in wanted_start_periods
+                in periods_requested
             ]
 
             leadtime_profile_periods = (
-                start_periods
+                available_periods
                 if plot_leadtime_profiles
                 else []
             )
@@ -1822,7 +1843,7 @@ def main() -> None:
             print(
                 "Plotting combined experiment "
                 f"profiles {available_metrics} "
-                f"for periods {start_periods}: "
+                f"for periods {available_periods}: "
                 f"{group['labels']}"
             )
 
@@ -1857,15 +1878,16 @@ def main() -> None:
                     else:
                         das_member.append(None)
 
-                for start_period in leadtime_profile_periods:
+                for period_value in leadtime_profile_periods:
 
                     common_path = (
                         Path("profiles")
                         / combined_plot_folder
                         / comparison_name
                         / "absolute"
+                        / safe_label(period_dim)
                         / safe_label(
-                            start_period
+                            period_value
                         )
                         / (
                             f"time_"
@@ -1915,8 +1937,8 @@ def main() -> None:
                         time_range=valid_time_range,
                         das_member=das_member,
                         profile_dim=leadtime_agg_coord,
-                        profile_unit=leadtime_units,
-                        select_value=start_period,
+                        profile_label=leadtime_profile_label,
+                        select_value=period_value,
                         select_dim=period_dim,
                         select_unit=clim_period.value,
                         realization_dim="realization",
@@ -2073,7 +2095,7 @@ def main() -> None:
                             time_range=valid_time_range,
                             das_member=plot_das_member,
                             profile_dim=period_dim,
-                            profile_unit=None,
+                            profile_label=period_profile_label,
                             select_dim=plot_select_dim,
                             select_value=plot_select_value,
                             select_unit=plot_select_unit,
@@ -2243,7 +2265,7 @@ def main() -> None:
                             }[variant]
 
                             for (
-                                start_period
+                                period_value
                             ) in leadtime_profile_periods:
 
                                 common_path = (
@@ -2254,8 +2276,9 @@ def main() -> None:
                                     / safe_label(
                                         comparison_variant
                                     )
+                                    / safe_label(period_dim)
                                     / safe_label(
-                                        start_period
+                                        period_value
                                     )
                                     / (
                                         f"time_"
@@ -2308,8 +2331,8 @@ def main() -> None:
                                         in comparison_das
                                     ],
                                     profile_dim=leadtime_agg_coord,
-                                    profile_unit=leadtime_units,
-                                    select_value=start_period,
+                                    profile_label=leadtime_profile_label,
+                                    select_value=period_value,
                                     select_dim=period_dim,
                                     select_unit=clim_period.value,
                                     realization_dim="realization",
@@ -2457,7 +2480,7 @@ def main() -> None:
                                         time_range=valid_time_range,
                                         das_member=[None] * len(plot_das),
                                         profile_dim=period_dim,
-                                        profile_unit=None,
+                                        profile_label=period_profile_label,
                                         select_dim=plot_select_dim,
                                         select_value=plot_select_value,
                                         select_unit=plot_select_unit,
@@ -2556,7 +2579,7 @@ def main() -> None:
                             )
 
                             for (
-                                start_period
+                                period_value
                             ) in leadtime_profile_periods:
 
                                 common_path = (
@@ -2567,8 +2590,9 @@ def main() -> None:
                                     / safe_label(
                                         comparison_model
                                     )
+                                    / safe_label(period_dim)
                                     / safe_label(
-                                        start_period
+                                        period_value
                                     )
                                     / (
                                         f"time_"
@@ -2621,8 +2645,8 @@ def main() -> None:
                                     time_range=valid_time_range,
                                     das_member=[None],
                                     profile_dim=leadtime_agg_coord,
-                                    profile_unit=leadtime_units,
-                                    select_value=start_period,
+                                    profile_label=leadtime_profile_label,
+                                    select_value=period_value,
                                     select_dim=period_dim,
                                     select_unit=clim_period.value,
                                     realization_dim="realization",
@@ -2768,7 +2792,7 @@ def main() -> None:
                                         time_range=valid_time_range,
                                         das_member=[None] * len(plot_das),
                                         profile_dim=period_dim,
-                                        profile_unit=None,
+                                        profile_label=period_profile_label,
                                         select_dim=plot_select_dim,
                                         select_value=plot_select_value,
                                         select_unit=plot_select_unit,
@@ -2798,6 +2822,39 @@ def main() -> None:
     )
 
 
+def get_period_profile_label(
+    period_reference: str,
+    clim_period: ClimPeriod,
+) -> str:
+    """Return a human-readable x-axis label for climatological profiles."""
+    reference_label = {
+        "init": "Initialization",
+        "valid": "Valid",
+    }.get(period_reference)
+
+    if reference_label is None:
+        raise ValueError(
+            f"Unsupported period_reference={period_reference!r}. "
+            "Choose 'init' or 'valid'."
+        )
+
+    period_value = clim_period.value
+    period_label = {
+        "month": "month",
+        "day": "day of month",
+        "dayofyear": "day of year",
+        "year": "year",
+        "month_hour": "month/hour",
+        "day_hour": "day/hour",
+        "dayofyear_hour": "day of year/hour",
+    }.get(
+        period_value,
+        period_value.replace("_", " "),
+    )
+
+    return f"{reference_label} {period_label}"
+
+
 def get_profile_metrics(
     *,
     s,
@@ -2811,8 +2868,10 @@ def get_profile_metrics(
     leadtime_agg_mode,
     leadtime_agg_coord,
     clim_period,
+    period_reference,
     period_dim,
-    wanted_start_periods,
+    periods_requested,
+    leadtime_unit,
 ):
     metric_kind = (
         "scalar"
@@ -2833,8 +2892,10 @@ def get_profile_metrics(
         leadtime_windows=s.seasonal_leadtime_windows,
         leadtime_agg_coord=leadtime_agg_coord,
         clim_period=clim_period,
+        period_reference=period_reference,
         period_dim=period_dim,
-        periods_requested=wanted_start_periods,
+        periods_requested=periods_requested,
+        leadtime_unit=leadtime_unit,
     )
 
     if metric_agg_mode == "global":
