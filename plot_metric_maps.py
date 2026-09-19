@@ -139,6 +139,11 @@ def main() -> None:
     # clim_period: ClimPeriod = ClimPeriod.DAYOFYEAR_HOUR
     # clim_rolling_window = 31
 
+    # Period grouping reference:
+    #   "init"  -> group by forecast initialization time
+    #   "valid" -> group by forecast valid time (init + lead time)
+    period_reference: Literal["init", "valid"] = "init"
+
     # ==========================================================
     # Time selection
     # ==========================================================
@@ -150,7 +155,7 @@ def main() -> None:
     # inference_period = ("2025-01-01", "2025-10-10")
     # inference_period = ("2025-01-01", "2025-05-12")
 
-    wanted_start_periods = [
+    periods_requested = [
         "01",
         "02",
         "03",
@@ -405,8 +410,29 @@ def main() -> None:
         valid_lon_range = lat_lon[1] if lon_range is None else lon_range
 
         leadtime_agg_coord = "leadtime" if leadtime_agg_mode=="single" else "leadtime_seasonal"
+        period_dim = f"{period_reference}_{clim_period.value}"
 
-        print(f"Generate {leadtime_agg_mode} {plot_mode} for {s.var_an, s.var_fc} in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})")
+        if period_reference == "valid" and leadtime_agg_mode == "aggregated":
+            raise ValueError(
+                "period_reference='valid' is not supported with "
+                "leadtime_agg_mode='aggregated' because an aggregated "
+                "forecast has no unique valid time. Use 'single' or "
+                "'seasonal_window'."
+            )
+
+        if period_reference == "valid" and plot_significance:
+            raise ValueError(
+                "Valid-time grouping is not yet supported by "
+                "get_metric_improvement_significance(). Disable "
+                "plot_significance or extend the significance helper with "
+                "period_reference and leadtime_unit support first."
+            )
+
+        print(
+            f"Generate {leadtime_agg_mode} {plot_mode} "
+            f"grouped by {period_dim} for {s.var_an, s.var_fc} "
+            f"in {s.region_name} (lon={valid_lon_range}, lat={valid_lat_range})"
+        )
 
         fc, an, mlfc = get_and_subset_datasets(
             s,
@@ -522,8 +548,10 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{clim_period}",
-                        periods_requested=wanted_start_periods,
+                        period_reference=period_reference,
+                        period_dim=period_dim,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
                         align=False,
                         fair_correction=False,
                     )
@@ -543,8 +571,10 @@ def main() -> None:
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
                         clim_period=clim_period,
-                        period_dim=f"start_{clim_period}",
-                        periods_requested=wanted_start_periods,
+                        period_reference=period_reference,
+                        period_dim=period_dim,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
                         align=False,
                         fair_correction=False,
                     )
@@ -631,8 +661,8 @@ def main() -> None:
                                 leadtime_windows=s.seasonal_leadtime_windows,
                                 leadtime_agg_coord=leadtime_agg_coord,
                                 clim_period=clim_period,
-                                period_dim=f"start_{clim_period}",
-                                periods_requested=wanted_start_periods,
+                                period_dim=period_dim,
+                                periods_requested=periods_requested,
                                 n_bootstrap=significance_n_bootstrap,
                                 block_size=significance_block_size,
                                 confidence_level=significance_confidence_level,
@@ -646,12 +676,12 @@ def main() -> None:
                     if str(x) in metrics and str(x) != "rank_histogram"
                 ]
 
-                start_periods = [
-                    str(x) for x in metric_maps[f"start_{clim_period}"].values
-                    if str(x) in wanted_start_periods
+                available_periods = [
+                    str(x) for x in metric_maps[period_dim].values
+                    if str(x) in periods_requested
                 ]
 
-                print(f"Plotting {model} metrics {available_metrics} for periods {start_periods} for exp {s.output_name}")
+                print(f"Plotting {model} metrics {available_metrics} for periods {available_periods} for exp {s.output_name}")
 
                 for m in available_metrics:
                     # ----------------------------------------------------------
@@ -728,7 +758,7 @@ def main() -> None:
                             and comparison_target is not None
                         )
 
-                        for start_period in start_periods:
+                        for period_value in available_periods:
                             for lead_value in dataarray[leadtime_agg_coord].values:
                                 label = safe_label(
                                     lead_label(
@@ -740,7 +770,8 @@ def main() -> None:
 
                                 common_path = (
                                     Path(metric_kind)
-                                    / safe_label(start_period)
+                                    / safe_label(period_dim)
+                                    / safe_label(period_value)
                                     / (
                                         f"time_{safe_label(valid_time_range)}"
                                         f"_lat_{safe_label(lat_range)}"
@@ -814,13 +845,13 @@ def main() -> None:
                                         var=s.var_fc,
                                         metric=m,
                                         model=plot_model,
-                                        start_period=start_period,
+                                        start_period=period_value,
                                         lead_value=lead_value,
                                         out_file=out_file,
                                         time_range=valid_time_range,
                                         leadtime_dim=leadtime_agg_coord,
                                         leadtime_units=leadtime_units,
-                                        period_dim=f"start_{clim_period}",
+                                        period_dim=period_dim,
                                         clim_period=(
                                             None
                                             if metric_kind == "map"
@@ -870,13 +901,13 @@ def main() -> None:
                                             var=s.var_fc,
                                             metric=m,
                                             model=plot_model,
-                                            start_period=start_period,
+                                            start_period=period_value,
                                             lead_value=lead_value,
                                             out_file=significance_out_file,
                                             time_range=valid_time_range,
                                             leadtime_dim=leadtime_agg_coord,
                                             leadtime_units=leadtime_units,
-                                            period_dim=f"start_{clim_period}",
+                                            period_dim=period_dim,
                                             clim_period=(
                                                 None
                                                 if metric_kind == "map"
@@ -950,7 +981,7 @@ def main() -> None:
     #             [da_members_fc, da_members_mlfc],
     #             var=s.var_fc,
     #             metric="rank_histogram",
-    #             start_period="all",
+    #             period_value="all",
     #             models=["fc", "mlfc"],
     #             out_file=out_file,
     #             time_range=time_range,
