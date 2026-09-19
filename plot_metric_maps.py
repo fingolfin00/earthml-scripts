@@ -71,6 +71,13 @@ def main() -> None:
     plot_type: Literal["pcolormesh", "contourf"] = "contourf"
 
     plot_title = True
+    plot_labels = True
+
+    title_size = None
+    label_size = None
+    tick_size = None
+    dpi = 300
+
     title_strftime = "%Y" # seasonal
     # title_strftime = "%m.%Y" # weather
 
@@ -824,6 +831,11 @@ def main() -> None:
                                         plot_kind=metric_kind,
                                         plot_type=plot_type,
                                         plot_title=plot_title,
+                                        plot_labels=plot_labels,
+                                        title_size=title_size,
+                                        label_size=label_size,
+                                        tick_size=tick_size,
+                                        dpi=dpi,
                                         title_strftime=title_strftime,
                                         significance=None,
                                     )
@@ -875,6 +887,11 @@ def main() -> None:
                                             plot_kind=metric_kind,
                                             plot_type=plot_type,
                                             plot_title=plot_title,
+                                            plot_labels=plot_labels,
+                                            title_size=title_size,
+                                            label_size=label_size,
+                                            tick_size=tick_size,
+                                            dpi=dpi,
                                             title_strftime=title_strftime,
                                             significance=significance,
                                             significance_stride=(

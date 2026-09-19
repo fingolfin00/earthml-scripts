@@ -37,64 +37,6 @@ warnings.filterwarnings(
 )
 
 
-def apply_rolling_mean(
-    da: xr.DataArray | None,
-    *,
-    time_dim: str,
-    window: int | None,
-    center: bool,
-    min_periods: int,
-) -> xr.DataArray | None:
-    if da is None or window is None:
-        return da
-
-    return da.rolling(
-        {time_dim: window},
-        center=center,
-        min_periods=min_periods,
-    ).mean()
-
-
-def subset_timeseries_region(
-    da: xr.DataArray | None,
-    lat_range: tuple | None,
-    lon_range: tuple | None,
-) -> xr.DataArray | None:
-    if da is None:
-        return None
-
-    lat_dim = da.earthml.guessed_dims.latitude
-    lon_dim = da.earthml.guessed_dims.longitude
-
-    if lat_range is not None:
-        da = da.sel({
-            lat_dim: slice(*lat_range)
-        })
-
-    if lon_range is not None:
-        da = da.sel({
-            lon_dim: slice(*lon_range)
-        })
-
-    return da
-
-
-def _convert_kelvin_to_celsius(
-    da: xr.DataArray,
-    *,
-    var: str,
-) -> xr.DataArray:
-    unit = da.attrs.get("units") or VARIABLE_UNITS.get(var, "")
-
-    if unit not in {"K", "Kelvin", "kelvin"}:
-        return da
-
-    da = da - 273.15
-    da.attrs["units"] = "°C"
-
-    return da
-
-
 def main() -> None:
 
     # ==========================================================
@@ -114,6 +56,12 @@ def main() -> None:
     plot_mode: PlotMode = "timeseries"
 
     plot_title = True
+    plot_labels = True
+
+    title_size = None
+    label_size = None
+    tick_size = None
+    dpi = 300
 
     plot_mlfc = True
     include_clim_fc = True
@@ -993,6 +941,12 @@ def main() -> None:
                         if plot_ens_mean
                         else "-"
                     ),
+                    plot_title=plot_title,
+                    plot_labels=plot_labels,
+                    title_size=title_size,
+                    label_size=label_size,
+                    tick_size=tick_size,
+                    dpi=dpi,
                     series_offsets=(
                         series_offsets
                         if offset_plots
@@ -1003,6 +957,65 @@ def main() -> None:
                 n += 1
 
     print(f"Done. Saved {n} plots.")
+
+
+def apply_rolling_mean(
+    da: xr.DataArray | None,
+    *,
+    time_dim: str,
+    window: int | None,
+    center: bool,
+    min_periods: int,
+) -> xr.DataArray | None:
+    if da is None or window is None:
+        return da
+
+    return da.rolling(
+        {time_dim: window},
+        center=center,
+        min_periods=min_periods,
+    ).mean()
+
+
+def subset_timeseries_region(
+    da: xr.DataArray | None,
+    lat_range: tuple | None,
+    lon_range: tuple | None,
+) -> xr.DataArray | None:
+    if da is None:
+        return None
+
+    lat_dim = da.earthml.guessed_dims.latitude
+    lon_dim = da.earthml.guessed_dims.longitude
+
+    if lat_range is not None:
+        da = da.sel({
+            lat_dim: slice(*lat_range)
+        })
+
+    if lon_range is not None:
+        da = da.sel({
+            lon_dim: slice(*lon_range)
+        })
+
+    return da
+
+
+def _convert_kelvin_to_celsius(
+    da: xr.DataArray,
+    *,
+    var: str,
+) -> xr.DataArray:
+    unit = da.attrs.get("units") or VARIABLE_UNITS.get(var, "")
+
+    if unit not in {"K", "Kelvin", "kelvin"}:
+        return da
+
+    da = da - 273.15
+    da.attrs["units"] = "°C"
+
+    return da
+
 
 if __name__ == "__main__":
     main()

@@ -31,318 +31,6 @@ from earthml.plots import (
 )
 
 
-def spatial_mean(
-    da: xr.DataArray,
-    *,
-    lat_dim: str,
-    lon_dim: str,
-) -> xr.DataArray:
-    """
-    Area-weighted spatial mean.
-    """
-    weights = np.cos(
-        np.deg2rad(da[lat_dim])
-    )
-
-    return da.weighted(weights).mean(
-        dim=(lat_dim, lon_dim),
-        skipna=True,
-    )
-
-
-def spatial_rms(
-    da: xr.DataArray,
-    *,
-    lat_dim: str,
-    lon_dim: str,
-) -> xr.DataArray:
-    """
-    Area-weighted spatial root-mean-square.
-    """
-    weights = np.cos(
-        np.deg2rad(da[lat_dim])
-    )
-
-    return np.sqrt(
-        (da**2)
-        .weighted(weights)
-        .mean(
-            dim=(lat_dim, lon_dim),
-            skipna=True,
-        )
-    )
-
-
-def aggregate_metric(
-    da: xr.DataArray,
-    *,
-    metric_agg_mode: MetricAgg,
-    lat_dim: str | None,
-    lon_dim: str | None,
-) -> xr.DataArray:
-    """
-    Apply the requested spatial aggregation to a metric field.
-    """
-    if metric_agg_mode == "global":
-        return da
-
-    if lat_dim is None or lon_dim is None:
-        raise ValueError(
-            f"Spatial aggregation {metric_agg_mode!r} "
-            "requires latitude and longitude dimensions."
-        )
-
-    if metric_agg_mode == "spatial_avg":
-        return spatial_mean(
-            da,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-    if metric_agg_mode == "spatial_rmse":
-        return spatial_rms(
-            da,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-    raise ValueError(
-        f"Unsupported metric_agg_mode="
-        f"{metric_agg_mode!r}."
-    )
-
-
-def iter_scalar_points(
-    settings: Sequence[Settings],
-    *,
-    forecast_metric: str,
-    diff_metric: str,
-    improvement_unit: ImprovementUnit,
-    metric_agg_mode: MetricAgg,
-    leadtime_agg: LeadtimeAgg,
-    realization_agg: bool,
-    lat_range: tuple[float, float] | None = None,
-    lon_range: tuple[float, float] | None = None,
-    time_range: tuple[str, str] | None = None,
-    clim_period: ClimPeriod = ClimPeriod.MONTH,
-    clim_rolling_window: int | None = None,
-    clim_time_range: tuple[str, str] | None = None,
-    leadtime_units: LeadtimeUnit = LeadtimeUnit.MONTHS,
-    leadtime_agg_coord: str = "leadtime",
-    recalculate_climatology: bool = False,
-    period_dim: str = "start_month",
-    wanted_start_periods: Sequence[str] | None = None,
-    interpolate: bool = False,
-    build_analysis: bool = True,
-) -> list[ScatterPoint]:
-
-    points: list[ScatterPoint] = []
-
-    for s in settings:
-
-        # ======================================================
-        # Metrics
-        # ======================================================
-
-        metrics_fc_ds, metrics_mlfc_ds = (
-            get_scalar_metrics(
-                s=s,
-                fc_metrics=[
-                    forecast_metric,
-                    diff_metric,
-                ],
-                mlfc_metrics=[
-                    diff_metric,
-                ],
-                metric_agg_mode=metric_agg_mode,
-                leadtime_agg=leadtime_agg,
-                realization_agg=realization_agg,
-                lat_range=lat_range,
-                lon_range=lon_range,
-                time_range=time_range,
-                clim_period=clim_period,
-                clim_rolling_window=clim_rolling_window,
-                clim_time_range=clim_time_range,
-                leadtime_units=leadtime_units,
-                force_clim_recalc=(
-                    recalculate_climatology
-                ),
-                period_dim=period_dim,
-                wanted_start_periods=(
-                    wanted_start_periods
-                ),
-                interpolate=interpolate,
-                build_analysis=build_analysis,
-            )
-        )
-
-
-        # ======================================================
-        # Spatial dimensions
-        # ======================================================
-
-        lat_dim = (
-            metrics_fc_ds
-            .earthml
-            .guessed_dims
-            .latitude
-        )
-
-        lon_dim = (
-            metrics_fc_ds
-            .earthml
-            .guessed_dims
-            .longitude
-        )
-
-
-        # ======================================================
-        # Y axis:
-        # forecast metric
-        # ======================================================
-
-        y_da = aggregate_metric(
-            metrics_fc_ds[forecast_metric],
-            metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-
-        # ======================================================
-        # X axis:
-        # target vs baseline improvement
-        # ======================================================
-
-        baseline_da = aggregate_metric(
-            metrics_fc_ds[diff_metric],
-            metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-        target_da = aggregate_metric(
-            metrics_mlfc_ds[diff_metric],
-            metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-        baseline_da, target_da = xr.align(
-            baseline_da,
-            target_da,
-            join="exact",
-        )
-
-        x_da = build_metric_improvement(
-            baseline_da,
-            target_da,
-            metric=diff_metric,
-            improvement_unit=improvement_unit,
-        )
-
-
-        # ======================================================
-        # Align X and Y
-        # ======================================================
-
-        x_da, y_da = xr.align(
-            x_da,
-            y_da,
-            join="inner",
-        )
-
-        common_dims = tuple(
-            dim
-            for dim in y_da.dims
-            if dim in x_da.dims
-        )
-
-
-        # ======================================================
-        # Convert to scatter points
-        # ======================================================
-
-        point_ds = xr.Dataset(
-            {
-                "x": x_da,
-                "y": y_da,
-            }
-        )
-
-        if common_dims:
-            stacked = point_ds.stack(
-                point=common_dims
-            )
-
-        else:
-            stacked = point_ds.expand_dims(
-                point=[0]
-            )
-
-
-        for i in range(
-            stacked.sizes["point"]
-        ):
-            x = float(
-                stacked["x"]
-                .isel(point=i)
-                .values
-            )
-
-            y = float(
-                stacked["y"]
-                .isel(point=i)
-                .values
-            )
-
-            if (
-                not np.isfinite(x)
-                or not np.isfinite(y)
-            ):
-                continue
-
-
-            coords = {}
-
-            for dim in common_dims:
-                if dim in stacked.coords:
-                    value = (
-                        stacked[dim]
-                        .isel(point=i)
-                        .values
-                    )
-
-                    if np.ndim(value) == 0:
-                        value = value.item()
-
-                    coords[dim] = value
-
-
-            points.append(
-                ScatterPoint(
-                    x=x,
-                    y=y,
-                    variable=s.var_fc,
-                    region=s.region_name,
-                    leadtime=coords.get(
-                        leadtime_agg_coord,
-                        "all",
-                    ),
-                    start_month=coords.get(
-                        period_dim,
-                        "all",
-                    ),
-                    total_months=(
-                        get_total_months(s)
-                    ),
-                    experiment=s.output_name,
-                )
-            )
-
-    return points
-
-
 def main() -> None:
 
     # ==========================================================
@@ -365,6 +53,12 @@ def main() -> None:
     # ==========================================================
 
     plot_title = True
+    plot_labels = True
+
+    title_size = None
+    label_size = None
+    tick_size = None
+    dpi = 300
 
     regenerate_plots = True
 
@@ -762,6 +456,12 @@ def main() -> None:
         title=title,
         xlabel=improvement_label,
         ylabel=f"FC {forecast_metric_name}",
+        plot_title=plot_title,
+        plot_labels=plot_labels,
+        title_size=title_size,
+        label_size=label_size,
+        tick_size=tick_size,
+        dpi=dpi,
 
         figsize=(12, 12),
         cmap_name="tab10",
@@ -783,6 +483,319 @@ def main() -> None:
         f"Done. Saved combined scatter "
         f"with {len(all_points)} points."
     )
+
+
+def spatial_mean(
+    da: xr.DataArray,
+    *,
+    lat_dim: str,
+    lon_dim: str,
+) -> xr.DataArray:
+    """
+    Area-weighted spatial mean.
+    """
+    weights = np.cos(
+        np.deg2rad(da[lat_dim])
+    )
+
+    return da.weighted(weights).mean(
+        dim=(lat_dim, lon_dim),
+        skipna=True,
+    )
+
+
+def spatial_rms(
+    da: xr.DataArray,
+    *,
+    lat_dim: str,
+    lon_dim: str,
+) -> xr.DataArray:
+    """
+    Area-weighted spatial root-mean-square.
+    """
+    weights = np.cos(
+        np.deg2rad(da[lat_dim])
+    )
+
+    return np.sqrt(
+        (da**2)
+        .weighted(weights)
+        .mean(
+            dim=(lat_dim, lon_dim),
+            skipna=True,
+        )
+    )
+
+
+def aggregate_metric(
+    da: xr.DataArray,
+    *,
+    metric_agg_mode: MetricAgg,
+    lat_dim: str | None,
+    lon_dim: str | None,
+) -> xr.DataArray:
+    """
+    Apply the requested spatial aggregation to a metric field.
+    """
+    if metric_agg_mode == "global":
+        return da
+
+    if lat_dim is None or lon_dim is None:
+        raise ValueError(
+            f"Spatial aggregation {metric_agg_mode!r} "
+            "requires latitude and longitude dimensions."
+        )
+
+    if metric_agg_mode == "spatial_avg":
+        return spatial_mean(
+            da,
+            lat_dim=lat_dim,
+            lon_dim=lon_dim,
+        )
+
+    if metric_agg_mode == "spatial_rmse":
+        return spatial_rms(
+            da,
+            lat_dim=lat_dim,
+            lon_dim=lon_dim,
+        )
+
+    raise ValueError(
+        f"Unsupported metric_agg_mode="
+        f"{metric_agg_mode!r}."
+    )
+
+
+def iter_scalar_points(
+    settings: Sequence[Settings],
+    *,
+    forecast_metric: str,
+    diff_metric: str,
+    improvement_unit: ImprovementUnit,
+    metric_agg_mode: MetricAgg,
+    leadtime_agg: LeadtimeAgg,
+    realization_agg: bool,
+    lat_range: tuple[float, float] | None = None,
+    lon_range: tuple[float, float] | None = None,
+    time_range: tuple[str, str] | None = None,
+    clim_period: ClimPeriod = ClimPeriod.MONTH,
+    clim_rolling_window: int | None = None,
+    clim_time_range: tuple[str, str] | None = None,
+    leadtime_units: LeadtimeUnit = LeadtimeUnit.MONTHS,
+    leadtime_agg_coord: str = "leadtime",
+    recalculate_climatology: bool = False,
+    period_dim: str = "start_month",
+    wanted_start_periods: Sequence[str] | None = None,
+    interpolate: bool = False,
+    build_analysis: bool = True,
+) -> list[ScatterPoint]:
+
+    points: list[ScatterPoint] = []
+
+    for s in settings:
+
+        # ======================================================
+        # Metrics
+        # ======================================================
+
+        metrics_fc_ds, metrics_mlfc_ds = (
+            get_scalar_metrics(
+                s=s,
+                fc_metrics=[
+                    forecast_metric,
+                    diff_metric,
+                ],
+                mlfc_metrics=[
+                    diff_metric,
+                ],
+                metric_agg_mode=metric_agg_mode,
+                leadtime_agg=leadtime_agg,
+                realization_agg=realization_agg,
+                lat_range=lat_range,
+                lon_range=lon_range,
+                time_range=time_range,
+                clim_period=clim_period,
+                clim_rolling_window=clim_rolling_window,
+                clim_time_range=clim_time_range,
+                leadtime_units=leadtime_units,
+                force_clim_recalc=(
+                    recalculate_climatology
+                ),
+                period_dim=period_dim,
+                wanted_start_periods=(
+                    wanted_start_periods
+                ),
+                interpolate=interpolate,
+                build_analysis=build_analysis,
+            )
+        )
+
+
+        # ======================================================
+        # Spatial dimensions
+        # ======================================================
+
+        lat_dim = (
+            metrics_fc_ds
+            .earthml
+            .guessed_dims
+            .latitude
+        )
+
+        lon_dim = (
+            metrics_fc_ds
+            .earthml
+            .guessed_dims
+            .longitude
+        )
+
+
+        # ======================================================
+        # Y axis:
+        # forecast metric
+        # ======================================================
+
+        y_da = aggregate_metric(
+            metrics_fc_ds[forecast_metric],
+            metric_agg_mode=metric_agg_mode,
+            lat_dim=lat_dim,
+            lon_dim=lon_dim,
+        )
+
+
+        # ======================================================
+        # X axis:
+        # target vs baseline improvement
+        # ======================================================
+
+        baseline_da = aggregate_metric(
+            metrics_fc_ds[diff_metric],
+            metric_agg_mode=metric_agg_mode,
+            lat_dim=lat_dim,
+            lon_dim=lon_dim,
+        )
+
+        target_da = aggregate_metric(
+            metrics_mlfc_ds[diff_metric],
+            metric_agg_mode=metric_agg_mode,
+            lat_dim=lat_dim,
+            lon_dim=lon_dim,
+        )
+
+        baseline_da, target_da = xr.align(
+            baseline_da,
+            target_da,
+            join="exact",
+        )
+
+        x_da = build_metric_improvement(
+            baseline_da,
+            target_da,
+            metric=diff_metric,
+            improvement_unit=improvement_unit,
+        )
+
+
+        # ======================================================
+        # Align X and Y
+        # ======================================================
+
+        x_da, y_da = xr.align(
+            x_da,
+            y_da,
+            join="inner",
+        )
+
+        common_dims = tuple(
+            dim
+            for dim in y_da.dims
+            if dim in x_da.dims
+        )
+
+
+        # ======================================================
+        # Convert to scatter points
+        # ======================================================
+
+        point_ds = xr.Dataset(
+            {
+                "x": x_da,
+                "y": y_da,
+            }
+        )
+
+        if common_dims:
+            stacked = point_ds.stack(
+                point=common_dims
+            )
+
+        else:
+            stacked = point_ds.expand_dims(
+                point=[0]
+            )
+
+
+        for i in range(
+            stacked.sizes["point"]
+        ):
+            x = float(
+                stacked["x"]
+                .isel(point=i)
+                .values
+            )
+
+            y = float(
+                stacked["y"]
+                .isel(point=i)
+                .values
+            )
+
+            if (
+                not np.isfinite(x)
+                or not np.isfinite(y)
+            ):
+                continue
+
+
+            coords = {}
+
+            for dim in common_dims:
+                if dim in stacked.coords:
+                    value = (
+                        stacked[dim]
+                        .isel(point=i)
+                        .values
+                    )
+
+                    if np.ndim(value) == 0:
+                        value = value.item()
+
+                    coords[dim] = value
+
+
+            points.append(
+                ScatterPoint(
+                    x=x,
+                    y=y,
+                    variable=s.var_fc,
+                    region=s.region_name,
+                    leadtime=coords.get(
+                        leadtime_agg_coord,
+                        "all",
+                    ),
+                    start_month=coords.get(
+                        period_dim,
+                        "all",
+                    ),
+                    total_months=(
+                        get_total_months(s)
+                    ),
+                    experiment=s.output_name,
+                )
+            )
+
+    return points
+
 
 if __name__ == "__main__":
     main()

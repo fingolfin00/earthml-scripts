@@ -41,226 +41,6 @@ FieldDifference = Literal[
 ]
 
 
-def _select_field(
-    da: xr.DataArray,
-    *,
-    time_value,
-    lead_value,
-    realization_mode: Literal["mean", "member"] = "mean",
-    realization: int | str | None = None,
-) -> xr.DataArray:
-    """
-    Select one 2-D spatial field.
-
-    Expected dimensions before selection are approximately:
-
-        time x leadtime x [realization] x latitude x longitude
-
-    Analysis usually has no realization dimension.
-    """
-
-    time_dim = da.earthml.guessed_dims.time
-    leadtime_dim = da.earthml.guessed_dims.leadtime
-    realization_dim = da.earthml.guessed_dims.realization
-
-    if time_dim is None:
-        raise ValueError(
-            f"Could not determine time dimension for {da.name!r}. "
-            f"Available dimensions: {da.dims}"
-        )
-
-    if leadtime_dim is None:
-        raise ValueError(
-            f"Could not determine lead-time dimension for {da.name!r}. "
-            f"Available dimensions: {da.dims}"
-        )
-
-    da = da.sel(
-        {
-            time_dim: time_value,
-            leadtime_dim: lead_value,
-        }
-    )
-
-    if (
-        realization_dim is not None
-        and realization_dim in da.dims
-    ):
-        if realization_mode == "mean":
-            da = da.mean(
-                realization_dim,
-                skipna=True,
-            )
-
-        elif realization_mode == "member":
-            if realization is None:
-                raise ValueError(
-                    "realization must be specified when "
-                    "realization_mode='member'."
-                )
-
-            try:
-                da = da.sel(
-                    {realization_dim: realization}
-                )
-
-            except (KeyError, ValueError):
-                if not isinstance(realization, int):
-                    raise
-
-                da = da.isel(
-                    {realization_dim: realization}
-                )
-
-        else:
-            raise ValueError(
-                f"Unsupported "
-                f"realization_mode={realization_mode!r}."
-            )
-
-    return da.squeeze(drop=True)
-
-
-def _get_common_limits(
-    fields: dict[str, xr.DataArray],
-    *,
-    quantiles: tuple[float, float] | None = (0.01, 0.99),
-) -> tuple[float, float]:
-    """Return common non-symmetric limits across fields."""
-    values = [
-        finite
-        for da in fields.values()
-        if (finite := np.asarray(da.values)[np.isfinite(da.values)]).size
-    ]
-
-    if not values:
-        raise ValueError("No finite values available to determine plot limits.")
-
-    values = np.concatenate(values)
-
-    if quantiles is None:
-        return float(values.min()), float(values.max())
-
-    return (
-        float(np.quantile(values, quantiles[0])),
-        float(np.quantile(values, quantiles[1])),
-    )
-
-
-def _get_symmetric_limit(
-    fields: dict[str, xr.DataArray],
-    *,
-    quantile: float | None = 0.99,
-) -> float:
-    """Return a positive symmetric limit around zero."""
-    values = [
-        finite
-        for da in fields.values()
-        if (finite := np.abs(
-            np.asarray(da.values)[np.isfinite(da.values)]
-        )).size
-    ]
-
-    if not values:
-        raise ValueError("No finite values available to determine plot limits.")
-
-    values = np.concatenate(values)
-
-    if quantile is None:
-        vmax = float(values.max())
-    else:
-        vmax = float(np.quantile(values, quantile))
-
-    # Avoid invalid vmin == vmax == 0.
-    return vmax if vmax > 0 else 1.0
-
-
-def _build_field_differences(
-    fields: dict[FieldModel, xr.DataArray],
-    requested: tuple[FieldDifference, ...],
-) -> dict[FieldDifference, xr.DataArray]:
-
-    pairs: dict[
-        FieldDifference,
-        tuple[FieldModel, FieldModel],
-    ] = {
-        "fc-an": ("fc", "an"),
-        "clim-fc-an": ("clim-fc", "an"),
-        "mlfc-an": ("mlfc", "an"),
-        "clim-fc-fc": ("clim-fc", "fc"),
-        "mlfc-fc": ("mlfc", "fc"),
-        "mlfc-clim-fc": ("mlfc", "clim-fc"),
-    }
-
-    differences: dict[
-        FieldDifference,
-        xr.DataArray,
-    ] = {}
-
-    for name in requested:
-        if name in {
-            "mlfc-fc-abs-error",
-            "mlfc-fc-abs-anomaly-error",
-        }:
-            required = ("mlfc", "fc", "an")
-
-            if any(field not in fields for field in required):
-                continue
-
-            mlfc, fc, an = xr.align(
-                fields["mlfc"],
-                fields["fc"],
-                fields["an"],
-                join="exact",
-            )
-
-            differences[name] = (
-                abs(mlfc - an)
-                - abs(fc - an)
-            )
-
-            continue
-
-        lhs_name, rhs_name = pairs[name]
-
-        if (
-            lhs_name not in fields
-            or rhs_name not in fields
-        ):
-            continue
-
-        lhs, rhs = xr.align(
-            fields[lhs_name],
-            fields[rhs_name],
-            join="exact",
-        )
-
-        differences[name] = lhs - rhs
-
-    return differences
-
-
-def _convert_kelvin_to_celsius(
-    da: xr.DataArray,
-    *,
-    var: str,
-) -> xr.DataArray:
-    unit = da.attrs.get("units") or VARIABLE_UNITS.get(var, "")
-
-    if unit not in {"K", "Kelvin", "kelvin"}:
-        return da
-
-    da = da - 273.15
-    da.attrs["units"] = "°C"
-
-    return da
-
-
-# ==============================================================
-# Main
-# ==============================================================
-
-
 def main() -> None:
 
     # ==========================================================
@@ -287,6 +67,13 @@ def main() -> None:
     difference_cmap = "cmocean:balance"
 
     plot_title = True
+    plot_labels = True
+
+    title_size = None
+    label_size = None
+    tick_size = None
+    dpi = 300
+
     plot_title_strftime = "%m.%Y" # seasonal
     # plot_title_strftime = "%d.%m.%Y %H:%M" # weather
 
@@ -1152,6 +939,12 @@ def main() -> None:
                             plot_type=plot_type,
                             figsize=plot_figsize,
                             rectangles=rectangles,
+                            plot_title=plot_title,
+                            plot_labels=plot_labels,
+                            title_size=title_size,
+                            label_size=label_size,
+                            tick_size=tick_size,
+                            dpi=dpi,
                         )
                         n += 1
 
@@ -1256,6 +1049,12 @@ def main() -> None:
                             plot_type=plot_type,
                             figsize=plot_figsize,
                             rectangles=rectangles,
+                            plot_title=plot_title,
+                            plot_labels=plot_labels,
+                            title_size=title_size,
+                            label_size=label_size,
+                            tick_size=tick_size,
+                            dpi=dpi,
                         )
 
                         n += 1
@@ -1263,6 +1062,222 @@ def main() -> None:
     print(
         f"Done. Saved {n} plots."
     )
+
+
+def _select_field(
+    da: xr.DataArray,
+    *,
+    time_value,
+    lead_value,
+    realization_mode: Literal["mean", "member"] = "mean",
+    realization: int | str | None = None,
+) -> xr.DataArray:
+    """
+    Select one 2-D spatial field.
+
+    Expected dimensions before selection are approximately:
+
+        time x leadtime x [realization] x latitude x longitude
+
+    Analysis usually has no realization dimension.
+    """
+
+    time_dim = da.earthml.guessed_dims.time
+    leadtime_dim = da.earthml.guessed_dims.leadtime
+    realization_dim = da.earthml.guessed_dims.realization
+
+    if time_dim is None:
+        raise ValueError(
+            f"Could not determine time dimension for {da.name!r}. "
+            f"Available dimensions: {da.dims}"
+        )
+
+    if leadtime_dim is None:
+        raise ValueError(
+            f"Could not determine lead-time dimension for {da.name!r}. "
+            f"Available dimensions: {da.dims}"
+        )
+
+    da = da.sel(
+        {
+            time_dim: time_value,
+            leadtime_dim: lead_value,
+        }
+    )
+
+    if (
+        realization_dim is not None
+        and realization_dim in da.dims
+    ):
+        if realization_mode == "mean":
+            da = da.mean(
+                realization_dim,
+                skipna=True,
+            )
+
+        elif realization_mode == "member":
+            if realization is None:
+                raise ValueError(
+                    "realization must be specified when "
+                    "realization_mode='member'."
+                )
+
+            try:
+                da = da.sel(
+                    {realization_dim: realization}
+                )
+
+            except (KeyError, ValueError):
+                if not isinstance(realization, int):
+                    raise
+
+                da = da.isel(
+                    {realization_dim: realization}
+                )
+
+        else:
+            raise ValueError(
+                f"Unsupported "
+                f"realization_mode={realization_mode!r}."
+            )
+
+    return da.squeeze(drop=True)
+
+
+def _get_common_limits(
+    fields: dict[str, xr.DataArray],
+    *,
+    quantiles: tuple[float, float] | None = (0.01, 0.99),
+) -> tuple[float, float]:
+    """Return common non-symmetric limits across fields."""
+    values = [
+        finite
+        for da in fields.values()
+        if (finite := np.asarray(da.values)[np.isfinite(da.values)]).size
+    ]
+
+    if not values:
+        raise ValueError("No finite values available to determine plot limits.")
+
+    values = np.concatenate(values)
+
+    if quantiles is None:
+        return float(values.min()), float(values.max())
+
+    return (
+        float(np.quantile(values, quantiles[0])),
+        float(np.quantile(values, quantiles[1])),
+    )
+
+
+def _get_symmetric_limit(
+    fields: dict[str, xr.DataArray],
+    *,
+    quantile: float | None = 0.99,
+) -> float:
+    """Return a positive symmetric limit around zero."""
+    values = [
+        finite
+        for da in fields.values()
+        if (finite := np.abs(
+            np.asarray(da.values)[np.isfinite(da.values)]
+        )).size
+    ]
+
+    if not values:
+        raise ValueError("No finite values available to determine plot limits.")
+
+    values = np.concatenate(values)
+
+    if quantile is None:
+        vmax = float(values.max())
+    else:
+        vmax = float(np.quantile(values, quantile))
+
+    # Avoid invalid vmin == vmax == 0.
+    return vmax if vmax > 0 else 1.0
+
+
+def _build_field_differences(
+    fields: dict[FieldModel, xr.DataArray],
+    requested: tuple[FieldDifference, ...],
+) -> dict[FieldDifference, xr.DataArray]:
+
+    pairs: dict[
+        FieldDifference,
+        tuple[FieldModel, FieldModel],
+    ] = {
+        "fc-an": ("fc", "an"),
+        "clim-fc-an": ("clim-fc", "an"),
+        "mlfc-an": ("mlfc", "an"),
+        "clim-fc-fc": ("clim-fc", "fc"),
+        "mlfc-fc": ("mlfc", "fc"),
+        "mlfc-clim-fc": ("mlfc", "clim-fc"),
+    }
+
+    differences: dict[
+        FieldDifference,
+        xr.DataArray,
+    ] = {}
+
+    for name in requested:
+        if name in {
+            "mlfc-fc-abs-error",
+            "mlfc-fc-abs-anomaly-error",
+        }:
+            required = ("mlfc", "fc", "an")
+
+            if any(field not in fields for field in required):
+                continue
+
+            mlfc, fc, an = xr.align(
+                fields["mlfc"],
+                fields["fc"],
+                fields["an"],
+                join="exact",
+            )
+
+            differences[name] = (
+                abs(mlfc - an)
+                - abs(fc - an)
+            )
+
+            continue
+
+        lhs_name, rhs_name = pairs[name]
+
+        if (
+            lhs_name not in fields
+            or rhs_name not in fields
+        ):
+            continue
+
+        lhs, rhs = xr.align(
+            fields[lhs_name],
+            fields[rhs_name],
+            join="exact",
+        )
+
+        differences[name] = lhs - rhs
+
+    return differences
+
+
+def _convert_kelvin_to_celsius(
+    da: xr.DataArray,
+    *,
+    var: str,
+) -> xr.DataArray:
+    unit = da.attrs.get("units") or VARIABLE_UNITS.get(var, "")
+
+    if unit not in {"K", "Kelvin", "kelvin"}:
+        return da
+
+    da = da - 273.15
+    da.attrs["units"] = "°C"
+
+    return da
+
 
 if __name__ == "__main__":
     main()
