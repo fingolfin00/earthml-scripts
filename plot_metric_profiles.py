@@ -63,6 +63,11 @@ def main() -> None:
     # ==========================================================
 
     plot_mode: PlotMode = "profiles"
+    regenerate_plots = True
+
+    # ==========================================================
+    # Common profile styling
+    # ==========================================================
 
     plot_title = False
     plot_legend = False
@@ -71,6 +76,9 @@ def main() -> None:
     label_size = 20
     tick_size = 15
     dpi = 300
+
+    title_strftime = "%Y"     # seasonal
+    # title_strftime = "%m.%Y"    # weather
 
     model_labels = {
         "fc": "FC",
@@ -84,101 +92,140 @@ def main() -> None:
         ("fc", "mlfc", "normalized"): "MLFC vs FC [norm.]",
     }
 
-    title_strftime = "%Y" # seasonal
-    # title_strftime = "%m.%Y" # weather
+    # ==========================================================
+    # Profile y-axis limits
+    # ==========================================================
+    #
+    # Missing metrics, or explicit None values, use automatic limits.
 
-    # Optional y-axis limits by profile representation and metric.
-    # Missing metrics (or explicit None values) use automatic limits.
     profile_ylims = {
         "absolute": {
-            # weather: day of year clim
+            # Weather: day-of-year climatology
             # "bias": (-1, 1),
             # "rmse": (0, 2),
             # "corr": (0.5, 1.0),
-            # weather: monthly clim
+
+            # Weather: monthly climatology
             "bias": (-0.5, 0.5),
             "rmse": (0.8, 1.8), # only fc
             # "rmse": (0.5, 1.8),
             "corr": (0.8, 1.0), # only fc
             # "corr": (0.5, 1.0),
         },
+
         "percentage": {
             # "rmse": (-50, 50),
         },
+
         "difference": {
-            # weather: only fc
+            # Weather: only FC
             "rmse": (0, 0.4),
         },
+
         "normalized": {
             # "rmse": (-1, 1),
         },
     }
 
-    plot_individual_experiments = True
-    plot_combined_experiments = False
+    # ==========================================================
+    # Individual experiment profiles
+    # ==========================================================
 
+    plot_individual_experiments = False
+
+    # Plot individual ensemble members in addition to the aggregate.
     plot_members = False
 
-    # Profile orientation.
+    # ==========================================================
+    # Lead-time profiles
+    # ==========================================================
     #
-    # Lead-time profile:
-    #   x = lead time, one curve for a selected climatological start period
-    #
-    # Climatological profile:
-    #   x = climatological period (e.g. month), one curve for a selected
-    #   lead time.
+    # x = lead time
+    # one curve for each selected model
+    # one figure for each selected climatological period.
 
     plot_leadtime_profiles = False
 
-    plot_climatological_profiles = True
-    # Combine all selected lead times in one climatological profile.
+    # ==========================================================
+    # Climatological profiles
+    # ==========================================================
+    #
+    # x = climatological period, e.g. month
+    # curves correspond to selected lead times.
+
+    plot_climatological_profiles = False
+
+    # If True, put all selected lead times in the same figure.
+    # If False, generate one figure per lead time.
     combine_climatological_profile_leadtimes = True
 
-    # How combined climatological-profile lead times are distinguished:
+    # How lead times are distinguished when combined:
     #   "shades" -> shades of each model color
     #   "colors" -> one distinct color per lead time
-    climatological_leadtime_colors = "shades"
+    climatological_leadtime_colors = "colors"
 
-    # None -> create one climatological profile for every available lead time
-    # wanted_climatological_profile_leadtimes = [24, 48, 72,]
-    # wanted_climatological_profile_leadtimes = [72,]
+    # None -> use every available lead time.
+    # wanted_climatological_profile_leadtimes = [24, 48, 72]
+    # wanted_climatological_profile_leadtimes = [72]
     wanted_climatological_profile_leadtimes = None
 
-    regenerate_plots = False
-
     # ==========================================================
-    # Model settings
+    # Combined-variable settings
     # ==========================================================
 
-    plot_models = (
-        "fc",
-        # "mlfc",
-        # "clim-fc",
+    # Plot one lead-time profile containing all selected variables.
+    # Raw sources: "fc", "mlfc", "clim-fc".
+    # MLFC-vs-FC improvements:
+    #   "mlfc-fc-difference"
+    #   "mlfc-fc-percentage"
+    #   "mlfc-fc-normalized"
+    plot_combined_variables = True
+
+    # combined_variable_source = "fc"
+    # combined_variable_source = "mlfc"
+    # combined_variable_source = "clim-fc"
+
+    # MLFC improvement over FC
+    # combined_variable_source = "mlfc-fc-difference"
+    combined_variable_source = "mlfc-fc-percentage"
+    # combined_variable_source = "mlfc-fc-normalized"
+
+    combined_variable_is_improvement = (
+        combined_variable_source.startswith("mlfc-fc-")
     )
 
-    model_comparisons = (
-        ("fc", "mlfc"),
-        # ("clim-fc", "mlfc"),
-        # ("fc", "clim-fc"),
-    )
+    combined_variable_plot_folder = "variable_comparison"
+    combined_variable_plot_legend = True
 
-    need_clim_fc = (
-        "clim-fc" in plot_models
-        or any(
-            "clim-fc" in comparison
-            for comparison in model_comparisons
-        )
-    )
+    variable_labels = {
+        "mslp": "MSLP",
+        "t2m": "T2M",
+        "d2m": "D2M",
+        "u10": "U10",
+        "v10": "V10",
+        "tcc": "TCC",
+    }
+
+    variable_colors = {
+        "mslp": "tab:blue",
+        "t2m": "tab:red",
+        "d2m": "tab:orange",
+        "u10": "tab:green",
+        "v10": "tab:purple",
+        "tcc": "tab:brown",
+    }
 
     # ==========================================================
-    # Combined experiment settings
+    # Combined-experiment profiles
     # ==========================================================
+    #
+    # Compare several ML experiments for the same variable.
+
+    plot_combined_experiments = False
 
     combined_plot_folder = "profile_comparison"
 
-    comparison_name = (
-        "smaatunet-convnexttransformer"
-    )
+    comparison_name = "smaatunet-convnexttransformer"
 
     comparison_labels = [
         "ConvNeXt reanalysis",
@@ -208,6 +255,34 @@ def main() -> None:
         "SmaAt-UNet anomaly residual ens mean": "--",
         "SmaAt-UNet anomaly residual": "-",
     }
+
+    # ==========================================================
+    # Model settings
+    # ==========================================================
+
+    plot_models = (
+        "fc",
+        # "mlfc",
+        # "clim-fc",
+    )
+
+    model_comparisons = (
+        # ("fc", "mlfc"),
+        # ("clim-fc", "mlfc"),
+        # ("fc", "clim-fc"),
+    )
+
+    need_clim_fc = (
+        "clim-fc" in plot_models
+        or any(
+            "clim-fc" in comparison
+            for comparison in model_comparisons
+        )
+        or (
+            plot_combined_variables
+            and combined_variable_source == "clim-fc"
+        )
+    )
 
     # ==========================================================
     # Data processing
@@ -494,6 +569,22 @@ def main() -> None:
             "valid_lon_range": None,
             "period_dim": None,
             "leadtime_agg_coord": None,
+        }
+    )
+
+    # Same idea as combined_groups, but grouped across variables rather than
+    # experiments. The grouping key contains everything that must be common
+    # for curves to share one lead-time axis.
+    combined_variable_groups = defaultdict(
+        lambda: {
+            "metrics": {},
+            "valid_time_range": None,
+            "valid_lat_range": None,
+            "valid_lon_range": None,
+            "period_dim": None,
+            "leadtime_agg_coord": None,
+            "variant": "absolute",
+            "improvement_unit": None,
         }
     )
 
@@ -1537,6 +1628,120 @@ def main() -> None:
                                 n += 1
 
         # ======================================================
+        # Accumulate combined variables
+        # ======================================================
+
+        if plot_combined_variables:
+
+            combined_variable_metrics = None
+            combined_variable_variant = "absolute"
+            combined_variable_improvement_unit = None
+
+            if combined_variable_source in metrics_by_model:
+                combined_variable_metrics = metrics_by_model[
+                    combined_variable_source
+                ]
+
+            elif combined_variable_is_improvement:
+                requested_variant = combined_variable_source.removeprefix(
+                    "mlfc-fc-"
+                )
+
+                if requested_variant not in IMPROVEMENT_UNITS:
+                    raise ValueError(
+                        "Unsupported combined-variable improvement "
+                        f"variant {requested_variant!r}."
+                    )
+
+                if {"fc", "mlfc"} <= metrics_by_model.keys():
+                    combined_variable_parts = {}
+
+                    for metric in metrics:
+                        if (
+                            metric == "rank_histogram"
+                            or metric not in metrics_by_model["fc"]
+                            or metric not in metrics_by_model["mlfc"]
+                        ):
+                            continue
+
+                        improvements = build_metric_improvements(
+                            metrics_by_model["fc"],
+                            metrics_by_model["mlfc"],
+                            metric=metric,
+                            baseline_model="fc",
+                            target_model="mlfc",
+                        )
+
+                        matching = [
+                            da
+                            for name, da in improvements.items()
+                            if get_improvement_variant(name) == requested_variant
+                        ]
+
+                        if matching:
+                            combined_variable_parts[metric] = matching[0]
+
+                    if combined_variable_parts:
+                        combined_variable_metrics = xr.Dataset(
+                            combined_variable_parts
+                        )
+                        combined_variable_variant = requested_variant
+                        combined_variable_improvement_unit = (
+                            IMPROVEMENT_UNITS[requested_variant]
+                        )
+
+            else:
+                raise ValueError(
+                    "Unsupported combined_variable_source="
+                    f"{combined_variable_source!r}. Expected a raw model "
+                    '("fc", "mlfc", "clim-fc") or one of '
+                    '"mlfc-fc-difference", "mlfc-fc-percentage", '
+                    '"mlfc-fc-normalized".'
+                )
+
+            if combined_variable_metrics is not None:
+                combined_variable_key = (
+                    s.region_name,
+                    safe_label(valid_time_range),
+                    safe_label(valid_lat_range),
+                    safe_label(valid_lon_range),
+                    tuple(s.leadtimes),
+                    leadtime_agg_mode,
+                    metric_agg_mode,
+                    str(clim_period),
+                    period_reference,
+                    combined_variable_variant,
+                    combined_variable_improvement_unit,
+                )
+
+                variable_group = combined_variable_groups[
+                    combined_variable_key
+                ]
+
+                variable_group["valid_time_range"] = valid_time_range
+                variable_group["valid_lat_range"] = valid_lat_range
+                variable_group["valid_lon_range"] = valid_lon_range
+                variable_group["period_dim"] = period_dim
+                variable_group["leadtime_agg_coord"] = leadtime_agg_coord
+                variable_group["variant"] = combined_variable_variant
+                variable_group["improvement_unit"] = (
+                    combined_variable_improvement_unit
+                )
+
+                if s.var_fc in variable_group["metrics"]:
+                    raise ValueError(
+                        "Combined-variable plotting found more than one "
+                        f"matching experiment for variable {s.var_fc!r} "
+                        "within the same plotting group. Narrow the "
+                        "experiment selection so there is one experiment "
+                        "per variable."
+                    )
+
+                variable_group["metrics"][s.var_fc] = (
+                    combined_variable_metrics
+                )
+
+        # ======================================================
         # Accumulate combined experiments
         # ======================================================
 
@@ -1642,6 +1847,170 @@ def main() -> None:
             group["settings"].append(
                 s
             )
+
+    # ==========================================================
+    # Combined-variable lead-time profile plots
+    # ==========================================================
+
+    if plot_combined_variables:
+
+        for variable_group in combined_variable_groups.values():
+
+            metrics_by_variable = variable_group["metrics"]
+
+            if not metrics_by_variable:
+                continue
+
+            variables_current = tuple(
+                var
+                for var in variables
+                if var in metrics_by_variable
+            )
+
+            if not variables_current:
+                continue
+
+            valid_time_range = variable_group[
+                "valid_time_range"
+            ]
+            valid_lat_range = variable_group[
+                "valid_lat_range"
+            ]
+            valid_lon_range = variable_group[
+                "valid_lon_range"
+            ]
+            period_dim = variable_group["period_dim"]
+            leadtime_agg_coord = variable_group[
+                "leadtime_agg_coord"
+            ]
+            combined_variable_variant = variable_group["variant"]
+            combined_variable_improvement_unit = variable_group[
+                "improvement_unit"
+            ]
+
+            reference_ds = metrics_by_variable[
+                variables_current[0]
+            ]
+
+            available_periods = [
+                str(value)
+                for value in reference_ds[period_dim].values
+                if str(value) in periods_requested
+            ]
+
+            available_metrics = [
+                metric
+                for metric in metrics
+                if (
+                    metric != "rank_histogram"
+                    and all(
+                        metric in metrics_by_variable[var]
+                        for var in variables_current
+                    )
+                )
+            ]
+
+            for metric in available_metrics:
+
+                das = [
+                    metrics_by_variable[var][metric]
+                    for var in variables_current
+                ]
+
+                labels = tuple(
+                    variable_labels.get(var, var)
+                    for var in variables_current
+                )
+
+                colors = {
+                    var: variable_colors[var]
+                    for var in variables_current
+                    if var in variable_colors
+                }
+
+                for period_value in available_periods:
+
+                    common_path = (
+                        Path("profiles")
+                        / combined_variable_plot_folder
+                        / safe_label(combined_variable_source)
+                        / safe_label(period_dim)
+                        / safe_label(period_value)
+                        / (
+                            f"time_"
+                            f"{safe_label(valid_time_range)}"
+                            f"_lat_"
+                            f"{safe_label(valid_lat_range)}"
+                            f"_lon_"
+                            f"{safe_label(valid_lon_range)}"
+                        )
+                        / metric
+                        / metric_agg_mode
+                    )
+
+                    filename = (
+                        f"all_variables_"
+                        f"{combined_variable_source}_"
+                        f"{metric}_"
+                        f"{leadtime_agg_mode}lt.png"
+                    )
+
+                    out_file = (
+                        common_plot_dir
+                        / common_path
+                        / filename
+                    )
+
+                    if (
+                        out_file.exists()
+                        and not regenerate_plots
+                    ):
+                        continue
+
+                    print(
+                        "Saving combined-variable profile "
+                        f"{out_file}"
+                    )
+
+                    plot_profile(
+                        das=das,
+                        # plot_profile still expects a variable name for
+                        # metric/unit formatting. The plotted curves are
+                        # identified by models/labels below.
+                        var=variables_current[0],
+                        metric=metric,
+                        models=variables_current,
+                        labels=labels,
+                        out_file=out_file,
+                        time_range=valid_time_range,
+                        das_member=[None] * len(das),
+                        profile_dim=leadtime_agg_coord,
+                        profile_label=leadtime_profile_label,
+                        select_value=period_value,
+                        select_dim=period_dim,
+                        select_unit=clim_period.value,
+                        realization_dim="realization",
+                        spread="std",
+                        plot_single_members=False,
+                        plot_title=plot_title,
+                        title_strftime=title_strftime,
+                        plot_legend=combined_variable_plot_legend,
+                        title_size=title_size,
+                        label_size=label_size,
+                        tick_size=tick_size,
+                        dpi=dpi,
+                        improvement_unit=(
+                            combined_variable_improvement_unit
+                        ),
+                        model_colors=colors,
+                        ylim=get_profile_ylim(
+                            profile_ylims,
+                            metric,
+                            variant=combined_variable_variant,
+                        ),
+                    )
+
+                    n += 1
 
     # ==========================================================
     # Combined experiment profile plots
