@@ -381,6 +381,7 @@ def main() -> None:
             valid_time_range = (
                 (s.test_start, s.test_end)
                 # (s.train_start, s.train_end)
+                # (s.train_start, s.test_end)
                 if time_range is None
                 else time_range
             )
@@ -401,9 +402,10 @@ def main() -> None:
                 / f"{inference_start}_{inference_end}"
                 / "test_corrected.zarr"
             )
-        # clim_time_range = (s.train_start, s.train_end)
+        clim_time_range = (s.train_start, s.train_end)
         # clim_time_range = (s.train_start, s.val_end)
-        clim_time_range = ("2019-10-14", "2024-12-31")
+        # clim_time_range = (s.train_start, s.test_end)
+        # clim_time_range = ("2019-10-14", "2024-12-31")
 
         lat_lon = list(s.region.values()) if s.region is not None else [None, None]
         valid_lat_range = lat_lon[0] if lat_range is None else lat_range
