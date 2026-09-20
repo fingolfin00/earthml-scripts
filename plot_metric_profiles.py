@@ -197,6 +197,26 @@ def main() -> None:
     combined_variable_plot_folder = "variable_comparison"
     combined_variable_plot_legend = True
 
+    # Combined-variable output types.
+    combined_variable_leadtime_profiles = False
+    combined_variable_climatological_profiles = True
+
+    # Combined-variable climatological profiles:
+    #   x = climatological period
+    #   color = variable
+    #   shade = lead time
+    #
+    # If True, put all selected lead times in one figure.
+    # If False, generate one figure per lead time.
+    combine_combined_variable_climatological_leadtimes = False
+
+    # None -> use every available lead time.
+    # combined_variable_climatological_leadtimes = [1, 2, 3]
+    combined_variable_climatological_leadtimes = None
+
+    # When lead times are combined, use shades of each variable's base color.
+    combined_variable_climatological_leadtime_colors = "shades"
+
     variable_labels = {
         "mslp": "MSLP",
         "t2m": "T2M",
@@ -204,6 +224,10 @@ def main() -> None:
         "u10": "U10",
         "v10": "V10",
         "tcc": "TCC",
+
+        "sst": "SST",
+        "ssh": "SSH",
+        "tprate": "TP rate",
     }
 
     variable_colors = {
@@ -213,6 +237,10 @@ def main() -> None:
         "u10": "tab:green",
         "v10": "tab:purple",
         "tcc": "tab:brown",
+
+        "sst": "tab:pink",
+        "ssh": "tab:cyan",
+        "tprate": "tab:olive",
     }
 
     # ==========================================================
@@ -1849,7 +1877,7 @@ def main() -> None:
             )
 
     # ==========================================================
-    # Combined-variable lead-time profile plots
+    # Combined-variable profile plots
     # ==========================================================
 
     if plot_combined_variables:
@@ -1928,89 +1956,257 @@ def main() -> None:
                     if var in variable_colors
                 }
 
-                for period_value in available_periods:
+                # ----------------------------------------------
+                # Lead-time profile
+                # ----------------------------------------------
 
-                    common_path = (
-                        Path("profiles")
-                        / combined_variable_plot_folder
-                        / safe_label(combined_variable_source)
-                        / safe_label(period_dim)
-                        / safe_label(period_value)
-                        / (
-                            f"time_"
-                            f"{safe_label(valid_time_range)}"
-                            f"_lat_"
-                            f"{safe_label(valid_lat_range)}"
-                            f"_lon_"
-                            f"{safe_label(valid_lon_range)}"
+                if combined_variable_leadtime_profiles:
+
+                    for period_value in available_periods:
+
+                        common_path = (
+                            Path("profiles")
+                            / combined_variable_plot_folder
+                            / safe_label(combined_variable_source)
+                            / safe_label(period_dim)
+                            / safe_label(period_value)
+                            / (
+                                f"time_"
+                                f"{safe_label(valid_time_range)}"
+                                f"_lat_"
+                                f"{safe_label(valid_lat_range)}"
+                                f"_lon_"
+                                f"{safe_label(valid_lon_range)}"
+                            )
+                            / metric
+                            / metric_agg_mode
                         )
-                        / metric
-                        / metric_agg_mode
+
+                        filename = (
+                            f"all_variables_"
+                            f"{combined_variable_source}_"
+                            f"{metric}_"
+                            f"{leadtime_agg_mode}lt.png"
+                        )
+
+                        out_file = (
+                            common_plot_dir
+                            / common_path
+                            / filename
+                        )
+
+                        if (
+                            out_file.exists()
+                            and not regenerate_plots
+                        ):
+                            continue
+
+                        print(
+                            "Saving combined-variable lead-time profile "
+                            f"{out_file}"
+                        )
+
+                        plot_profile(
+                            das=das,
+                            # plot_profile still expects a variable name for
+                            # metric/unit formatting. The plotted curves are
+                            # identified by models/labels below.
+                            var=variables_current[0],
+                            metric=metric,
+                            models=variables_current,
+                            labels=labels,
+                            out_file=out_file,
+                            time_range=valid_time_range,
+                            das_member=[None] * len(das),
+                            profile_dim=leadtime_agg_coord,
+                            profile_label=leadtime_profile_label,
+                            select_value=period_value,
+                            select_dim=period_dim,
+                            select_unit=clim_period.value,
+                            realization_dim="realization",
+                            spread="std",
+                            plot_single_members=False,
+                            plot_title=plot_title,
+                            title_strftime=title_strftime,
+                            plot_legend=combined_variable_plot_legend,
+                            title_size=title_size,
+                            label_size=label_size,
+                            tick_size=tick_size,
+                            dpi=dpi,
+                            improvement_unit=(
+                                combined_variable_improvement_unit
+                            ),
+                            model_colors=colors,
+                            ylim=get_profile_ylim(
+                                profile_ylims,
+                                metric,
+                                variant=combined_variable_variant,
+                            ),
+                        )
+
+                        n += 1
+
+                # ----------------------------------------------
+                # Climatological-period profile
+                # ----------------------------------------------
+
+                if combined_variable_climatological_profiles:
+
+                    climatological_das = [
+                        prepare_climatological_profile_da(
+                            da,
+                            period_dim=period_dim,
+                            clim_period=clim_period,
+                        )
+                        for da in das
+                    ]
+
+                    climatological_leadtimes = (
+                        get_climatological_profile_leadtimes(
+                            reference_ds,
+                            leadtime_dim=leadtime_agg_coord,
+                            wanted_leadtimes=(
+                                combined_variable_climatological_leadtimes
+                            ),
+                        )
                     )
 
-                    filename = (
-                        f"all_variables_"
-                        f"{combined_variable_source}_"
-                        f"{metric}_"
-                        f"{leadtime_agg_mode}lt.png"
+                    leadtime_groups = (
+                        [climatological_leadtimes]
+                        if combine_combined_variable_climatological_leadtimes
+                        else [
+                            [lead_value]
+                            for lead_value in climatological_leadtimes
+                        ]
                     )
 
-                    out_file = (
-                        common_plot_dir
-                        / common_path
-                        / filename
-                    )
+                    for lead_values in leadtime_groups:
 
-                    if (
-                        out_file.exists()
-                        and not regenerate_plots
-                    ):
-                        continue
+                        if not lead_values:
+                            continue
 
-                    print(
-                        "Saving combined-variable profile "
-                        f"{out_file}"
-                    )
+                        combined = len(lead_values) > 1
 
-                    plot_profile(
-                        das=das,
-                        # plot_profile still expects a variable name for
-                        # metric/unit formatting. The plotted curves are
-                        # identified by models/labels below.
-                        var=variables_current[0],
-                        metric=metric,
-                        models=variables_current,
-                        labels=labels,
-                        out_file=out_file,
-                        time_range=valid_time_range,
-                        das_member=[None] * len(das),
-                        profile_dim=leadtime_agg_coord,
-                        profile_label=leadtime_profile_label,
-                        select_value=period_value,
-                        select_dim=period_dim,
-                        select_unit=clim_period.value,
-                        realization_dim="realization",
-                        spread="std",
-                        plot_single_members=False,
-                        plot_title=plot_title,
-                        title_strftime=title_strftime,
-                        plot_legend=combined_variable_plot_legend,
-                        title_size=title_size,
-                        label_size=label_size,
-                        tick_size=tick_size,
-                        dpi=dpi,
-                        improvement_unit=(
-                            combined_variable_improvement_unit
-                        ),
-                        model_colors=colors,
-                        ylim=get_profile_ylim(
-                            profile_ylims,
-                            metric,
-                            variant=combined_variable_variant,
-                        ),
-                    )
+                        leadtime_label = (
+                            "all_leadtimes"
+                            if combined
+                            else f"leadtime_{safe_label(lead_values[0])}"
+                        )
 
-                    n += 1
+                        plot_das = climatological_das
+                        plot_models_current = variables_current
+                        plot_labels_current = labels
+                        plot_colors = colors
+                        plot_linestyles = None
+                        plot_select_dim = leadtime_agg_coord
+                        plot_select_value = lead_values[0]
+                        plot_select_unit = leadtime_units.value
+
+                        if combined:
+                            (
+                                plot_das,
+                                plot_models_current,
+                                plot_labels_current,
+                                _,
+                                plot_colors,
+                                plot_linestyles,
+                            ) = expand_climatological_leadtimes(
+                                climatological_das,
+                                variables_current,
+                                lead_values,
+                                leadtime_dim=leadtime_agg_coord,
+                                leadtime_unit=leadtime_units.value,
+                                color_mode=(
+                                    combined_variable_climatological_leadtime_colors
+                                ),
+                                labels=labels,
+                                model_colors=colors,
+                            )
+
+                            plot_select_dim = None
+                            plot_select_value = "all"
+                            plot_select_unit = None
+
+                        common_path = (
+                            Path("profiles")
+                            / combined_variable_plot_folder
+                            / safe_label(combined_variable_source)
+                            / "climatology"
+                            / leadtime_label
+                            / (
+                                f"time_"
+                                f"{safe_label(valid_time_range)}"
+                                f"_lat_"
+                                f"{safe_label(valid_lat_range)}"
+                                f"_lon_"
+                                f"{safe_label(valid_lon_range)}"
+                            )
+                            / metric
+                            / metric_agg_mode
+                        )
+
+                        filename = (
+                            f"all_variables_"
+                            f"{combined_variable_source}_"
+                            f"{metric}_"
+                            f"{safe_label(period_dim)}_"
+                            f"{leadtime_label}.png"
+                        )
+
+                        out_file = (
+                            common_plot_dir
+                            / common_path
+                            / filename
+                        )
+
+                        if (
+                            out_file.exists()
+                            and not regenerate_plots
+                        ):
+                            continue
+
+                        print(
+                            "Saving combined-variable climatological profile "
+                            f"{out_file}"
+                        )
+
+                        plot_profile(
+                            das=plot_das,
+                            var=variables_current[0],
+                            metric=metric,
+                            models=plot_models_current,
+                            labels=plot_labels_current,
+                            out_file=out_file,
+                            time_range=valid_time_range,
+                            das_member=[None] * len(plot_das),
+                            profile_dim=period_dim,
+                            profile_label=period_profile_label,
+                            select_dim=plot_select_dim,
+                            select_value=plot_select_value,
+                            select_unit=plot_select_unit,
+                            realization_dim="realization",
+                            spread="std",
+                            plot_single_members=False,
+                            plot_title=plot_title,
+                            title_strftime=title_strftime,
+                            plot_legend=combined_variable_plot_legend,
+                            title_size=title_size,
+                            label_size=label_size,
+                            tick_size=tick_size,
+                            dpi=dpi,
+                            improvement_unit=(
+                                combined_variable_improvement_unit
+                            ),
+                            model_colors=plot_colors,
+                            model_linestyles=plot_linestyles,
+                            ylim=get_profile_ylim(
+                                profile_ylims,
+                                metric,
+                                variant=combined_variable_variant,
+                            ),
+                        )
+
+                        n += 1
 
     # ==========================================================
     # Combined experiment profile plots
