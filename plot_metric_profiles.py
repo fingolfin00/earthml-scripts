@@ -44,13 +44,12 @@ from earthml.plots import (
 
 
 def main() -> None:
-
     # ==========================================================
     # Paths
     # ==========================================================
 
     experiments_root = Path(
-        "/Users/jacopodallaglio/ML/training/seasonal/experiments_plots"
+        "/Users/jacopodallaglio/ML/training/seasonal/experiments"
         # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
     )
 
@@ -514,6 +513,7 @@ def main() -> None:
             valid_time_range = (
                 (s.test_start, s.test_end)
                 # (s.train_start, s.train_end)
+                # (s.train_start, s.test_end)
                 if time_range is None
                 else time_range
             )
@@ -538,6 +538,7 @@ def main() -> None:
 
         # clim_time_range = (s.train_start, s.val_end) # weather (very few years)
         clim_time_range = (s.train_start, s.train_end) # seasonal
+        # clim_time_range = (s.train_start, s.test_end) # seasonal
 
         # ======================================================
         # Spatial range
