@@ -585,11 +585,15 @@ def main() -> None:
     combined_groups = defaultdict(
         lambda: {
             "fc": None,
+            "fc_fields": None,
             "fc_members": None,
             "clim-fc": None,
+            "clim-fc_fields": None,
             "clim-fc_members": None,
             "mlfc": [],
+            "mlfc_fields": [],
             "mlfc_members": [],
+            "spatial_reference": None,
             "labels": [],
             "settings": [],
             "valid_time_range": None,
@@ -879,6 +883,11 @@ def main() -> None:
             xr.Dataset,
         ] = {}
 
+        metric_fields_by_model: dict[
+            str,
+            xr.Dataset,
+        ] = {}
+
         members_by_model: dict[
             str,
             xr.Dataset,
@@ -901,60 +910,67 @@ def main() -> None:
             )
 
             metric_parts = []
+            metric_field_parts = []
 
             # --------------------------------------------------
             # Deterministic / ensemble-mean metrics
             # --------------------------------------------------
 
             if deterministic_metrics:
-                metric_parts.append(
-                    get_profile_metrics(
-                        s=s,
-                        an=an,
-                        fc=ds,
-                        an_clim=an_clim,
-                        fc_clim=ds_clim,
-                        metrics=deterministic_metrics,
-                        realization_agg=True,
-                        metric_agg_mode=metric_agg_mode,
-                        leadtime_agg_mode=leadtime_agg_mode,
-                        leadtime_agg_coord=leadtime_agg_coord,
-                        clim_period=clim_period,
-                        period_reference=period_reference,
-                        period_dim=period_dim,
-                        periods_requested=periods_requested,
-                        leadtime_unit=leadtime_units,
-                    )
+                profile_part, field_part = get_profile_metrics(
+                    s=s,
+                    an=an,
+                    fc=ds,
+                    an_clim=an_clim,
+                    fc_clim=ds_clim,
+                    metrics=deterministic_metrics,
+                    realization_agg=True,
+                    metric_agg_mode=metric_agg_mode,
+                    leadtime_agg_mode=leadtime_agg_mode,
+                    leadtime_agg_coord=leadtime_agg_coord,
+                    clim_period=clim_period,
+                    period_reference=period_reference,
+                    period_dim=period_dim,
+                    periods_requested=periods_requested,
+                    leadtime_unit=leadtime_units,
                 )
+
+                metric_parts.append(profile_part)
+                metric_field_parts.append(field_part)
 
             # --------------------------------------------------
             # Probabilistic metrics
             # --------------------------------------------------
 
             if probabilistic_metrics:
-                metric_parts.append(
-                    get_profile_metrics(
-                        s=s,
-                        an=an,
-                        fc=ds,
-                        an_clim=an_clim,
-                        fc_clim=ds_clim,
-                        metrics=probabilistic_metrics,
-                        realization_agg=False,
-                        metric_agg_mode=metric_agg_mode,
-                        leadtime_agg_mode=leadtime_agg_mode,
-                        leadtime_agg_coord=leadtime_agg_coord,
-                        clim_period=clim_period,
-                        period_reference=period_reference,
-                        period_dim=period_dim,
-                        periods_requested=periods_requested,
-                        leadtime_unit=leadtime_units,
-                    )
+                profile_part, field_part = get_profile_metrics(
+                    s=s,
+                    an=an,
+                    fc=ds,
+                    an_clim=an_clim,
+                    fc_clim=ds_clim,
+                    metrics=probabilistic_metrics,
+                    realization_agg=False,
+                    metric_agg_mode=metric_agg_mode,
+                    leadtime_agg_mode=leadtime_agg_mode,
+                    leadtime_agg_coord=leadtime_agg_coord,
+                    clim_period=clim_period,
+                    period_reference=period_reference,
+                    period_dim=period_dim,
+                    periods_requested=periods_requested,
+                    leadtime_unit=leadtime_units,
                 )
+
+                metric_parts.append(profile_part)
+                metric_field_parts.append(field_part)
 
             if metric_parts:
                 metrics_by_model[model] = xr.merge(
                     metric_parts
+                )
+
+                metric_fields_by_model[model] = xr.merge(
+                    metric_field_parts
                 )
 
             # --------------------------------------------------
@@ -965,25 +981,25 @@ def main() -> None:
                 plot_members
                 and deterministic_metrics
             ):
-                members_by_model[model] = (
-                    get_profile_metrics(
-                        s=s,
-                        an=an,
-                        fc=ds,
-                        an_clim=an_clim,
-                        fc_clim=ds_clim,
-                        metrics=deterministic_metrics,
-                        realization_agg=False,
-                        metric_agg_mode=metric_agg_mode,
-                        leadtime_agg_mode=leadtime_agg_mode,
-                        leadtime_agg_coord=leadtime_agg_coord,
-                        clim_period=clim_period,
-                        period_reference=period_reference,
-                        period_dim=period_dim,
-                        periods_requested=periods_requested,
-                        leadtime_unit=leadtime_units,
-                    )
+                member_profiles, _ = get_profile_metrics(
+                    s=s,
+                    an=an,
+                    fc=ds,
+                    an_clim=an_clim,
+                    fc_clim=ds_clim,
+                    metrics=deterministic_metrics,
+                    realization_agg=False,
+                    metric_agg_mode=metric_agg_mode,
+                    leadtime_agg_mode=leadtime_agg_mode,
+                    leadtime_agg_coord=leadtime_agg_coord,
+                    clim_period=clim_period,
+                    period_reference=period_reference,
+                    period_dim=period_dim,
+                    periods_requested=periods_requested,
+                    leadtime_unit=leadtime_units,
                 )
+
+                members_by_model[model] = member_profiles
 
         if not metrics_by_model:
             print(
@@ -1003,6 +1019,12 @@ def main() -> None:
                     model: ds.compute()
                     for model, ds
                     in metrics_by_model.items()
+                }
+
+                metric_fields_by_model = {
+                    model: ds.compute()
+                    for model, ds
+                    in metric_fields_by_model.items()
                 }
 
                 members_by_model = {
@@ -1369,17 +1391,8 @@ def main() -> None:
                 ):
                     continue
 
-                baseline_ds = (
-                    metrics_by_model[
-                        baseline_model
-                    ]
-                )
-
-                target_ds = (
-                    metrics_by_model[
-                        target_model
-                    ]
-                )
+                baseline_ds = metric_fields_by_model[baseline_model]
+                target_ds = metric_fields_by_model[target_model]
 
                 comparison_metrics = [
                     metric
@@ -1393,20 +1406,21 @@ def main() -> None:
 
                 for metric in comparison_metrics:
 
-                    improvements = (
-                        build_metric_improvements(
-                            baseline_ds,
-                            target_ds,
-                            metric=metric,
-                            baseline_model=baseline_model,
-                            target_model=target_model,
-                        )
+                    improvements = build_metric_improvements(
+                        baseline_ds,
+                        target_ds,
+                        metric=metric,
+                        baseline_model=baseline_model,
+                        target_model=target_model,
                     )
 
-                    for (
-                        comparison_model,
-                        comparison_da,
-                    ) in improvements.items():
+                    for comparison_model, comparison_da in improvements.items():
+
+                        comparison_da = spatial_average_metric_fields(
+                            comparison_da,
+                            fc=fc,
+                            metric_agg_mode=metric_agg_mode,
+                        )
 
                         (
                             variant,
@@ -1681,20 +1695,20 @@ def main() -> None:
                         f"variant {requested_variant!r}."
                     )
 
-                if {"fc", "mlfc"} <= metrics_by_model.keys():
+                if {"fc", "mlfc"} <= metric_fields_by_model.keys():
                     combined_variable_parts = {}
 
                     for metric in metrics:
                         if (
                             metric == "rank_histogram"
-                            or metric not in metrics_by_model["fc"]
-                            or metric not in metrics_by_model["mlfc"]
+                            or metric not in metric_fields_by_model["fc"]
+                            or metric not in metric_fields_by_model["mlfc"]
                         ):
                             continue
 
                         improvements = build_metric_improvements(
-                            metrics_by_model["fc"],
-                            metrics_by_model["mlfc"],
+                            metric_fields_by_model["fc"],
+                            metric_fields_by_model["mlfc"],
                             metric=metric,
                             baseline_model="fc",
                             target_model="mlfc",
@@ -1707,7 +1721,13 @@ def main() -> None:
                         ]
 
                         if matching:
-                            combined_variable_parts[metric] = matching[0]
+                            combined_variable_parts[metric] = (
+                                spatial_average_metric_fields(
+                                    matching[0],
+                                    fc=fc,
+                                    metric_agg_mode=metric_agg_mode,
+                                )
+                            )
 
                     if combined_variable_parts:
                         combined_variable_metrics = xr.Dataset(
@@ -1820,6 +1840,8 @@ def main() -> None:
                 "leadtime_agg_coord"
             ] = leadtime_agg_coord
 
+            if group["spatial_reference"] is None:
+                group["spatial_reference"] = fc
 
             # FC is common to experiments in the same group.
             if (
@@ -1828,6 +1850,10 @@ def main() -> None:
             ):
                 group["fc"] = (
                     metrics_by_model["fc"]
+                )
+
+                group["fc_fields"] = (
+                    metric_fields_by_model["fc"]
                 )
 
                 group["fc_members"] = (
@@ -1848,6 +1874,12 @@ def main() -> None:
                     ]
                 )
 
+                group["clim-fc_fields"] = (
+                    metric_fields_by_model[
+                        "clim-fc"
+                    ]
+                )
+
                 group[
                     "clim-fc_members"
                 ] = members_by_model.get(
@@ -1856,6 +1888,12 @@ def main() -> None:
 
             group["mlfc"].append(
                 metrics_by_model[
+                    "mlfc"
+                ]
+            )
+
+            group["mlfc_fields"].append(
+                metric_fields_by_model[
                     "mlfc"
                 ]
             )
@@ -2263,6 +2301,11 @@ def main() -> None:
                 xr.Dataset,
             ] = {}
 
+            fields_by_model: dict[
+                str,
+                xr.Dataset,
+            ] = {}
+
             members_by_combined_model: dict[
                 str,
                 xr.Dataset,
@@ -2272,6 +2315,9 @@ def main() -> None:
             if group["fc"] is not None:
                 das_by_model["fc"] = (
                     group["fc"]
+                )
+                fields_by_model["fc"] = (
+                    group["fc_fields"]
                 )
 
                 if (
@@ -2293,6 +2339,11 @@ def main() -> None:
                     "clim-fc"
                 ] = group[
                     "clim-fc"
+                ]
+                fields_by_model[
+                    "clim-fc"
+                ] = group[
+                    "clim-fc_fields"
                 ]
 
                 if (
@@ -2324,16 +2375,21 @@ def main() -> None:
             for (
                 experiment_label,
                 mlfc_metrics,
+                mlfc_fields,
                 mlfc_members,
             ) in zip(
                 comparison_labels,
                 group["mlfc"],
+                group["mlfc_fields"],
                 group["mlfc_members"],
                 strict=True,
             ):
                 das_by_model[
                     experiment_label
                 ] = mlfc_metrics
+                fields_by_model[
+                    experiment_label
+                ] = mlfc_fields
 
                 if mlfc_members is not None:
                     members_by_combined_model[
@@ -2712,7 +2768,7 @@ def main() -> None:
                         continue
 
                     baseline_ds = (
-                        das_by_model[
+                        fields_by_model[
                             baseline_model
                         ]
                     )
@@ -2750,7 +2806,7 @@ def main() -> None:
                                 continue
 
                             target_ds = (
-                                das_by_model[
+                                fields_by_model[
                                     experiment_label
                                 ]
                             )
@@ -2783,6 +2839,14 @@ def main() -> None:
                                 variant = (
                                     get_improvement_variant(
                                         generated_name
+                                    )
+                                )
+
+                                comparison_da = (
+                                    spatial_average_metric_fields(
+                                        comparison_da,
+                                        fc=group["spatial_reference"],
+                                        metric_agg_mode=metric_agg_mode,
                                     )
                                 )
 
@@ -3092,13 +3156,13 @@ def main() -> None:
                         continue
 
                     baseline_ds = (
-                        das_by_model[
+                        fields_by_model[
                             baseline_model
                         ]
                     )
 
                     target_ds = (
-                        das_by_model[
+                        fields_by_model[
                             target_model
                         ]
                     )
@@ -3132,6 +3196,14 @@ def main() -> None:
                             comparison_model,
                             comparison_da,
                         ) in improvements.items():
+
+                            comparison_da = (
+                                spatial_average_metric_fields(
+                                    comparison_da,
+                                    fc=group["spatial_reference"],
+                                    metric_agg_mode=metric_agg_mode,
+                                )
+                            )
 
                             (
                                 variant,
@@ -3445,7 +3517,7 @@ def get_profile_metrics(
         else "maps"
     )
 
-    ds = get_metrics(
+    fields = get_metrics(
         an=an,
         fc=fc,
         var=s.var_fc,
@@ -3465,7 +3537,7 @@ def get_profile_metrics(
     )
 
     if metric_agg_mode == "global":
-        return ds
+        return fields, fields
 
     if metric_agg_mode == "spatial_avg":
         lat_dim = fc.earthml.guessed_dims.latitude
@@ -3473,7 +3545,35 @@ def get_profile_metrics(
 
         weights = np.cos(np.deg2rad(fc[lat_dim]))
 
-        return ds.weighted(weights).mean(
+        profiles = fields.weighted(weights).mean(
+            dim=(lat_dim, lon_dim)
+        )
+
+        return profiles, fields
+
+    raise ValueError(
+        f"Unsupported metric_agg_mode={metric_agg_mode!r}"
+    )
+
+
+def spatial_average_metric_fields(
+    da: xr.DataArray | xr.Dataset,
+    *,
+    fc,
+    metric_agg_mode,
+) -> xr.DataArray | xr.Dataset:
+    """Spatially average metric/improvement fields for profile plotting."""
+
+    if metric_agg_mode == "global":
+        return da
+
+    if metric_agg_mode == "spatial_avg":
+        lat_dim = fc.earthml.guessed_dims.latitude
+        lon_dim = fc.earthml.guessed_dims.longitude
+
+        weights = np.cos(np.deg2rad(fc[lat_dim]))
+
+        return da.weighted(weights).mean(
             dim=(lat_dim, lon_dim)
         )
 
