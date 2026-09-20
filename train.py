@@ -23,6 +23,7 @@ from lightning.pytorch.callbacks import (
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from earthml import (
+    Region,
     LeadtimeUnit,
     ClimPeriod,
     TargetMode,
@@ -352,11 +353,41 @@ def extract_period_from_ds(
     })
 
     if interpolate_analysis:
-        # Regrid analysis into forecast
-        an_ds = an_ds.interp(
-            latitude=fc_ds.latitude,
-            longitude=fc_ds.longitude,
-        )
+        lat_coord = an_ds.earthml.guessed_coords.latitude
+        lon_coord = an_ds.earthml.guessed_coords.longitude
+
+        if an_ds[lat_coord].ndim == 2 and an_ds[lon_coord].ndim == 2:
+            lat = fc_ds.latitude.values
+            lon = fc_ds.longitude.values
+
+            dlat = abs(float(lat[1] - lat[0]))
+            dlon = abs(float(lon[1] - lon[0]))
+
+            lat_sign = np.sign(float(lat[-1] - lat[0]))
+            lon_sign = np.sign(float(lon[-1] - lon[0]))
+
+            an_ds = an_ds.earthml.regrid_to_rectilinear(
+                region=Region(
+                    name="forecast_grid",
+                    lat=(
+                        float(lat[0] - lat_sign * dlat / 2),
+                        float(lat[-1] + lat_sign * dlat / 2),
+                    ),
+                    lon=(
+                        float(lon[0] - lon_sign * dlon / 2),
+                        float(lon[-1] + lon_sign * dlon / 2),
+                    ),
+                ),
+                resolution=(dlat, dlon),
+                vars_to_regrid=list(an_ds.data_vars),
+                backend="xesmf",
+            )
+
+        else:
+            an_ds = an_ds.interp(
+                latitude=fc_ds.latitude,
+                longitude=fc_ds.longitude,
+            )
 
     fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
 
@@ -954,7 +985,7 @@ def init_callbacks(
 def _infer_RT_from_source(dataset: XarrayDataset) -> tuple[int, int]:
     target_ds = dataset.target_ds
 
-    tdim = "time"
+    tdim = target_ds.earthml.guessed_dims.time or "time"
     T_out = int(target_ds.sizes.get(tdim, 1))
 
     # If target was deterministic/averaged, model output has no ensemble sample axis.
@@ -983,6 +1014,10 @@ def _reconstruct_pred_tensor(
     R_out: int,
     T_out: int,
     realization_as_channel: bool = False,
+    rdim: str = "realization",
+    tdim: str = "time",
+    ydim: str = "latitude",
+    xdim: str = "longitude",
 ) -> tuple[torch.Tensor, xr.Dataset]:
     """
     Canonical output ALWAYS (C, R_out, T_out, H, W).
@@ -1023,12 +1058,6 @@ def _reconstruct_pred_tensor(
             # time-major flatten (t slow, r fast): (C,N,H,W)->(C,T,R,H,W)->(C,R,T,H,W)
             x = x.unflatten(1, (T_out, R_out)).permute(0, 2, 1, 3, 4).contiguous()
 
-    # meta_ds only sliced to match inferred sizes; never used to infer them
-    tdim = "time"
-    rdim = "realization"
-    ydim = "latitude"
-    xdim = "longitude"
-
     indexers: dict[str, slice] = {}
     if rdim in meta_ds.dims:
         indexers[rdim] = slice(0, R_out)
@@ -1067,9 +1096,9 @@ def convert_to_xarray(
     target_rdim = meta_ds.earthml.guessed_dims.realization
     input_rdim = input_ds.earthml.guessed_dims.realization
     rdim = target_rdim or input_rdim or "realization"
-    tdim = "time"
-    ydim = "latitude"
-    xdim = "longitude"
+    tdim = meta_ds.earthml.guessed_dims.time or "time"
+    ydim = meta_ds.earthml.guessed_dims.latitude or "latitude"
+    xdim = meta_ds.earthml.guessed_dims.longitude or "longitude"
 
     allowed_dims = {tdim, ydim, xdim, rdim, "missed_time"}
     meta_ds = meta_ds.earthml.remove_dims_and_coords(allowed_dims)
@@ -1124,6 +1153,10 @@ def convert_to_xarray(
         R_out=R_out,
         T_out=T_out,
         realization_as_channel=realization_as_channel,
+        rdim=rdim,
+        tdim=tdim,
+        ydim=ydim,
+        xdim=xdim,
     )
 
     # Use meta dim names if present; otherwise drop them safely.
@@ -2599,7 +2632,7 @@ def train(
         #     stem_stride=1,
 
         #     transformer_depth=0, # disable transform block
-        #     transformer_depth=1, # enable depth 1 transform block
+        #     # transformer_depth=1, # enable depth 1 transform block
         #     transformer_heads=8,
         #     transformer_mlp_ratio=4.0,
         #     transformer_dropout=0.0,
