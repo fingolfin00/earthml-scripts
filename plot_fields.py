@@ -926,6 +926,9 @@ def main() -> None:
                         )
                         print(f"Saving {kind} map {out_file}")
 
+                        lat_dim = field.earthml.guessed_dims.latitude
+                        lon_dim = field.earthml.guessed_dims.longitude
+
                         plot_field_map(
                             field,
                             var=s.var_fc,
@@ -938,6 +941,7 @@ def main() -> None:
                             levels=map_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
+                            spatial_dims=(lat_dim, lon_dim),
                             rectangles=rectangles,
                             plot_title=plot_title,
                             plot_labels=plot_labels,
@@ -1036,6 +1040,9 @@ def main() -> None:
 
                         print(f"Saving {kind} map {out_file}")
 
+                        lat_dim = field.earthml.guessed_dims.latitude
+                        lon_dim = field.earthml.guessed_dims.longitude
+
                         plot_field_map(
                             field,
                             var=s.var_fc,
@@ -1048,6 +1055,7 @@ def main() -> None:
                             levels=diff_levels,
                             plot_type=plot_type,
                             figsize=plot_figsize,
+                            spatial_dims=(lat_dim, lon_dim),
                             rectangles=rectangles,
                             plot_title=plot_title,
                             plot_labels=plot_labels,
@@ -1198,15 +1206,52 @@ def _get_symmetric_limit(
     return vmax if vmax > 0 else 1.0
 
 
+def _match_spatial_dims(
+    da: xr.DataArray,
+    reference: xr.DataArray,
+) -> xr.DataArray:
+    da_lat = da.earthml.guessed_dims.latitude
+    da_lon = da.earthml.guessed_dims.longitude
+
+    ref_lat = reference.earthml.guessed_dims.latitude
+    ref_lon = reference.earthml.guessed_dims.longitude
+
+    rename = {}
+
+    if (
+        da_lat in da.dims
+        and ref_lat in reference.dims
+        and da_lat != ref_lat
+    ):
+        rename[da_lat] = ref_lat
+
+    if (
+        da_lon in da.dims
+        and ref_lon in reference.dims
+        and da_lon != ref_lon
+    ):
+        rename[da_lon] = ref_lon
+
+    if rename:
+        da = da.rename(rename)
+
+    return da
+
+
 def _build_field_differences(
     fields: dict[FieldModel, xr.DataArray],
     requested: tuple[FieldDifference, ...],
 ) -> dict[FieldDifference, xr.DataArray]:
 
-    pairs: dict[
-        FieldDifference,
-        tuple[FieldModel, FieldModel],
-    ] = {
+    if "an" in fields:
+        reference = fields["an"]
+
+        fields = {
+            name: _match_spatial_dims(da, reference)
+            for name, da in fields.items()
+        }
+
+    pairs = {
         "fc-an": ("fc", "an"),
         "clim-fc-an": ("clim-fc", "an"),
         "mlfc-an": ("mlfc", "an"),
