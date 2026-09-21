@@ -1418,7 +1418,7 @@ def main() -> None:
 
                         comparison_da = spatial_average_metric_fields(
                             comparison_da,
-                            fc=fc,
+                            an=an,
                             metric_agg_mode=metric_agg_mode,
                         )
 
@@ -1724,7 +1724,7 @@ def main() -> None:
                             combined_variable_parts[metric] = (
                                 spatial_average_metric_fields(
                                     matching[0],
-                                    fc=fc,
+                                    an=an,
                                     metric_agg_mode=metric_agg_mode,
                                 )
                             )
@@ -1841,7 +1841,7 @@ def main() -> None:
             ] = leadtime_agg_coord
 
             if group["spatial_reference"] is None:
-                group["spatial_reference"] = fc
+                group["spatial_reference"] = an
 
             # FC is common to experiments in the same group.
             if (
@@ -2845,7 +2845,7 @@ def main() -> None:
                                 comparison_da = (
                                     spatial_average_metric_fields(
                                         comparison_da,
-                                        fc=group["spatial_reference"],
+                                        an=group["spatial_reference"],
                                         metric_agg_mode=metric_agg_mode,
                                     )
                                 )
@@ -3200,7 +3200,7 @@ def main() -> None:
                             comparison_da = (
                                 spatial_average_metric_fields(
                                     comparison_da,
-                                    fc=group["spatial_reference"],
+                                    an=group["spatial_reference"],
                                     metric_agg_mode=metric_agg_mode,
                                 )
                             )
@@ -3540,10 +3540,10 @@ def get_profile_metrics(
         return fields, fields
 
     if metric_agg_mode == "spatial_avg":
-        lat_dim = fc.earthml.guessed_dims.latitude
-        lon_dim = fc.earthml.guessed_dims.longitude
+        lat_dim = an.earthml.guessed_dims.latitude
+        lon_dim = an.earthml.guessed_dims.longitude
 
-        weights = np.cos(np.deg2rad(fc[lat_dim]))
+        weights = np.cos(np.deg2rad(an[lat_dim]))
 
         profiles = fields.weighted(weights).mean(
             dim=(lat_dim, lon_dim)
@@ -3559,7 +3559,7 @@ def get_profile_metrics(
 def spatial_average_metric_fields(
     da: xr.DataArray | xr.Dataset,
     *,
-    fc,
+    an,
     metric_agg_mode,
 ) -> xr.DataArray | xr.Dataset:
     """Spatially average metric/improvement fields for profile plotting."""
@@ -3568,10 +3568,10 @@ def spatial_average_metric_fields(
         return da
 
     if metric_agg_mode == "spatial_avg":
-        lat_dim = fc.earthml.guessed_dims.latitude
-        lon_dim = fc.earthml.guessed_dims.longitude
+        lat_dim = an.earthml.guessed_dims.latitude
+        lon_dim = an.earthml.guessed_dims.longitude
 
-        weights = np.cos(np.deg2rad(fc[lat_dim]))
+        weights = np.cos(np.deg2rad(an[lat_dim]))
 
         return da.weighted(weights).mean(
             dim=(lat_dim, lon_dim)
