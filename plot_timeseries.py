@@ -2,9 +2,12 @@ from pathlib import Path
 from typing import Literal
 
 import warnings
-
-import xarray as xr
 from dask.array import PerformanceWarning
+
+import numpy as np
+import xarray as xr
+
+from matplotlib.path import Path as MplPath
 
 from earthml import (
     LeadtimeUnit,
@@ -28,7 +31,7 @@ from earthml.plots import (
     VARIABLE_UNITS,
 )
 
-from cities import CITY_LOCATIONS
+from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
 warnings.simplefilter("ignore", FutureWarning)
 warnings.filterwarnings(
@@ -83,7 +86,7 @@ def main() -> None:
         "absolute_error",
         "anomaly",
         "anomaly_error",
-    ] = "absolute_error"
+    ] = "raw"
 
     # ==========================================================
     # Rolling mean
@@ -98,7 +101,6 @@ def main() -> None:
 
     rolling_mean_center = True
     rolling_mean_min_periods = 1
-
 
     # ==========================================================
     # Offset plots
@@ -200,14 +202,15 @@ def main() -> None:
     # lon_range = (-195, -135)
 
     # Whole configured region
-    # lat_range = None
-    # lon_range = None
+    lat_range = None
+    lon_range = None
 
     # ==========================================================
     # Timeseries spatial subregions
     # ==========================================================
 
-    locations = CITY_LOCATIONS
+    locations = SEA_LOCATIONS
+    # locations = CITY_LOCATIONS
 
     # ==========================================================
     # Experiment selection
@@ -649,312 +652,308 @@ def main() -> None:
             mlfc_ts_da = mlfc_da
             category_title = ""
 
-        for location, location_config in locations.items():
-            timeseries_lat_range = location_config["lat_range"]
-            timeseries_lon_range = location_config["lon_range"]
+            for location, location_config in locations.items():
 
-            # Restrict timeseries to selected rectangular region
-            fc_ts_loc_da = subset_timeseries_region(
-                fc_ts_da,
-                timeseries_lat_range,
-                timeseries_lon_range,
-            )
-
-            fc_ts_clim_corrected_loc_da = subset_timeseries_region(
-                fc_ts_clim_corrected_da,
-                timeseries_lat_range,
-                timeseries_lon_range,
-            )
-
-            an_ts_loc_da = subset_timeseries_region(
-                an_ts_da,
-                timeseries_lat_range,
-                timeseries_lon_range,
-            )
-
-            mlfc_ts_loc_da = subset_timeseries_region(
-                mlfc_ts_da,
-                timeseries_lat_range,
-                timeseries_lon_range,
-            )
-
-            # ======================================================
-            # Lead-time plots
-            # ======================================================
-
-            for lt in fc[leadtime_agg_coord].values:
-
-                # --------------------------------------------------
-                # Forecast
-                # --------------------------------------------------
-
-                fc_ts_lead_da = fc_ts_loc_da.sel(
-                    {leadtime_agg_coord: lt}
+                fc_ts_loc_da = subset_timeseries_region(
+                    fc_ts_da,
+                    location_config,
                 )
 
-                fc_ts_lead_da = apply_rolling_mean(
-                    fc_ts_lead_da,
-                    time_dim=time_dim,
-                    window=rolling_mean_window,
-                    center=rolling_mean_center,
-                    min_periods=rolling_mean_min_periods,
+                fc_ts_clim_corrected_loc_da = subset_timeseries_region(
+                    fc_ts_clim_corrected_da,
+                    location_config,
                 )
 
-                if (
-                    realization_dim is not None
-                    and realization_dim in fc_ts_lead_da.dims
-                ):
-                    fc_ts_lead_da_ens_mean = (
-                        fc_ts_lead_da.mean(
-                            realization_dim
-                        )
-                        if plot_ens_mean
-                        else None
-                    )
+                an_ts_loc_da = subset_timeseries_region(
+                    an_ts_da,
+                    location_config,
+                )
 
-                else:
-                    fc_ts_lead_da_ens_mean = (
-                        fc_ts_lead_da
-                    )
+                mlfc_ts_loc_da = subset_timeseries_region(
+                    mlfc_ts_da,
+                    location_config,
+                )
 
-                # --------------------------------------------------
-                # Analysis
-                # --------------------------------------------------
+                # ======================================================
+                # Lead-time plots
+                # ======================================================
 
-                an_ts_lead_da = (
-                    an_ts_loc_da.sel(
+                for lt in fc[leadtime_agg_coord].values:
+
+                    # --------------------------------------------------
+                    # Forecast
+                    # --------------------------------------------------
+
+                    fc_ts_lead_da = fc_ts_loc_da.sel(
                         {leadtime_agg_coord: lt}
                     )
-                    if an_ts_loc_da is not None
-                    else None
-                )
 
-                an_ts_lead_da = apply_rolling_mean(
-                    an_ts_lead_da,
-                    time_dim=time_dim,
-                    window=rolling_mean_window,
-                    center=rolling_mean_center,
-                    min_periods=rolling_mean_min_periods,
-                )
-
-                # --------------------------------------------------
-                # ML-corrected forecast
-                # --------------------------------------------------
-
-                mlfc_ts_lead_da = (
-                    mlfc_ts_loc_da.sel(
-                        {leadtime_agg_coord: lt}
+                    fc_ts_lead_da = apply_rolling_mean(
+                        fc_ts_lead_da,
+                        time_dim=time_dim,
+                        window=rolling_mean_window,
+                        center=rolling_mean_center,
+                        min_periods=rolling_mean_min_periods,
                     )
-                    if mlfc_ts_loc_da is not None
-                    else None
-                )
 
-                mlfc_ts_lead_da = apply_rolling_mean(
-                    mlfc_ts_lead_da,
-                    time_dim=time_dim,
-                    window=rolling_mean_window,
-                    center=rolling_mean_center,
-                    min_periods=rolling_mean_min_periods,
-                )
-
-                if mlfc_ts_lead_da is not None:
                     if (
                         realization_dim is not None
-                        and realization_dim
-                        in mlfc_ts_lead_da.dims
+                        and realization_dim in fc_ts_lead_da.dims
                     ):
-                        mlfc_ts_lead_da_ens_mean = (
-                            mlfc_ts_lead_da.mean(
-                                realization_dim
+                        fc_ts_lead_da_ens_mean = (
+                            fc_ts_lead_da.mean(
+                                realization_dim,
+                                skipna=True,
                             )
                             if plot_ens_mean
                             else None
                         )
 
                     else:
-                        mlfc_ts_lead_da_ens_mean = (
-                            mlfc_ts_lead_da
+                        fc_ts_lead_da_ens_mean = (
+                            fc_ts_lead_da
                         )
 
-                else:
-                    mlfc_ts_lead_da_ens_mean = None
+                    # --------------------------------------------------
+                    # Analysis
+                    # --------------------------------------------------
 
-                # --------------------------------------------------
-                # Climatology-corrected forecast
-                # --------------------------------------------------
-
-                fc_ts_lead_clim_corrected_da = (
-                    fc_ts_clim_corrected_loc_da.sel(
-                        {leadtime_agg_coord: lt}
+                    an_ts_lead_da = (
+                        an_ts_loc_da.sel(
+                            {leadtime_agg_coord: lt}
+                        )
+                        if an_ts_loc_da is not None
+                        else None
                     )
-                )
 
-                fc_ts_lead_clim_corrected_da = (
-                    apply_rolling_mean(
-                        fc_ts_lead_clim_corrected_da,
+                    an_ts_lead_da = apply_rolling_mean(
+                        an_ts_lead_da,
                         time_dim=time_dim,
                         window=rolling_mean_window,
                         center=rolling_mean_center,
                         min_periods=rolling_mean_min_periods,
                     )
-                )
 
-                if (
-                    realization_dim is not None
-                    and realization_dim
-                    in fc_ts_lead_clim_corrected_da.dims
-                ):
-                    fc_ts_lead_clim_corrected_da_ens_mean = (
-                        fc_ts_lead_clim_corrected_da.mean(
-                            realization_dim
+                    # --------------------------------------------------
+                    # ML-corrected forecast
+                    # --------------------------------------------------
+
+                    mlfc_ts_lead_da = (
+                        mlfc_ts_loc_da.sel(
+                            {leadtime_agg_coord: lt}
                         )
-                        if plot_ens_mean
+                        if mlfc_ts_loc_da is not None
                         else None
                     )
 
-                else:
-                    fc_ts_lead_clim_corrected_da_ens_mean = (
-                        fc_ts_lead_clim_corrected_da
+                    mlfc_ts_lead_da = apply_rolling_mean(
+                        mlfc_ts_lead_da,
+                        time_dim=time_dim,
+                        window=rolling_mean_window,
+                        center=rolling_mean_center,
+                        min_periods=rolling_mean_min_periods,
                     )
 
-                # ==================================================
-                # Series to plot
-                # ==================================================
+                    if mlfc_ts_lead_da is not None:
+                        if (
+                            realization_dim is not None
+                            and realization_dim
+                            in mlfc_ts_lead_da.dims
+                        ):
+                            mlfc_ts_lead_da_ens_mean = (
+                                mlfc_ts_lead_da.mean(
+                                    realization_dim,
+                                    skipna=True,
+                                )
+                                if plot_ens_mean
+                                else None
+                            )
 
-                series = {
-                    "Forecast": fc_ts_lead_da_ens_mean,
-                }
+                        else:
+                            mlfc_ts_lead_da_ens_mean = (
+                                mlfc_ts_lead_da
+                            )
 
-                member_series = {
-                    "Forecast": fc_ts_lead_da,
-                }
+                    else:
+                        mlfc_ts_lead_da_ens_mean = None
 
-                if mlfc_ts_lead_da is not None:
-                    series[
-                        "Corrected forecast"
-                    ] = mlfc_ts_lead_da_ens_mean
+                    # --------------------------------------------------
+                    # Climatology-corrected forecast
+                    # --------------------------------------------------
 
-                    member_series[
-                        "Corrected forecast"
-                    ] = mlfc_ts_lead_da
-
-                if an_ts_lead_da is not None:
-                    series["Analysis"] = (
-                        an_ts_lead_da
+                    fc_ts_lead_clim_corrected_da = (
+                        fc_ts_clim_corrected_loc_da.sel(
+                            {leadtime_agg_coord: lt}
+                        )
                     )
 
-                if (
-                    include_clim_fc
-                    and category in (
-                        "raw",
-                        "error",
-                        "absolute_error",
-                    )
-                ):
-                    series[
-                        "Clim-corrected forecast"
-                    ] = (
-                        fc_ts_lead_clim_corrected_da_ens_mean
+                    fc_ts_lead_clim_corrected_da = (
+                        apply_rolling_mean(
+                            fc_ts_lead_clim_corrected_da,
+                            time_dim=time_dim,
+                            window=rolling_mean_window,
+                            center=rolling_mean_center,
+                            min_periods=rolling_mean_min_periods,
+                        )
                     )
 
-                    member_series[
-                        "Clim-corrected forecast"
-                    ] = (
-                        fc_ts_lead_clim_corrected_da
+                    if (
+                        realization_dim is not None
+                        and realization_dim
+                        in fc_ts_lead_clim_corrected_da.dims
+                    ):
+                        fc_ts_lead_clim_corrected_da_ens_mean = (
+                            fc_ts_lead_clim_corrected_da.mean(
+                                realization_dim,
+                                skipna=True,
+                            )
+                            if plot_ens_mean
+                            else None
+                        )
+
+                    else:
+                        fc_ts_lead_clim_corrected_da_ens_mean = (
+                            fc_ts_lead_clim_corrected_da
+                        )
+
+                    # ==================================================
+                    # Series to plot
+                    # ==================================================
+
+                    series = {
+                        "Forecast": fc_ts_lead_da_ens_mean,
+                    }
+
+                    member_series = {
+                        "Forecast": fc_ts_lead_da,
+                    }
+
+                    if mlfc_ts_lead_da is not None:
+                        series[
+                            "Corrected forecast"
+                        ] = mlfc_ts_lead_da_ens_mean
+
+                        member_series[
+                            "Corrected forecast"
+                        ] = mlfc_ts_lead_da
+
+                    if an_ts_lead_da is not None:
+                        series["Analysis"] = (
+                            an_ts_lead_da
+                        )
+
+                    if (
+                        include_clim_fc
+                        and category in (
+                            "raw",
+                            "error",
+                            "absolute_error",
+                        )
+                    ):
+                        series[
+                            "Clim-corrected forecast"
+                        ] = (
+                            fc_ts_lead_clim_corrected_da_ens_mean
+                        )
+
+                        member_series[
+                            "Clim-corrected forecast"
+                        ] = (
+                            fc_ts_lead_clim_corrected_da
+                        )
+
+                    # ==================================================
+                    # Output
+                    # ==================================================
+
+                    label = safe_label(
+                        lead_label(
+                            fc_ts_lead_da,
+                            lt,
+                            leadtime_agg_coord,
+                        )
                     )
 
-                # ==================================================
-                # Output
-                # ==================================================
-
-                label = safe_label(
-                    lead_label(
-                        fc_ts_lead_da,
-                        lt,
-                        leadtime_agg_coord,
+                    rolling_label = (
+                        f" roll {rolling_mean_window} "
+                        if rolling_mean_window is not None
+                        else ""
                     )
-                )
 
-                rolling_label = (
-                    f" roll {rolling_mean_window} "
-                    if rolling_mean_window is not None
-                    else ""
-                )
-
-                rolling_filename = (
-                    f"_roll{rolling_mean_window}"
-                    if rolling_mean_window is not None
-                    else ""
-                )
-
-                out_file = (
-                    s.plot_dir
-                    / "timeseries"
-                    / category
-                    / (
-                        f"time_{safe_label(valid_time_range)}"
-                        f"_loc_{location}"
+                    rolling_filename = (
+                        f"_roll{rolling_mean_window}"
+                        if rolling_mean_window is not None
+                        else ""
                     )
-                    / leadtime_agg_mode
-                    / (
-                        f"{s.var_fc}_lead_{label}_"
-                        f"{category}{rolling_filename}_"
-                        f"timeseries.png"
+
+                    out_file = (
+                        s.plot_dir
+                        / "timeseries"
+                        / category
+                        / (
+                            f"time_{safe_label(valid_time_range)}"
+                            f"_loc_{location}"
+                        )
+                        / leadtime_agg_mode
+                        / (
+                            f"{s.var_fc}_lead_{label}_"
+                            f"{category}{rolling_filename}_"
+                            f"timeseries.png"
+                        )
                     )
-                )
 
-                if (
-                    out_file.exists()
-                    and not regenerate_plots
-                ):
-                    continue
+                    if (
+                        out_file.exists()
+                        and not regenerate_plots
+                    ):
+                        continue
 
-                title = (
-                    f"{VARIABLE_NAMES.get(s.var_fc, s.var_fc.upper())}"
-                    f"{category_title}"
-                    f"{rolling_label}"
-                    f"· lead={label}"
-                    if plot_title
-                    else ""
-                )
+                    title = (
+                        f"{VARIABLE_NAMES.get(s.var_fc, s.var_fc.upper())}"
+                        f"{category_title}"
+                        f"{rolling_label}"
+                        f"· lead={label}"
+                        if plot_title
+                        else ""
+                    )
 
-                plot_field_timeseries(
-                    series=series,
-                    member_series=member_series,
-                    var=s.var_fc,
-                    title=title,
-                    out_file=out_file,
-                    time_dim=time_dim,
-                    spatial_dims=(
-                        lat_dim,
-                        lon_dim,
-                    ),
-                    realization_dim=realization_dim,
-                    train_end=s.train_end if valid_time_range[0] <= s.train_end <= valid_time_range[1] else None,
-                    val_end=s.val_end if valid_time_range[0] <= s.val_end <= valid_time_range[1] else None,
-                    plot_single_members=(
-                        plot_single_members
-                    ),
-                    member_linestyle="-",
-                    series_linestyle=(
-                        "--"
-                        if plot_ens_mean
-                        else "-"
-                    ),
-                    plot_title=plot_title,
-                    plot_labels=plot_labels,
-                    title_size=title_size,
-                    label_size=label_size,
-                    tick_size=tick_size,
-                    dpi=dpi,
-                    series_offsets=(
-                        series_offsets
-                        if offset_plots
-                        else None
-                    ),
-                )
+                    plot_field_timeseries(
+                        series=series,
+                        member_series=member_series,
+                        var=s.var_fc,
+                        title=title,
+                        out_file=out_file,
+                        time_dim=time_dim,
+                        spatial_dims=(
+                            lat_dim,
+                            lon_dim,
+                        ),
+                        realization_dim=realization_dim,
+                        train_end=s.train_end if valid_time_range[0] <= s.train_end <= valid_time_range[1] else None,
+                        val_end=s.val_end if valid_time_range[0] <= s.val_end <= valid_time_range[1] else None,
+                        plot_single_members=(
+                            plot_single_members
+                        ),
+                        member_linestyle="-",
+                        series_linestyle=(
+                            "--"
+                            if plot_ens_mean
+                            else "-"
+                        ),
+                        plot_title=plot_title,
+                        plot_labels=plot_labels,
+                        title_size=title_size,
+                        label_size=label_size,
+                        tick_size=tick_size,
+                        dpi=dpi,
+                        series_offsets=(
+                            series_offsets
+                            if offset_plots
+                            else None
+                        ),
+                    )
 
-                n += 1
+                    n += 1
 
     print(f"Done. Saved {n} plots.")
 
@@ -974,13 +973,12 @@ def apply_rolling_mean(
         {time_dim: window},
         center=center,
         min_periods=min_periods,
-    ).mean()
+    ).mean(skipna=True)
 
 
 def subset_timeseries_region(
     da: xr.DataArray | None,
-    lat_range: tuple | None,
-    lon_range: tuple | None,
+    region: dict,
 ) -> xr.DataArray | None:
     if da is None:
         return None
@@ -988,17 +986,104 @@ def subset_timeseries_region(
     lat_dim = da.earthml.guessed_dims.latitude
     lon_dim = da.earthml.guessed_dims.longitude
 
-    if lat_range is not None:
+    # Normalize longitudes to [-180, 180].
+    if float(da[lon_dim].max()) > 180:
+        lon = ((da[lon_dim] + 180) % 360) - 180
+        da = da.assign_coords({lon_dim: lon}).sortby(lon_dim)
+
+    region_type = region.get("type", "rectangle")
+
+    # ==========================================================
+    # Rectangle
+    # ==========================================================
+
+    if region_type == "rectangle":
+        lat0, lat1 = region["lat_range"]
+        lon0, lon1 = region["lon_range"]
+
+        # Latitude ordering.
+        lat_ascending = (
+            float(da[lat_dim].values[0])
+            < float(da[lat_dim].values[-1])
+        )
+
+        if lat_ascending:
+            lat0, lat1 = sorted((lat0, lat1))
+        else:
+            lat0, lat1 = sorted(
+                (lat0, lat1),
+                reverse=True,
+            )
+
         da = da.sel({
-            lat_dim: slice(*lat_range)
+            lat_dim: slice(lat0, lat1),
         })
 
-    if lon_range is not None:
-        da = da.sel({
-            lon_dim: slice(*lon_range)
-        })
+        # Longitude bounds -> [-180, 180].
+        lon0 = ((lon0 + 180) % 360) - 180
+        lon1 = ((lon1 + 180) % 360) - 180
 
-    return da
+        if lon0 <= lon1:
+            da = da.sel({
+                lon_dim: slice(lon0, lon1),
+            })
+
+        else:
+            # Dateline-crossing rectangle.
+            da = da.where(
+                (da[lon_dim] >= lon0)
+                | (da[lon_dim] <= lon1),
+                drop=True,
+            )
+
+        return da
+
+    # ==========================================================
+    # Polygon
+    # ==========================================================
+
+    if region_type == "polygon":
+        coordinates = np.asarray(
+            region["coordinates"],
+            dtype=float,
+        )
+
+        # Normalize polygon longitudes too.
+        coordinates[:, 0] = (
+            (coordinates[:, 0] + 180) % 360
+        ) - 180
+
+        lon2d, lat2d = np.meshgrid(
+            da[lon_dim].values,
+            da[lat_dim].values,
+        )
+
+        points = np.column_stack([
+            lon2d.ravel(),
+            lat2d.ravel(),
+        ])
+
+        polygon = MplPath(coordinates)
+
+        mask = polygon.contains_points(
+            points
+        ).reshape(lat2d.shape)
+
+        mask_da = xr.DataArray(
+            mask,
+            coords={
+                lat_dim: da[lat_dim],
+                lon_dim: da[lon_dim],
+            },
+            dims=(lat_dim, lon_dim),
+        )
+
+        return da.where(mask_da)
+
+    raise ValueError(
+        f"Unsupported region type {region_type!r}. "
+        "Choose 'rectangle' or 'polygon'."
+    )
 
 
 def _convert_kelvin_to_celsius(
