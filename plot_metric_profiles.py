@@ -249,40 +249,92 @@ def main() -> None:
     #
     # Compare several ML experiments for the same variable.
 
-    plot_combined_experiments = False
+    plot_combined_experiments = True
 
     combined_plot_folder = "profile_comparison"
 
-    comparison_name = "smaatunet-convnexttransformer"
+    comparison_name = "sample_size"
 
     comparison_labels = [
-        "ConvNeXt reanalysis",
-        "ConvNeXt reanalysis ens mean",
-        "SmaAt-UNet anomaly residual ens mean",
-        "SmaAt-UNet anomaly residual",
+        "2474",  # base experiment
+        "1000",
+        "1250",
+        "1500",
+        "2000",
+        "264",
+        "500",
     ]
 
     comparison_colors = {
         "fc": "tab:blue",
-        "clim-fc": "tab:orange",
+        # "clim-fc": "tab:orange",
 
-        "ConvNeXt reanalysis": "green",
-        "ConvNeXt reanalysis ens mean": "green",
-
-        "SmaAt-UNet anomaly residual ens mean": "red",
-        "SmaAt-UNet anomaly residual": "red",
+        "2474": "tab:pink",
+        "1000": "tab:brown",
+        "1250": "tab:cyan",
+        "1500": "tab:orange",
+        "2000": "tab:red",
+        "264": "tab:green",
+        "500": "tab:purple",
     }
 
     comparison_linestyles = {
-        "fc": "-",
-        "clim-fc": "-",
+        # "fc": "-",
+        # "clim-fc": "-",
 
-        "ConvNeXt reanalysis": "-",
-        "ConvNeXt reanalysis ens mean": "--",
-
-        "SmaAt-UNet anomaly residual ens mean": "--",
-        "SmaAt-UNet anomaly residual": "-",
+        "2474": "-",
+        "1000": "-",
+        "1250": "-",
+        "1500": "-",
+        "2000": "-",
+        "264": "-",
+        "500": "-",
     }
+
+    # ----------------------------------------------------------
+    # Combined-experiment climatological profiles
+    # ----------------------------------------------------------
+    # x = climatological period, e.g. month
+    # color = experiment
+    # shade/style = lead time when stacked
+    #
+    # Applies to both absolute MLFC metrics and MLFC-vs-FC improvements.
+    combined_experiment_climatological_profiles = False
+
+    # None -> use every available lead time.
+    combined_experiment_climatological_leadtimes = [72]
+
+    # True -> stack all selected lead times in the same climatology figure.
+    # False -> generate one climatology figure per lead time.
+    combine_combined_experiment_climatological_leadtimes = False
+
+    # How lead times are distinguished in a stacked climatology figure:
+    #   "shades" -> keep one base color per experiment and vary shade by lead time
+    #   "colors" -> use distinct colors for lead times
+    combined_experiment_climatological_leadtime_colors = "shades"
+
+    # ----------------------------------------------------------
+    # Experiment-axis profiles
+    # ----------------------------------------------------------
+    # x = experiment label
+    # y = metric at one selected lead time and climatological period.
+    # This is especially useful for ablation studies such as sample size.
+    combined_experiment_axis_profiles = True
+
+    # None -> use every available lead time.
+    combined_experiment_axis_leadtimes = [72]
+
+    # Sort labels numerically when they start with a number, e.g.
+    # "264 samples", "500 samples", ..., "2474 samples".
+    combined_experiment_axis_sort_numeric = True
+
+    # Connect points after sorting. The experiment-specific marker colors
+    # still come from comparison_colors.
+    combined_experiment_axis_connect = True
+
+    # None -> use comparison_name with underscores replaced by spaces.
+    combined_experiment_axis_label = "Training samples"
+    combined_experiment_axis_tick_rotation = 0
 
     # ==========================================================
     # Model settings
@@ -335,7 +387,8 @@ def main() -> None:
     # Period grouping reference:
     #   "init"  -> group metrics by forecast initialization time
     #   "valid" -> group metrics by forecast valid time (init + lead time)
-    period_reference = "valid"
+    # period_reference = "valid"
+    period_reference = "init"
 
     period_profile_label = get_period_profile_label(
         period_reference,
@@ -2264,6 +2317,19 @@ def main() -> None:
                 group["settings"][0]
             )
 
+            print("\nCombined experiment mapping:")
+
+            for label, s, ds in zip(
+                comparison_labels,
+                group["settings"],
+                group["mlfc"],
+                strict=True,
+            ):
+                print(
+                    f"{label:>15} <- "
+                    f"{s.exp_dir.name}"
+                )
+
             valid_time_range = (
                 group[
                     "valid_time_range"
@@ -2420,13 +2486,27 @@ def main() -> None:
                 else []
             )
 
-            climatological_profile_leadtimes = (
+            experiment_axis_leadtimes = (
                 get_climatological_profile_leadtimes(
                     reference_ds,
                     leadtime_dim=leadtime_agg_coord,
-                    wanted_leadtimes=wanted_climatological_profile_leadtimes,
+                    wanted_leadtimes=(
+                        combined_experiment_axis_leadtimes
+                    ),
                 )
-                if plot_climatological_profiles
+                if combined_experiment_axis_profiles
+                else []
+            )
+
+            combined_experiment_climatological_profile_leadtimes = (
+                get_climatological_profile_leadtimes(
+                    reference_ds,
+                    leadtime_dim=leadtime_agg_coord,
+                    wanted_leadtimes=(
+                        combined_experiment_climatological_leadtimes
+                    ),
+                )
+                if combined_experiment_climatological_profiles
                 else []
             )
 
@@ -2499,6 +2579,116 @@ def main() -> None:
 
                     else:
                         das_member.append(None)
+
+                # ----------------------------------------------
+                # Experiment-axis profile
+                # ----------------------------------------------
+                if combined_experiment_axis_profiles:
+                    for period_value in available_periods:
+                        for lead_value in experiment_axis_leadtimes:
+
+                            experiment_entries = [
+                                (
+                                    model,
+                                    das_by_model[model][metric],
+                                )
+                                for model in comparison_labels
+                                if model in das_by_model
+                            ]
+
+                            experiment_da = build_experiment_axis_da(
+                                experiment_entries,
+                                period_dim=period_dim,
+                                period_value=period_value,
+                                leadtime_dim=leadtime_agg_coord,
+                                leadtime_value=lead_value,
+                                sort_numeric=combined_experiment_axis_sort_numeric,
+                            )
+
+                            common_path = (
+                                Path("profiles")
+                                / combined_plot_folder
+                                / comparison_name
+                                / "experiment_axis"
+                                / "absolute"
+                                / safe_label(period_dim)
+                                / safe_label(period_value)
+                                / f"leadtime_{safe_label(lead_value)}"
+                                / (
+                                    f"time_"
+                                    f"{safe_label(valid_time_range)}"
+                                    f"_lat_"
+                                    f"{safe_label(valid_lat_range)}"
+                                    f"_lon_"
+                                    f"{safe_label(valid_lon_range)}"
+                                )
+                                / metric
+                                / metric_agg_mode
+                            )
+
+                            filename = (
+                                f"{common_s.var_fc}_"
+                                f"{metric}_"
+                                f"experiment_axis_"
+                                f"leadtime_{safe_label(lead_value)}.png"
+                            )
+
+                            out_file = (
+                                common_plot_dir
+                                / common_path
+                                / filename
+                            )
+
+                            if (
+                                out_file.exists()
+                                and not regenerate_plots
+                            ):
+                                continue
+
+                            print(
+                                "Saving combined experiment-axis "
+                                f"profile {out_file}"
+                            )
+
+                            plot_profile(
+                                das=experiment_da,
+                                var=common_s.var_fc,
+                                metric=metric,
+                                models="mlfc",
+                                labels="MLFC",
+                                out_file=out_file,
+                                time_range=valid_time_range,
+
+                                profile_dim="experiment",
+                                profile_label=(
+                                    combined_experiment_axis_label
+                                    if combined_experiment_axis_label is not None
+                                    else comparison_name.replace("_", " ")
+                                ),
+
+                                select_dim=None,
+                                select_value="all",
+
+                                profile_markers=True,
+                                profile_point_colors=comparison_colors,
+                                profile_connect=combined_experiment_axis_connect,
+                                profile_tick_rotation=combined_experiment_axis_tick_rotation,
+
+                                plot_legend=False,
+                                plot_title=plot_title,
+
+                                ylim=get_profile_ylim(
+                                    profile_ylims,
+                                    metric,
+                                    variant="absolute",
+                                ),
+
+                                label_size=label_size,
+                                tick_size=tick_size,
+                                dpi=dpi,
+                            )
+
+                            n += 1
 
                 for period_value in leadtime_profile_periods:
 
@@ -2588,7 +2778,7 @@ def main() -> None:
                 # Climatological-period profile
                 # ----------------------------------------------
 
-                if plot_climatological_profiles:
+                if combined_experiment_climatological_profiles:
                     climatological_das = [
                         prepare_climatological_profile_da(
                             da,
@@ -2608,11 +2798,11 @@ def main() -> None:
                     ]
 
                     leadtime_groups = (
-                        [climatological_profile_leadtimes]
-                        if combine_climatological_profile_leadtimes
+                        [combined_experiment_climatological_profile_leadtimes]
+                        if combine_combined_experiment_climatological_leadtimes
                         else [
                             [lead_value]
-                            for lead_value in climatological_profile_leadtimes
+                            for lead_value in combined_experiment_climatological_profile_leadtimes
                         ]
                     )
 
@@ -2696,7 +2886,9 @@ def main() -> None:
                                 lead_values,
                                 leadtime_dim=leadtime_agg_coord,
                                 leadtime_unit=leadtime_units.value,
-                                color_mode=climatological_leadtime_colors,
+                                color_mode=(
+                                    combined_experiment_climatological_leadtime_colors
+                                ),
                                 labels=plot_labels_current,
                                 das_member=climatological_das_member,
                                 model_colors=comparison_colors,
@@ -2894,6 +3086,108 @@ def main() -> None:
                                 "normalized": "normalized",
                             }[variant]
 
+                            # ----------------------------------
+                            # Experiment-axis comparison profile
+                            # ----------------------------------
+                            if combined_experiment_axis_profiles:
+                                for period_value in available_periods:
+                                    for lead_value in experiment_axis_leadtimes:
+
+                                        experiment_da = build_experiment_axis_da(
+                                                entries,
+                                                period_dim=period_dim,
+                                                period_value=period_value,
+                                                leadtime_dim=leadtime_agg_coord,
+                                                leadtime_value=lead_value,
+                                                sort_numeric=combined_experiment_axis_sort_numeric,
+                                            )
+
+                                        common_path = (
+                                            Path("profiles")
+                                            / combined_plot_folder
+                                            / comparison_name
+                                            / "experiment_axis"
+                                            / "comparisons"
+                                            / safe_label(comparison_variant)
+                                            / safe_label(period_dim)
+                                            / safe_label(period_value)
+                                            / f"leadtime_{safe_label(lead_value)}"
+                                            / (
+                                                f"time_"
+                                                f"{safe_label(valid_time_range)}"
+                                                f"_lat_"
+                                                f"{safe_label(valid_lat_range)}"
+                                                f"_lon_"
+                                                f"{safe_label(valid_lon_range)}"
+                                            )
+                                            / metric
+                                            / metric_agg_mode
+                                        )
+
+                                        filename = (
+                                            f"{common_s.var_fc}_"
+                                            f"{metric}_"
+                                            f"{safe_label(comparison_variant)}_"
+                                            f"experiment_axis_"
+                                            f"leadtime_{safe_label(lead_value)}.png"
+                                        )
+
+                                        out_file = (
+                                            common_plot_dir
+                                            / common_path
+                                            / filename
+                                        )
+
+                                        if (
+                                            out_file.exists()
+                                            and not regenerate_plots
+                                        ):
+                                            continue
+
+                                        print(
+                                            "Saving combined comparison "
+                                            "experiment-axis profile "
+                                            f"{out_file}"
+                                        )
+
+                                        plot_profile(
+                                            das=experiment_da,
+                                            var=common_s.var_fc,
+                                            metric=metric,
+                                            models="mlfc",
+                                            labels="MLFC",
+                                            out_file=out_file,
+                                            time_range=valid_time_range,
+
+                                            profile_dim="experiment",
+                                            profile_label="Training samples",
+
+                                            select_dim=None,
+                                            select_value="all",
+
+                                            profile_markers=True,
+                                            profile_point_colors=comparison_colors,
+                                            profile_connect=True,
+                                            profile_tick_rotation=0,
+                                            profile_zero_line=False,
+                                            improvement_unit=improvement_unit,
+
+                                            plot_legend=False,
+                                            plot_title=plot_title,
+
+                                            ylim=get_profile_ylim(
+                                                profile_ylims,
+                                                metric,
+                                                variant="absolute",
+                                            ),
+
+                                            label_size=label_size,
+                                            tick_size=tick_size,
+                                            dpi=dpi,
+                                        )
+
+                                        n += 1
+
                             for (
                                 period_value
                             ) in leadtime_profile_periods:
@@ -2991,7 +3285,7 @@ def main() -> None:
                             # Climatological-period profiles
                             # ----------------------------------
 
-                            if plot_climatological_profiles:
+                            if combined_experiment_climatological_profiles:
                                 climatological_comparison_das = [
                                     prepare_climatological_profile_da(
                                         da,
@@ -3002,11 +3296,11 @@ def main() -> None:
                                 ]
 
                                 leadtime_groups = (
-                                    [climatological_profile_leadtimes]
-                                    if combine_climatological_profile_leadtimes
+                                    [combined_experiment_climatological_profile_leadtimes]
+                                    if combine_combined_experiment_climatological_leadtimes
                                     else [
                                         [lead_value]
-                                        for lead_value in climatological_profile_leadtimes
+                                        for lead_value in combined_experiment_climatological_profile_leadtimes
                                     ]
                                 )
 
@@ -3091,6 +3385,9 @@ def main() -> None:
                                             lead_values,
                                             leadtime_dim=leadtime_agg_coord,
                                             leadtime_unit=leadtime_units.value,
+                                            color_mode=(
+                                                combined_experiment_climatological_leadtime_colors
+                                            ),
                                             labels=plot_labels_current,
                                             model_colors=comparison_colors,
                                             model_linestyles=comparison_linestyles,
@@ -3311,7 +3608,7 @@ def main() -> None:
                             # Climatological-period profile
                             # ----------------------------------
 
-                            if plot_climatological_profiles:
+                            if combined_experiment_climatological_profiles:
                                 climatological_comparison_da = (
                                     prepare_climatological_profile_da(
                                         comparison_da,
@@ -3321,11 +3618,11 @@ def main() -> None:
                                 )
 
                                 leadtime_groups = (
-                                    [climatological_profile_leadtimes]
-                                    if combine_climatological_profile_leadtimes
+                                    [combined_experiment_climatological_profile_leadtimes]
+                                    if combine_combined_experiment_climatological_leadtimes
                                     else [
                                         [lead_value]
-                                        for lead_value in climatological_profile_leadtimes
+                                        for lead_value in combined_experiment_climatological_profile_leadtimes
                                     ]
                                 )
 
@@ -3862,6 +4159,51 @@ def expand_climatological_leadtimes(
         expanded_das_member,
         expanded_colors,
         expanded_linestyles,
+    )
+
+
+def build_experiment_axis_da(
+    entries: list[tuple[str, xr.DataArray]],
+    *,
+    period_dim: str,
+    period_value,
+    leadtime_dim: str,
+    leadtime_value,
+    sort_numeric: bool = True,
+) -> xr.DataArray:
+
+    selected = []
+
+    for label, da in entries:
+        current = (
+            da.sel({
+                period_dim: period_value,
+                leadtime_dim: leadtime_value,
+            })
+            .squeeze(drop=True)
+        )
+
+        if current.size != 1:
+            raise ValueError(
+                f"Expected one scalar for experiment {label!r}, "
+                f"got dims={current.dims}, shape={current.shape}."
+            )
+
+        selected.append((label, current))
+
+    if sort_numeric:
+        selected.sort(
+            key=lambda item: float(
+                item[0].strip().split(maxsplit=1)[0]
+            )
+        )
+
+    return xr.concat(
+        [
+            da.expand_dims(experiment=[label])
+            for label, da in selected
+        ],
+        dim="experiment",
     )
 
 
