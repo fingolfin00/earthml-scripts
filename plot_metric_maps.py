@@ -41,6 +41,7 @@ from earthml.plots import (
 from settings_plot_seasonal import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 # from settings_plot_weather_atmo import VARIABLE_PLOT_CONFIG, IMPROVEMENT_PLOT_CONFIG
 
+from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
 def main() -> None:
     # ==========================================================
@@ -143,6 +144,43 @@ def main() -> None:
     #   "init"  -> group by forecast initialization time
     #   "valid" -> group by forecast valid time (init + lead time)
     period_reference: Literal["init", "valid"] = "init"
+
+    # ==========================================================
+    # Regional boxes
+    # ==========================================================
+
+    # locations = CITY_LOCATIONS
+    locations = SEA_LOCATIONS
+
+    plot_locations = [
+        # Cities
+        # "newyork",
+        # "miami",
+        # "chicago",
+        # "denver",
+        # "losangeles",
+        # "seattle",
+        # "houston",
+
+        # Ocean
+        "gulfstream",
+        # "kuroshio",
+        # "north_atlantic",
+        # "equatorial_pacific",
+    ]
+
+    # None / [] -> no boxes
+    highlighted_regions = [
+        {
+            **locations[name],
+            "name": name.replace("_", " ").title(),
+            "edgecolor": "black",
+            "facecolor": "none",
+            "linewidth": 3,
+            "linestyle": "-",
+        }
+        for name in plot_locations
+    ]
 
     # ==========================================================
     # Time selection
@@ -477,8 +515,8 @@ def main() -> None:
         fc_clim_da = stack_hour_clim(fc_clim[s.var_fc], clim_period)
         an_clim_da = stack_hour_clim(an_clim[s.var_an], clim_period)
 
-        fc_anom_da = groupby_period(fc[s.var_fc], fc.earthml.guessed_dims.time, clim_period) - fc_clim_da
-        clim_fc = (groupby_period(fc_anom_da, fc.earthml.guessed_dims.time, clim_period) + an_clim_da).to_dataset(name=s.var_fc)
+        fc_anom_da = groupby_period(fc[s.var_fc], an.earthml.guessed_dims.time, clim_period) - fc_clim_da
+        clim_fc = (groupby_period(fc_anom_da, an.earthml.guessed_dims.time, clim_period) + an_clim_da).to_dataset(name=s.var_fc)
 
         realization_dim = fc.earthml.guessed_dims.realization
         an_clim_for_fc = an_clim
@@ -871,6 +909,7 @@ def main() -> None:
                                         dpi=dpi,
                                         title_strftime=title_strftime,
                                         significance=None,
+                                        regions=highlighted_regions if metric_kind == "maps" else None,
                                     )
 
                                     n += 1
@@ -936,6 +975,7 @@ def main() -> None:
                                             significance_alpha=(
                                                 significance_alpha
                                             ),
+                                            regions=highlighted_regions if metric_kind == "maps" else None,
                                         )
 
                                         n += 1
