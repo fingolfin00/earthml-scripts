@@ -26,7 +26,7 @@ from earthml.plots import (
     VARIABLE_UNITS,
 )
 
-from cities import CITY_LOCATIONS
+from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
 
 FieldDifference = Literal[
@@ -77,15 +77,17 @@ def main() -> None:
     plot_title_strftime = "%m.%Y" # seasonal
     # plot_title_strftime = "%d.%m.%Y %H:%M" # weather
 
-    regenerate_plots = False
+    regenerate_plots = True
 
     # ==========================================================
     # Spatial subregion
     # ==========================================================
 
-    locations = CITY_LOCATIONS
+    # locations = CITY_LOCATIONS
+    locations = SEA_LOCATIONS
 
     plot_locations = [
+        # Cities
         # "newyork",
         # "miami",
         # "chicago",
@@ -93,18 +95,21 @@ def main() -> None:
         # "losangeles",
         # "seattle",
         # "houston",
+        # Ocean
+        # "gulfstream",
     ]
+    plot_locations = locations
 
-    rectangles = [
+    highlighted_regions = [
         {
-            "lon_range": locations[location]["lon_range"],
-            "lat_range": locations[location]["lat_range"],
+            **locations[name],
+            "name": name.replace("_", " ").title(),
             "edgecolor": "black",
             "facecolor": "none",
             "linewidth": 3,
             "linestyle": "-",
         }
-        for location in plot_locations
+        for name in plot_locations
     ]
 
     # ==========================================================
@@ -942,7 +947,7 @@ def main() -> None:
                             plot_type=plot_type,
                             figsize=plot_figsize,
                             spatial_dims=(lat_dim, lon_dim),
-                            rectangles=rectangles,
+                            regions=highlighted_regions,
                             plot_title=plot_title,
                             plot_labels=plot_labels,
                             title_size=title_size,
@@ -1056,7 +1061,7 @@ def main() -> None:
                             plot_type=plot_type,
                             figsize=plot_figsize,
                             spatial_dims=(lat_dim, lon_dim),
-                            rectangles=rectangles,
+                            regions=highlighted_regions,
                             plot_title=plot_title,
                             plot_labels=plot_labels,
                             title_size=title_size,
