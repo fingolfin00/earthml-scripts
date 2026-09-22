@@ -389,8 +389,6 @@ def extract_period_from_ds(
                 longitude=fc_ds.longitude,
             )
 
-    fc_ds, an_ds = xr.align(fc_ds, an_ds, join="exact")
-
     if materialize:
         with ProgressBar():
             fc_ds = fc_ds.load()
