@@ -113,44 +113,6 @@ def main() -> None:
     ]
 
     # ==========================================================
-    # Plot limits
-    # ==========================================================
-
-    # Raw fields
-    common_scale = True
-    # robust_quantiles = (0.01, 0.99)  # None -> true min/max
-    robust_quantiles = None  # None -> true min/max
-    vmin, vmax = -50, 50 # t2m seasonal
-    # vmin, vmax = -30, 30 # t2m weather
-    # vmin, vmax = None, None
-    raw_levels = 21
-    raw_centered = True
-
-    # Anomalies
-    common_anomaly_scale = True
-    # anomaly_quantile = 0.99 # None -> true max(abs(x))
-    anomaly_quantile = None
-    anomaly_vmax = 6 # t2m
-    # anomaly_vmax = None
-    anomaly_levels = 13
-
-    # Raw differences
-    common_difference_scale = True
-    # difference_quantile = 0.99
-    difference_quantile = None
-    difference_vmax = 7 # t2m
-    # difference_vmax = None
-    difference_levels = 15
-
-    # Anomaly differences
-    common_anomaly_difference_scale = True
-    # anomaly_difference_quantile = 0.99
-    anomaly_difference_quantile = None
-    anomaly_difference_vmax = 6 # t2m
-    # anomaly_difference_vmax = None
-    anomaly_difference_levels = 13
-
-    # ==========================================================
     # Fields to plot
     # ==========================================================
 
@@ -345,6 +307,204 @@ def main() -> None:
     ]
 
     # ==========================================================
+    # Plot limits by variable
+    # ==========================================================
+
+    PLOT_LIMITS = {
+        "t2m": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -50,
+            "vmax": 50,
+            "raw_levels": 21,
+            "raw_centered": False,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 8,
+            "anomaly_levels": 17,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 8,
+            "difference_levels": 17,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 6,
+            "anomaly_difference_levels": 13,
+        },
+
+        "d2m": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -50,
+            "vmax": 35,
+            "raw_levels": 21,
+            "raw_centered": False,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 8,
+            "anomaly_levels": 17,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 8,
+            "difference_levels": 17,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 6,
+            "anomaly_difference_levels": 13,
+        },
+
+        "mslp": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": 960,
+            "vmax": 1040,
+            "raw_levels": 21,
+            "raw_centered": False,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 20,
+            "anomaly_levels": 21,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 10,
+            "difference_levels": 21,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 10,
+            "anomaly_difference_levels": 21,
+        },
+
+        "ssh": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -2,
+            "vmax": 1.5,
+            "raw_levels": 21,
+            "raw_centered": True,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 0.5,
+            "anomaly_levels": 21,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 0.3,
+            "difference_levels": 21,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 0.3,
+            "anomaly_difference_levels": 21,
+        },
+
+        "sst": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -2,
+            "vmax": 32,
+            "raw_levels": 18,
+            "raw_centered": False,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 5,
+            "anomaly_levels": 21,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 5,
+            "difference_levels": 21,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 4,
+            "anomaly_difference_levels": 17,
+        },
+
+        "u10": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -20,
+            "vmax": 20,
+            "raw_levels": 21,
+            "raw_centered": True,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 10,
+            "anomaly_levels": 21,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 6,
+            "difference_levels": 13,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 6,
+            "anomaly_difference_levels": 13,
+        },
+
+        "v10": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": -20,
+            "vmax": 20,
+            "raw_levels": 21,
+            "raw_centered": True,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 10,
+            "anomaly_levels": 21,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 6,
+            "difference_levels": 13,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 6,
+            "anomaly_difference_levels": 13,
+        },
+
+        "tprate": {
+            "common_scale": True,
+            "robust_quantiles": (0.01, 0.99),
+            "vmin": 0,
+            "vmax": 15,
+            "raw_levels": 16,
+            "raw_centered": False,
+
+            "common_anomaly_scale": True,
+            "anomaly_quantile": None,
+            "anomaly_vmax": 8,
+            "anomaly_levels": 17,
+
+            "common_difference_scale": True,
+            "difference_quantile": None,
+            "difference_vmax": 8,
+            "difference_levels": 17,
+
+            "common_anomaly_difference_scale": True,
+            "anomaly_difference_quantile": None,
+            "anomaly_difference_vmax": 8,
+            "anomaly_difference_levels": 17,
+        },
+    }
+
+    # ==========================================================
     # Spatial subset
     # ==========================================================
 
@@ -399,6 +559,68 @@ def main() -> None:
     n = 0
 
     for s in settings:
+
+        # ======================================================
+        # Variable-dependent plot limits
+        # ======================================================
+
+        cfg = PLOT_LIMITS.get(
+            s.var_fc,
+            {
+                # Fallback
+                "common_scale": True,
+                "robust_quantiles": (0.01, 0.99),
+                "vmin": None,
+                "vmax": None,
+                "raw_levels": 21,
+                "raw_centered": False,
+
+                "common_anomaly_scale": True,
+                "anomaly_quantile": 0.99,
+                "anomaly_vmax": None,
+                "anomaly_levels": 13,
+
+                "common_difference_scale": True,
+                "difference_quantile": 0.99,
+                "difference_vmax": None,
+                "difference_levels": 15,
+
+                "common_anomaly_difference_scale": True,
+                "anomaly_difference_quantile": 0.99,
+                "anomaly_difference_vmax": None,
+                "anomaly_difference_levels": 13,
+            },
+        )
+
+        common_scale = cfg["common_scale"]
+        robust_quantiles = cfg["robust_quantiles"]
+        vmin = cfg["vmin"]
+        vmax = cfg["vmax"]
+        raw_levels = cfg["raw_levels"]
+        raw_centered = cfg["raw_centered"]
+
+        common_anomaly_scale = cfg["common_anomaly_scale"]
+        anomaly_quantile = cfg["anomaly_quantile"]
+        anomaly_vmax = cfg["anomaly_vmax"]
+        anomaly_levels = cfg["anomaly_levels"]
+
+        common_difference_scale = cfg["common_difference_scale"]
+        difference_quantile = cfg["difference_quantile"]
+        difference_vmax = cfg["difference_vmax"]
+        difference_levels = cfg["difference_levels"]
+
+        common_anomaly_difference_scale = cfg[
+            "common_anomaly_difference_scale"
+        ]
+        anomaly_difference_quantile = cfg[
+            "anomaly_difference_quantile"
+        ]
+        anomaly_difference_vmax = cfg[
+            "anomaly_difference_vmax"
+        ]
+        anomaly_difference_levels = cfg[
+            "anomaly_difference_levels"
+        ]
 
         # ======================================================
         # Time range / inference path
