@@ -2567,24 +2567,33 @@ def train(
         # test_start="2025-01-01",
         # # test_end="2025-10-01",
         # test_end="2025-05-12", # same season of short exp train period
+        # train_subsamples=None,
+        # val_subsamples=None,
 
         # long ECMWF experiment
-        # train_start="2019-10-14", # some data removed
-        # train_end="2023-12-31", # ignored if split strategy is time/random
-        # val_start="2024-01-01", # ignored if split strategy is time/random
-        # val_end="2024-12-31",
-        # test_start="2025-01-01",
-        # # test_end="2025-10-01",
+        train_start="2019-10-14", # some data removed
+        train_end="2023-12-31", # ignored if split strategy is time/random
+        val_start="2024-01-01", # ignored if split strategy is time/random
+        val_end="2024-12-31",
+        test_start="2025-01-01",
+        test_end="2025-09-30",
         # test_end="2025-05-12", # same season of short exp train period
+        train_subsamples=None,
+        val_subsamples=None
+        # Ablation
+        # train_subsamples=264,
+        # val_subsamples=72,
 
         # SPS4 experiment
-        train_start="1993-01-01",
-        # train_end="2020-12-01",
-        train_end="2014-12-01",
-        val_start="2015-01-01",
-        val_end="2020-12-01",
-        test_start="2021-01-01",
-        test_end="2024-12-01",
+        # train_start="1993-01-01",
+        # # train_end="2020-12-01",
+        # train_end="2014-12-01",
+        # val_start="2015-01-01",
+        # val_end="2020-12-01",
+        # test_start="2021-01-01",
+        # test_end="2024-12-01",
+        # train_subsamples=None,
+        # val_subsamples=None,
 
         target_mode="analysis",
 
@@ -2756,11 +2765,6 @@ def train(
         torch_workers=4,
         trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
     )
-
-    # train_subsamples = 264
-    # val_subsamples = 72
-    train_subsamples = None
-    val_subsamples = None
 
     dataset_kwargs = {
         "target_realization_avg": s.target_realization_avg,
@@ -3180,8 +3184,8 @@ def train(
                     # datasets; close the bases once after all experiments for
                     # this leadtime have finished.
                     close_datasets=not defer_dataset_creation,
-                    train_subsamples=train_subsamples,
-                    val_subsamples=val_subsamples,
+                    train_subsamples=s.train_subsamples,
+                    val_subsamples=s.val_subsamples,
                 )
 
                 train_pred_paths.append(
