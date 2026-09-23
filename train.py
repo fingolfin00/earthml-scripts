@@ -1999,7 +1999,7 @@ def convert_to_xarray(
 
 def print_training_recap(
     *,
-    settings: Settings,
+    s: Settings,
     exp_ratio: tuple[int, int],
     region_name: str,
     accelerator: str,
@@ -2027,8 +2027,6 @@ def print_training_recap(
 ) -> None:
     logger = get_logger()
 
-    s = settings
-
     flat_recap = {
         "experiment.number": f"{exp_ratio[0]} / {exp_ratio[1]}",
         "experiment.name": exp_name or s.output_name,
@@ -2044,8 +2042,8 @@ def print_training_recap(
         "data.forecast": f"{s.model_fc}/{s.var_fc}",
         "data.analysis": f"{s.model_an}/{s.var_an}",
         "data.full_region": f"{s.region_name} {s.region}",
-        "data.train_period": f"{s.train_start} → {s.train_end}",
-        "data.val_period": f"{s.val_start} → {s.val_end}",
+        "data.train_period": f"{s.train_start} → {s.train_end}" + f" ({s.train_subsamples} samples)" if s.train_subsamples is not None else "",
+        "data.val_period": f"{s.val_start} → {s.val_end}" + f" ({s.val_subsamples} samples)" if s.val_subsamples is not None else "",
         "data.test_period": f"{s.test_start} → {s.test_end}",
         "data.train_x": train_input_shape,
         "data.train_y": train_target_shape,
@@ -2953,7 +2951,7 @@ def _core_train(
         )
 
         print_training_recap(
-            settings=s,
+            s=s,
             exp_ratio=exp_ratio,
             region_name=region_name,
             accelerator=accelerator,
