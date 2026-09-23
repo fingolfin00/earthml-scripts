@@ -153,6 +153,10 @@ def train(
     if accelerator == "gpu":
         torch.set_float32_matmul_precision("high")
 
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     s = Settings(
         root_dir=Path("/Users/jacopodallaglio/ML/training/seasonal"),
         data_root_dir=None,
@@ -160,8 +164,8 @@ def train(
         plot_root_dir=None,
         # root_dir=None,
         # data_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo"),
-        # exp_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"),
-        # plot_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo"),
+        # exp_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"),
+        # plot_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}"),
 
         extra_suffix_folder="",
 
@@ -261,7 +265,7 @@ def train(
             base_channels=64,
             bilinear=True,
             longitude_padding = "circular", # global (seasonal)
-            # longitude_padding="zero", # regional (weather)
+            # longitude_padding="zero", # creates artifacts near the border
             # longitude_padding = "replicate", # regional (weather)
         ),
 
@@ -284,7 +288,7 @@ def train(
 
         #     # zero_init_output=True,
         #     longitude_padding="circular", # global (seasonal)
-        #     # longitude_padding="zero", # regional (weather)
+        #     # longitude_padding="zero", # creates artifacts near the border
         #     # longitude_padding = "replicate", # regional (weather)
         # ),
 
@@ -306,7 +310,7 @@ def train(
 
         #     # zero_init_output=True,
         #     longitude_padding="circular", # global (seasonal)
-        #     # longitude_padding="zero", # regional (weather)
+        #     # longitude_padding="zero", # creates artifacts near the border
         #     # longitude_padding = "replicate", # regional (weather)
         # ),
 
@@ -1128,7 +1132,7 @@ def _core_train(
         n_channels = train_dataset.x.shape[1]
         n_classes = train_dataset.y.shape[1] # TODO not sure this works if realization_as_channel is True
 
-        # Initialize model args
+        # Initialize model args with defaults that will be overwritten by s.extra_net_kwargs
         longitude_padding = "circular" if region_name=="World" else "replicate"
         common_net_kwargs = {
             "learning_rate": s.init_learning_rate,
