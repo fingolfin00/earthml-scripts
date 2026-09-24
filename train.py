@@ -17,7 +17,6 @@ from torch.utils.data import DataLoader
 import lightning as L
 from lightning.pytorch.callbacks import (
     ModelCheckpoint,
-    EarlyStopping,
     RichProgressBar,
 )
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -28,11 +27,11 @@ from earthml import (
     ClimPeriod,
     TargetMode,
     XarrayDataset,
-    build_net,
     Normalize,
     MonthlyNormalize,
     SplitDataModule,
-    SingleMonthBatchSampler,
+    LearningRateChangePrinter,
+    RichEarlyStopping,
     Table,
     Settings,
     calculate_climatology,
@@ -40,12 +39,13 @@ from earthml import (
     open_zarr,
     save_zarr,
     safe_chunk_spec,
-    EarthMLLogger,
     configure_logging,
     get_logger,
     add_file_handler,
     remove_file_handler,
     log_renderable,
+    build_net,
+    diagnostics,
 )
 
 
@@ -1035,15 +1035,16 @@ def _core_train(
             last_checkpoint.unlink(missing_ok=True)
             training_complete_file.unlink(missing_ok=True)
 
-        # ==========================================================
-        # Loss
-        # ==========================================================
-
+        # Calculate latitudes for loss, net and metrics
         lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
         latitudes = torch.as_tensor(
             train_dataset.target_ds[lat_dim].values,
             dtype=torch.float32,
         )
+
+        # ==========================================================
+        # Loss
+        # ==========================================================
 
         # Grid-dependent loss configuration
         grid_spacing = abs(
@@ -1056,19 +1057,6 @@ def _core_train(
         )
 
         loss_kwargs = dict(s.loss_kwargs)
-
-        diagnostic_patch_size_degrees = float(
-            loss_kwargs.get("spatial_patch_size_degrees", 10.0)
-        )
-        if diagnostic_patch_size_degrees <= 0:
-            raise ValueError(
-                "spatial_patch_size_degrees must be positive"
-            )
-
-        patch_size = max(
-            1,
-            round(diagnostic_patch_size_degrees / grid_spacing),
-        )
 
         losses_with_latitudes = {
             "GeoMSELoss",
@@ -1141,6 +1129,7 @@ def _core_train(
             "loss_params": base_loss_params,
             "norm": s.training_norm,
             "supervised": True,
+            "latitudes": latitudes,
             "n_channels": n_channels,
             "n_classes": n_classes,
             "longitude_padding": longitude_padding,
@@ -1162,12 +1151,6 @@ def _core_train(
             name=s.net_name,
             **net_kwargs,
         ).to(device)
-
-        model.configure_spatial_diagnostics(
-            latitudes=latitudes,
-            patch_size=patch_size,
-            cvar_fraction=0.2,
-        )
 
         # ==========================================================
         # Datamodule init
@@ -1488,6 +1471,7 @@ def _core_train(
                 normalize_target=normalize_target,
                 dataloader=test_dataloader,
                 preds_store=test_store,
+                latitudes=latitudes,
                 an_clim=y_clim,
                 log_monthly=log_monthly,
             )
@@ -1501,6 +1485,7 @@ def _core_train(
                     normalize_target=normalize_target,
                     dataloader=val_test_dataloader,
                     preds_store=val_store,
+                    latitudes=latitudes,
                     an_clim=y_clim,
                     log_monthly=log_monthly,
                 )
@@ -1513,6 +1498,7 @@ def _core_train(
                 normalize_target=normalize_target,
                 dataloader=train_test_dataloader,
                 preds_store=train_store,
+                latitudes=latitudes,
                 an_clim=y_clim,
                 log_monthly=log_monthly,
             )
@@ -2456,39 +2442,48 @@ def init_callbacks(
 ):
     # Initialize trainer callbacks
     callbacks = []
+
     # Early stopping
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss",
-        patience=patience,
-        verbose=True,
-        mode="min"
+    callbacks.append(
+        RichEarlyStopping(
+            monitor="val_loss",
+            patience=patience,
+            verbose=True,
+            mode="min",
+        )
     )
-    callbacks.append(early_stop_callback)
 
     # Checkpointing every N epochs
-    periodic_checkpoint_callback = ModelCheckpoint(
-        dirpath=ckpt_folder_path,
-        every_n_epochs=1,
-        save_last=True,
-        save_top_k=1,
-        filename="checkpoint",
-        enable_version_counter=False,
+    callbacks.append(
+        ModelCheckpoint(
+            dirpath=ckpt_folder_path,
+            every_n_epochs=1,
+            save_last=True,
+            save_top_k=1,
+            filename="checkpoint",
+            enable_version_counter=False,
+        )
     )
-
-    callbacks.append(periodic_checkpoint_callback)
 
     # Model best weights, MUST be the last ModelCheckpoint. Can append from here since ModelCheckpoint will always be the last callbacks
-    best_weights_callback = ModelCheckpoint(
-        dirpath=weights_folder_path,
-        monitor="val_loss",
-        save_top_k=1,
-        mode="min",
-        filename="weights",
-        enable_version_counter=False,
+    callbacks.append(
+        ModelCheckpoint(
+            dirpath=weights_folder_path,
+            monitor="val_loss",
+            save_top_k=1,
+            mode="min",
+            filename="weights",
+            enable_version_counter=False,
+        )
     )
-    callbacks.append(best_weights_callback)
 
-    callbacks.append(RichProgressBar())
+    callbacks.append(
+        LearningRateChangePrinter()
+    )
+
+    callbacks.append(
+        RichProgressBar()
+    )
 
     return callbacks
 
@@ -3035,6 +3030,7 @@ def _test(
     normalize_target: Normalize | MonthlyNormalize,
     dataloader: DataLoader,
     preds_store: Path,
+    latitudes: torch.Tensor,
     an_clim: xr.Dataset | None = None,
     log_monthly: bool = False,
 ):
@@ -3064,161 +3060,102 @@ def _test(
             f"{preds_norm.shape} != {targets_norm.shape}"
         )
 
-    error_norm = preds_norm - targets_norm
+    # ==========================================================
+    # Diagnostics
+    # ==========================================================
 
-    model_mse = error_norm.square().mean()
-    zero_mse = targets_norm.square().mean()
+    baseline_norm: torch.Tensor | None
 
-    logger.print("Normalized tensor diagnostics")
-    logger.print("  unweighted raw tensor MSE:", float(model_mse))
-    logger.print("  zero-output MSE:", float(zero_mse))
-    logger.print("  skill vs zero:", float(1.0 - model_mse / zero_mse))
-    logger.print("  model scalar bias:", float(error_norm.mean()))
-    logger.print("  target mean:", float(targets_norm.mean()))
-    logger.print("  prediction mean:", float(preds_norm.mean()))
-    logger.print(
-        "prediction std:",
-        float(preds_norm.std()),
+    if s.target_mode == "analysis":
+        baseline = dataset.x.detach().float().cpu()
+
+        # Remove optional auxiliary input channels and keep only
+        # the forecast channels corresponding to the target.
+        baseline = baseline[
+            :,
+            : targets_norm.shape[1],
+        ]
+
+        if isinstance(
+            normalize_target,
+            MonthlyNormalize,
+        ):
+            baseline_norm = normalize_target(
+                baseline,
+                months=test_months,
+            )
+        else:
+            baseline_norm = normalize_target(
+                baseline,
+            )
+
+    elif s.target_mode in {
+        "residual",
+        "residual_realization",
+    }:
+        baseline_norm = torch.zeros_like(
+            targets_norm
+        )
+
+    else:
+        baseline_norm = None
+
+    if (
+        baseline_norm is not None
+        and baseline_norm.shape != targets_norm.shape
+    ):
+        raise ValueError(
+            "Diagnostic baseline shape mismatch: "
+            f"{baseline_norm.shape} != "
+            f"{targets_norm.shape}"
+        )
+
+    diagnostic_table = diagnostics(
+        preds=preds_norm,
+        target=targets_norm,
+        mask=masks,
+        latitudes=latitudes,
+        baseline=baseline_norm,
     )
-    logger.print(
-        "target std:",
-        float(targets_norm.std()),
+
+    diag_table_to_print = Table(
+        diagnostic_table,
+        title="Normalized tensor diagnostics",
+        params_name="Metric",
+        nested_rows=True,
+    ).table
+
+    log_renderable(
+        diag_table_to_print,
+        logger=logger,
     )
-
-    # Per-grid-cell skill against predicting zero residual.
-    valid = masks.bool()
-    valid_count_map = valid.sum(dim=(0, 1))  # (H, W)
-
-    model_mse_map = (
-        error_norm.square()
-        .masked_fill(~valid, 0.0)
-        .sum(dim=(0, 1))
-        / valid_count_map.clamp_min(1)
-    )
-
-    zero_mse_map = (
-        targets_norm.square()
-        .masked_fill(~valid, 0.0)
-        .sum(dim=(0, 1))
-        / valid_count_map.clamp_min(1)
-    )
-
-    valid_grid_cells = valid_count_map > 0
-    improved_grid_cells = (
-        model_mse_map < zero_mse_map
-    ) & valid_grid_cells
-
-    improved_grid_fraction = (
-        improved_grid_cells.sum()
-        / valid_grid_cells.sum().clamp_min(1)
-    )
-
-    logger.print(
-        "  improved grid cells:",
-        f"{100.0 * float(improved_grid_fraction):.1f}%",
-    )
-
-    target_mean_map = targets_norm.mean(dim=0)
-    prediction_mean_map = preds_norm.mean(dim=0)
-    error_mean_map = error_norm.mean(dim=0)
-
-    logger.print("Target mean map")
-    logger.print("  mean abs:", float(target_mean_map.abs().mean()))
-    logger.print("  max abs:", float(target_mean_map.abs().max()))
-
-    logger.print("Prediction mean map")
-    logger.print("  mean abs:", float(prediction_mean_map.abs().mean()))
-    logger.print("  max abs:", float(prediction_mean_map.abs().max()))
-
-    logger.print("Error mean map")
-    logger.print("  mean abs:", float(error_mean_map.abs().mean()))
-    logger.print("  max abs:", float(error_mean_map.abs().max()))
 
     if log_monthly:
-        preds = preds_norm
-        targets = targets_norm
-        months = test_months
+        for month in torch.unique(test_months).sort().values:
+            selected = test_months == month
 
-        for month in torch.unique(months).sort().values:
-            selected = months == month
-
-            pred_month = preds[selected]
-            target_month = targets[selected]
-            error_month = pred_month - target_month
-
-            model_mse = error_month.square().mean()
-            zero_mse = target_month.square().mean()
-
-            target_mean_map = target_month.mean(dim=0)
-            pred_mean_map = pred_month.mean(dim=0)
-            error_mean_map = error_month.mean(dim=0)
-
-            mask_month = masks[selected]
-
-            logger.print(f"Month {int(month)}")
-            logger.print("  samples:", int(selected.sum()))
-            logger.print("  unweighted raw tensor MSE:", float(model_mse))
-            logger.print("  zero MSE:", float(zero_mse))
-            logger.print(
-                "  skill vs zero:",
-                float(1.0 - model_mse / zero_mse.clamp_min(1e-8)),
-            )
-            logger.print(
-                "  target mean-map abs:",
-                float(target_mean_map.abs().mean()),
-            )
-            logger.print(
-                "  prediction mean-map abs:",
-                float(pred_mean_map.abs().mean()),
-            )
-            logger.print(
-                "  error mean-map abs:",
-                float(error_mean_map.abs().mean()),
-            )
-            logger.print(
-                "  error mean-map max:",
-                float(error_mean_map.abs().max()),
-            )
-            logger.print(
-                "prediction std:",
-                float(pred_month.std()),
-            )
-            logger.print(
-                "target std:",
-                float(target_month.std()),
+            month_diagnostics = diagnostics(
+                preds=preds_norm[selected],
+                target=targets_norm[selected],
+                mask=masks[selected],
+                latitudes=latitudes,
+                baseline=(
+                    baseline_norm[selected]
+                    if baseline_norm is not None
+                    else None
+                ),
             )
 
-            valid_month = mask_month.bool()
-            valid_count_map_month = valid_month.sum(dim=(0, 1))
+            monthly_diag_table_to_print = Table(
+                month_diagnostics,
+                title=f"Normalized diagnostics — month {int(month):02d}",
+                params_name="Metric",
+                nested_rows=True,
+            ).table
 
-            model_mse_map = (
-                error_month.square()
-                .masked_fill(~valid_month, 0.0)
-                .sum(dim=(0, 1))
-                / valid_count_map_month.clamp_min(1)
-            )
-
-            zero_mse_map = (
-                target_month.square()
-                .masked_fill(~valid_month, 0.0)
-                .sum(dim=(0, 1))
-                / valid_count_map_month.clamp_min(1)
-            )
-
-            valid_grid_cells_month = valid_count_map_month > 0
-
-            improved_grid_cells = (
-                model_mse_map < zero_mse_map
-            ) & valid_grid_cells_month
-
-            improved_grid_fraction = (
-                improved_grid_cells.sum()
-                / valid_grid_cells_month.sum().clamp_min(1)
-            )
-
-            logger.print(
-                "  improved grid cells:",
-                f"{100.0 * float(improved_grid_fraction):.1f}%",
+            log_renderable(
+                monthly_diag_table_to_print,
+                logger=logger,
             )
 
     if torch.cuda.is_available():
