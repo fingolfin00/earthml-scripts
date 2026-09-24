@@ -48,6 +48,10 @@ def main() -> None:
     # Paths
     # ==========================================================
 
+    # exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
         # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
@@ -242,8 +246,9 @@ def main() -> None:
         # "mse",
         "rmse",
         # "nrmse",
-        # "corr",
         # "r2",
+        # "corr",
+        # "kendall_tau",
         # "fc_std",
         # "an_std",
         # "std_ratio",
@@ -268,8 +273,9 @@ def main() -> None:
         # "mse_anom",
         # "rmse_anom",
         # "nrmse_anom",
-        # "acc",
         # "r2_anom",
+        # "acc",
+        # "kendall_tau_anom",
         # "fc_anom_std",
         # "an_anom_std",
         # "std_ratio_anom",
@@ -285,6 +291,16 @@ def main() -> None:
         # "mse_corr_component_anom",
         # "crmse_anom",
         # "regression_slope_anom",
+
+        # ======================================================
+        # Event-based probabilistic metrics - absolute terciles
+        # ======================================================
+        # "brier_lower",
+        # "brier_middle",
+        # "brier_upper",
+        # "roc_lower",
+        # "roc_middle",
+        # "roc_upper",
 
         # ======================================================
         # Skill scores vs climatology
@@ -304,7 +320,6 @@ def main() -> None:
         # "spread",
         # "spread_skill_ratio",
         # "crps",
-        # "rank_histogram",
 
         # ======================================================
         # Ensemble / probabilistic metrics - anomaly fields
@@ -314,11 +329,13 @@ def main() -> None:
         # "spread_anom",
         # "spread_anom_skill_ratio",
         # "crps_anom",
-        # "rank_histogram_anom",
 
         # ======================================================
-        # ROC AUC - anomaly terciles
+        # Event-based probabilistic metrics - anomaly terciles
         # ======================================================
+        # "brier_anom_lower",
+        # "brier_anom_middle",
+        # "brier_anom_upper",
         # "roc_anom_lower",
         # "roc_anom_middle",
         # "roc_anom_upper",
@@ -991,44 +1008,6 @@ def main() -> None:
                                     link.symlink_to(
                                         out_file.resolve()
                                     )
-
-
-
-    # if plot_mode in {"histograms", "all"} and "rank_histogram" in metrics:
-    #     for s in settings:
-    #         time_range = (s.train_start, s.test_end)
-    #         metric_scalar_members = calculate_metric_kind(
-    #             s,
-    #             metric_kind="scalar",
-    #             leadtime_agg="leadtime_month",
-    #             realization_agg="member",
-    #             lat_range=lat_range,
-    #             lon_range=lon_range,
-    #             time_range=time_range,
-    #         )["leadtime_month"]["scalar"]
-
-    #         da_members_fc = metric_scalar_members["fc"]["rank_histogram"]
-    #         da_members_mlfc = metric_scalar_members["mlfc"]["rank_histogram"]
-
-    #         out_file = (
-    #             s.plot_dir / "histograms" / s.var_fc / "leadtime_month"
-    #             / "all_months"
-    #             / f"time_{safe_label(time_range)}_lat_{safe_label(lat_range)}_lon_{safe_label(lon_range)}"
-    #             / f"{s.var_fc}_rank_histogram_fc-mlfc_startmonth_all.png"
-    #         )
-
-    #         print(f"Saving rank histogram {out_file}")
-
-    #         plot_rank_histogram(
-    #             [da_members_fc, da_members_mlfc],
-    #             var=s.var_fc,
-    #             metric="rank_histogram",
-    #             period_value="all",
-    #             models=["fc", "mlfc"],
-    #             out_file=out_file,
-    #             time_range=time_range,
-    #         )
-    #         n += 1
 
     print(f"Done. Saved {n} plots.")
 
