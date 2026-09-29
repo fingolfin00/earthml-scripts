@@ -31,9 +31,13 @@ from train import (
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
+exp_name = "weather_atmo"
+# exp_name = "weather_atmo_ablation_fixed_val"
+# exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
 EXPERIMENTS_ROOT = Path(
-    "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+    "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+    # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
 )
 
 VARIABLES = [
@@ -44,8 +48,10 @@ REGIONS = [
     "ConUS",
 ]
 
-TEST_START = "2025-01-01"
-TEST_END = "2025-10-10" # currently latest available day
+TEST_START = "2025-05-01T00:00:00"
+TEST_END = "2025-05-01T00:00:00"
+# TEST_END = "2025-05-12" # corresponds to 264 samples
+# TEST_END = "2025-10-10" # currently latest available day
 
 WEIGHTS: Literal["best", "last"] = "best"
 
@@ -108,13 +114,9 @@ def make_net_kwargs(
     s,
     train_dataset: XarrayDataset,
     region_name: str,
+    latitudes: torch.Tensor,
 ) -> dict:
     lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
-
-    latitudes = torch.as_tensor(
-        train_dataset.target_ds[lat_dim].values,
-        dtype=torch.float32,
-    )
 
     grid_spacing = abs(
         float(
@@ -385,10 +387,18 @@ def infer_setting(s) -> None:
         test_dataset.transform_x = normalize_input
         test_dataset.transform_y = normalize_target
 
+        # Calculate latitudes for loss, net and metrics
+        lat_dim = train_dataset.target_ds.earthml.guessed_dims.latitude
+        latitudes = torch.as_tensor(
+            train_dataset.target_ds[lat_dim].values,
+            dtype=torch.float32,
+        )
+
         net_kwargs = make_net_kwargs(
             s,
             train_dataset,
             s.region_name,
+            latitudes=latitudes,
         )
 
         checkpoint = resolve_checkpoint(
@@ -447,6 +457,7 @@ def infer_setting(s) -> None:
             preds_store=lead_output,
             an_clim=datasets["y_clim"],
             log_monthly=LOG_MONTHLY,
+            latitudes=latitudes,
         )
 
         prediction_paths.append(
@@ -507,7 +518,8 @@ def main() -> None:
         net_name="SmaAt_UNet",
         # net_name="ConvNeXtTransformerUNet",
         # target_mode="anomaly_residual",
-        extra_suffix_folder="NOAA_copy",
+        extra_suffix_folder="",
+        train_subsamples=None,
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
