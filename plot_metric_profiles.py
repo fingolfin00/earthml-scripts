@@ -48,14 +48,18 @@ def main() -> None:
     # Paths
     # ==========================================================
 
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
-        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
     )
 
     common_plot_dir = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/plots"
-        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
+        # f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}/common"
     )
 
     # ==========================================================
@@ -253,38 +257,44 @@ def main() -> None:
 
     combined_plot_folder = "profile_comparison"
 
-    comparison_name = "sample_size"
+    comparison_name = "ablation_fixed_val_samples"
 
     comparison_labels = [
-        "2474",  # base experiment
         "1000",
+        "1200",
         "1250",
+        "1300",
         "1500",
         "2000",
         "264",
         "500",
+        "2474",  # base experiment
     ]
 
     comparison_colors = {
         "fc": "tab:blue",
         # "clim-fc": "tab:orange",
 
-        "2474": "tab:pink",
-        "1000": "tab:brown",
-        "1250": "tab:cyan",
-        "1500": "tab:orange",
-        "2000": "tab:red",
-        "264": "tab:green",
-        "500": "tab:purple",
+        "2474": "purple",
+        "1000": "darkgoldenrod",
+        "1200": "turquoise",
+        "1250": "coral",
+        "1300": "peru",
+        "1500": "darkorange",
+        "2000": "crimson",
+        "264": "black",
+        "500": "navy",
     }
 
     comparison_linestyles = {
-        # "fc": "-",
+        "fc": "--",
         # "clim-fc": "-",
 
         "2474": "-",
         "1000": "-",
+        "1200": "-",
         "1250": "-",
+        "1300": "-",
         "1500": "-",
         "2000": "-",
         "264": "-",

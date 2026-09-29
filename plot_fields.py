@@ -47,9 +47,13 @@ def main() -> None:
     # Paths
     # ==========================================================
 
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
-        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
     )
 
     # ==========================================================

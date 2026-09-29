@@ -46,9 +46,13 @@ def main() -> None:
     # Paths
     # ==========================================================
 
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
-        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
     )
 
 
@@ -244,6 +248,7 @@ def main() -> None:
         if inference_period is None:
             valid_time_range = (
                 (s.train_start, s.test_end)
+                # (s.test_start, s.test_end)
                 if time_range is None
                 else time_range
             )

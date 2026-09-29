@@ -48,17 +48,18 @@ def main() -> None:
     # Paths
     # ==========================================================
 
-    # exp_name = "weather_atmo"
+    exp_name = "weather_atmo"
     # exp_name = "weather_atmo_ablation_fixed_val"
-    exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
-        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
     )
+
     common_plot_dir = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/plots"
-        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/common"
+        # f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}/common"
     )
 
     orography_path = Path(
@@ -403,26 +404,25 @@ def main() -> None:
         # net_name="ConvNeXtTransformerUNet",
         net_name="SmaAt_UNet",
 
-        # test_end="2025-10-01",
+        target_mode="analysis",
 
-        # target_mode="anomaly",
+        # input_realization_avg=False,
+
+        loss_name="GeoMaskedMSELoss",
+
+        # train_start="2019-10-14",
+        # train_subsamples=1000,
 
         # seasonal_encoding=True,
         # ensemble_encoding=True,
 
-        # channel_representation="variable",
-
-        # loss_name="VarNormMaskMSELoss",
-        # loss_name="GeoMaskedMSEMultiScaleLoss",
-        # loss_name="SpatialDegradationMSELoss",
-
         # separate_training_by_init_period=None,
         # separate_training_by_init_period=ClimPeriod.MONTH,
 
-        # extra_suffix_folder="264samples_randomsamples",
-        # extra_suffix_folder="264samples_consecutive",
-        # extra_suffix_folder="NOAA_copy",
         # extra_suffix_folder="",
+        # extra_suffix_folder="NOAA_copy",
+        # extra_suffix_folder="264samples_consecutive",
+        # extra_suffix_folder="264samples_randomsamples",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")

@@ -37,14 +37,17 @@ def main() -> None:
     # Paths
     # ==========================================================
 
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
+    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
+
     experiments_root = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/experiments"
-        # "/work/cmcc/jd19424/ML/MLBC/experiments/weather_atmo"
+        # f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"
     )
-
-    plot_dir = Path(
+    common_plot_dir = Path(
         "/Users/jacopodallaglio/ML/training/seasonal/plots/scatter"
-        # "/work/cmcc/jd19424/ML/MLBC/plots/weather_atmo/scatter"
+        # f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}/scatter"
     )
 
 
@@ -376,7 +379,7 @@ def main() -> None:
     )
 
     out_file = (
-        plot_dir
+        common_plot_dir
         / common_path
         / filename
     )
