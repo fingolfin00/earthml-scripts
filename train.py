@@ -2654,16 +2654,18 @@ def convert_to_xarray(
     # Predictions live on the target grid, so keep target metadata/coords.
     meta_ds = dataset.target_ds
 
-    R_out, T_out = _infer_RT_from_source(dataset)
+    R_source, T_out = _infer_RT_from_source(dataset)
 
-    if getattr(dataset, "realization_as_channel", False):
-        if getattr(dataset, "output_realizations", "deterministic") == "ensemble":
-            realization_as_channel = True
-        else:
-            R_out = 1
-            realization_as_channel = False
-    else:
-        realization_as_channel = False
+    # print(f"R_source={R_source}, T_out={T_out}")
+
+    channel_representation = getattr(
+        dataset,
+        "channel_representation",
+        None,
+    )
+
+    R_out = R_source
+    realization_as_channel = (channel_representation == "realization")
 
     input_ds = dataset.input_ds
     target_rdim = meta_ds.earthml.guessed_dims.realization
