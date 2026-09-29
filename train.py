@@ -254,6 +254,11 @@ def train(
         seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
         ensemble_encoding=False,
         spatial_encoding=False,
+        orography_encoding=True,
+        orography_path=Path(
+            # "/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"
+            "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+        ),
         input_realization_avg=False, # pass esemble mean for input
 
         # NN
@@ -593,6 +598,12 @@ def train(
         ] = {}
 
         try:
+            orography_ds = (
+                xr.open_zarr(s.orography_path)
+                if s.orography_encoding and s.orography_path is not None
+                else None
+            )
+
             dataset_d = make_train_test_datasets_for_leadtime(
                 forecast_ds_path=(
                     s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
@@ -622,6 +633,8 @@ def train(
                 ),
                 ensemble_encoding=s.ensemble_encoding,
                 spatial_encoding=s.spatial_encoding,
+                orography_encoding=s.orography_encoding,
+                orography_ds=orography_ds,
                 input_realization_avg=s.input_realization_avg,
                 interpolate_analysis=interpolate_analysis,
                 materialize=False,
@@ -1702,6 +1715,38 @@ def spatial_position_encoder(
         join="exact",
     )
 
+def orography_encoder(
+    ds: xr.Dataset,
+    oro_ds: xr.Dataset,
+) -> xr.Dataset:
+    """
+    Add static orography channel, interpolated onto the input grid.
+    """
+    oro_ds = oro_ds.earthml.normalize_dims_and_coords()
+
+    for dim in ("latitude", "longitude"):
+        if dim not in ds.dims:
+            raise ValueError(f"Input dataset has no {dim!r} dimension.")
+
+        if dim not in oro_ds.dims:
+            raise ValueError(f"Orography dataset has no {dim!r} dimension.")
+
+    oro_ds = oro_ds.interp(
+        latitude=ds["latitude"],
+        longitude=ds["longitude"],
+    )
+
+    if bool(oro_ds.to_array().isnull().any()):
+        raise ValueError(
+            "Orography interpolation produced NaNs. "
+            "Check that the orography grid covers the input domain."
+        )
+
+    return xr.merge(
+        [ds, oro_ds],
+        compat="equals",
+        join="exact",
+    )
 
 def seasonal_cycle_encoder(
     ds: xr.Dataset,
@@ -1910,6 +1955,8 @@ def make_leadtime_pair(
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     seasonal_encoding: bool = False,
     spatial_encoding: bool = False,
+    orography_encoding: bool = False,
+    orography_ds: xr.Dataset | None = None,
     ensemble_encoding: bool = False,
     input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
@@ -1937,6 +1984,15 @@ def make_leadtime_pair(
         elif ensemble_encoding:
             ds = ensemble_encoder(ds)
 
+        # Physical predictor: should be normalized
+        if orography_encoding:
+            if orography_ds is None:
+                raise ValueError(
+                    "orography_ds is required when orography_encoding=True."
+                )
+            ds = orography_encoder(ds, orography_ds)
+
+        # Fixed encodings: deliberately left unnormalized
         if seasonal_encoding:
             ds = seasonal_cycle_encoder(
                 ds,
@@ -2163,6 +2219,8 @@ def make_train_test_datasets_for_leadtime(
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
     spatial_encoding: bool = False,
+    orography_encoding: bool = False,
+    orography_ds: xr.Dataset | None = None,
     input_realization_avg: bool = False,
     interpolate_analysis: bool = True,
     materialize: bool = False,
@@ -2228,6 +2286,8 @@ def make_train_test_datasets_for_leadtime(
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
         spatial_encoding=spatial_encoding,
+        orography_encoding=orography_encoding,
+        orography_ds=orography_ds,
         input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
@@ -2255,6 +2315,8 @@ def make_train_test_datasets_for_leadtime(
             seasonal_encoding=seasonal_encoding,
             ensemble_encoding=ensemble_encoding,
             spatial_encoding=spatial_encoding,
+            orography_encoding=orography_encoding,
+            orography_ds=orography_ds,
             input_realization_avg=input_realization_avg,
             interpolate_analysis=interpolate_analysis,
             materialize=materialize,
@@ -2292,6 +2354,8 @@ def make_train_test_datasets_for_leadtime(
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
         spatial_encoding=spatial_encoding,
+        orography_encoding=orography_encoding,
+        orography_ds=orography_ds,
         input_realization_avg=input_realization_avg,
         interpolate_analysis=interpolate_analysis,
         materialize=materialize,
