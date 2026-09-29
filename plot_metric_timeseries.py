@@ -1,11 +1,13 @@
 from typing import Literal
 from pathlib import Path
 
+import numpy as np
 import xarray as xr
+
+from matplotlib.path import Path as MplPath
 
 import warnings
 from dask.array import PerformanceWarning
-
 warnings.simplefilter("ignore", FutureWarning)
 warnings.filterwarnings(
     "ignore",
@@ -29,13 +31,13 @@ from earthml.metrics import (
     stack_hour_clim,
     groupby_period,
     build_metric_improvements,
-    get_required_improvement_metrics,
 )
 from earthml.plots import (
     safe_label,
     lead_label,
     plot_timeseries,
 )
+from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
 
 def main() -> None:
@@ -57,7 +59,16 @@ def main() -> None:
 
     metric_kind: MetricKind = "timeseries"
 
-    regenerate_plots = True
+    regenerate_plots = False
+
+    plot_title = True
+    plot_labels = True
+    plot_legend = True
+
+    title_size = None
+    label_size = None
+    tick_size = None
+    dpi = 300
 
     plot_models = (
         "fc",
@@ -71,6 +82,16 @@ def main() -> None:
     model_comparisons = (
         ("fc", "mlfc"),
     )
+
+    # ==========================================================
+    # Rolling mean
+    # ==========================================================
+
+    # Number of metric samples, not number of days.
+    rolling_mean_window = None
+    # rolling_mean_window = 30
+    rolling_mean_center = True
+    rolling_mean_min_periods = 1
 
     # ==========================================================
     # Data processing
@@ -139,7 +160,6 @@ def main() -> None:
         # "bias_anom",
         # "rmse_anom",
         # "scc_anom",
-
         # "mae_anom",
         # "mse_anom",
         # "nrmse_anom",
@@ -204,9 +224,6 @@ def main() -> None:
         # "mean_member_mse_anom_skill_clim",
     ]
 
-    # metrics_to_compute = get_required_improvement_metrics(
-    #     list(metrics)
-    # )
     metrics_to_compute = list(metrics)
 
     # ==========================================================
@@ -214,19 +231,57 @@ def main() -> None:
     # ==========================================================
 
     variables = [
+        # Atmosphere
+        # "mslp",
         "t2m",
+        # "d2m",
+        # "u10",
+        # "v10",
+        # "sst",
+        # "tprate",
+        # "tcc",
+        # Ocean
+        # "mlotst",
+        # "ssh",
+        # "sss",
+        # "t20d",
     ]
 
     regions = [
         "ConUS",
+        # "Europe",
+        # "Pacific",
+        # "World",
+        # None,
     ]
 
     # ==========================================================
     # Spatial subset
     # ==========================================================
 
+    # ConUS
     lat_range = (50, 25)
     lon_range = (-130, -60)
+
+    # Europe
+    # lat_range = (80, 30)
+    # lon_range = (-30, 60)
+
+    # Pacific
+    # lat_range = (20, -20)
+    # lon_range = (-195, -135)
+
+    # Whole configured region
+    lat_range = None
+    lon_range = None
+
+    # ==========================================================
+    # Timeseries spatial subregions
+    # ==========================================================
+
+    # locations = SEA_LOCATIONS
+    # locations = CITY_LOCATIONS
+    locations = {"all": None}
 
     # ==========================================================
     # Experiment selection
@@ -240,6 +295,8 @@ def main() -> None:
         target_mode="analysis",
         loss_name="GeoMaskedMSELoss",
         train_start="2019-10-14",
+        # train_subsamples=1000,
+        train_subsamples=None,
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -254,7 +311,6 @@ def main() -> None:
                 if time_range is None
                 else time_range
             )
-
             mlfc_path = None
 
         else:
@@ -381,7 +437,6 @@ def main() -> None:
             fc_clim[s.var_fc],
             clim_period,
         )
-
         an_clim_da = stack_hour_clim(
             an_clim[s.var_an],
             clim_period,
@@ -405,9 +460,7 @@ def main() -> None:
             + an_clim_da
         ).to_dataset(name=s.var_fc)
 
-        realization_dim = (
-            fc.earthml.guessed_dims.realization
-        )
+        realization_dim = fc.earthml.guessed_dims.realization
 
         an_clim_for_fc = an_clim
 
@@ -438,200 +491,522 @@ def main() -> None:
         }
 
         # ======================================================
-        # Calculate timeseries
+        # Calculate + plot timeseries by spatial subregion
         # ======================================================
 
-        metric_ts_by_model: dict[
-            str,
-            xr.Dataset,
-        ] = {}
+        for location, location_config in locations.items():
+            print(f"Spatial subregion: {location}")
+            an_loc = subset_timeseries_region(
+                an,
+                location_config,
+            )
+            an_clim_loc = subset_timeseries_region(
+                an_clim,
+                location_config,
+            )
 
-        for model in plot_models:
-            ds = model_datasets[model]
-            ds_clim = model_climatologies[model]
-
-            if ds is None or ds_clim is None:
-                continue
-
-            deterministic_metrics = [
-                m
-                for m in metrics_to_compute
-                if is_deterministic(m)
-            ]
-
-            probabilistic_metrics = [
-                m
-                for m in metrics_to_compute
-                if is_probabilistic(m)
-            ]
-
-            metric_ts_det = xr.Dataset()
-            metric_ts_prob = xr.Dataset()
-
-            if deterministic_metrics:
-                print(
-                    f"Get {model} deterministic "
-                    f"metric timeseries"
-                )
-
-                metric_ts_det = get_metrics(
-                    an=an,
-                    fc=ds,
-                    var=s.var_fc,
-                    metric_kind=metric_kind,
-                    leadtime_agg=leadtime_agg_mode,
-                    realization_agg=True,
-                    an_clim=an_clim,
-                    fc_clim=ds_clim,
-                    orography_path=orography_path,
-                    metrics=deterministic_metrics,
-                    leadtime_windows=(
-                        s.seasonal_leadtime_windows
-                    ),
-                    leadtime_agg_coord=(
-                        leadtime_agg_coord
-                    ),
-                    clim_period=clim_period,
-                    period_reference=period_reference,
-                    period_dim=period_dim,
-                    periods_requested=periods_requested,
-                    leadtime_unit=leadtime_units,
-                    align=False,
-                    fair_correction=False,
-                )
-
-            if probabilistic_metrics:
-                print(
-                    f"Get {model} probabilistic "
-                    f"metric timeseries"
-                )
-
-                metric_ts_prob = get_metrics(
-                    an=an,
-                    fc=ds,
-                    var=s.var_fc,
-                    metric_kind=metric_kind,
-                    leadtime_agg=leadtime_agg_mode,
-                    realization_agg=False,
-                    an_clim=an_clim,
-                    fc_clim=ds_clim,
-                    orography_path=orography_path,
-                    metrics=probabilistic_metrics,
-                    leadtime_windows=(
-                        s.seasonal_leadtime_windows
-                    ),
-                    leadtime_agg_coord=(
-                        leadtime_agg_coord
-                    ),
-                    clim_period=clim_period,
-                    period_reference=period_reference,
-                    period_dim=period_dim,
-                    periods_requested=periods_requested,
-                    leadtime_unit=leadtime_units,
-                    align=False,
-                    fair_correction=False,
-                )
-
-            metric_ts_by_model[model] = xr.merge(
+            metric_ts_by_model: dict[str, xr.Dataset] = {}
+            metric_models = tuple(dict.fromkeys(
                 [
-                    metric_ts_det,
-                    metric_ts_prob,
+                    *plot_models,
+                    *(
+                        model
+                        for comparison in model_comparisons
+                        for model in comparison
+                    ),
                 ]
-            )
+            ))
 
-        # ======================================================
-        # Plot FC and MLFC together
-        # ======================================================
-
-        available_models = [
-            model
-            for model in plot_models
-            if model in metric_ts_by_model
-        ]
-
-        if not available_models:
-            continue
-
-        available_metrics = [
-            m
-            for m in metrics
-            if all(
-                m in metric_ts_by_model[model]
-                for model in available_models
-            )
-        ]
-
-        print(
-            f"Plotting metrics {available_metrics} "
-            f"for models {available_models}"
-        )
-
-        for m in available_metrics:
-            das = [
-                metric_ts_by_model[model][m]
-                for model in available_models
-            ]
-
-            for lead_value in das[0][
-                leadtime_agg_coord
-            ].values:
-                label = safe_label(
-                    lead_label(
-                        das[0],
-                        lead_value,
-                        leadtime_agg_coord,
-                    )
+            for model in metric_models:
+                ds = subset_timeseries_region(
+                    model_datasets[model],
+                    location_config,
                 )
 
-                common_path = (
-                    Path("timeseries")
-                    / safe_label(period_dim)
-                    / safe_label("all")
-                    / (
-                        f"time_{safe_label(valid_time_range)}"
-                        f"_lat_{safe_label(valid_lat_range)}"
-                        f"_lon_{safe_label(valid_lon_range)}"
-                    )
-                    / m
-                    / leadtime_agg_mode
+                ds_clim = subset_timeseries_region(
+                    model_climatologies[model],
+                    location_config,
                 )
 
-                filename = (
-                    f"{s.var_fc}_{m}_"
-                    f"{'-'.join(available_models)}"
-                    f"_lead_{label}.png"
-                )
-
-                out_file = (
-                    s.plot_dir
-                    / common_path
-                    / filename
-                )
-
-                if (
-                    out_file.exists()
-                    and not regenerate_plots
-                ):
+                if ds is None or ds_clim is None:
                     continue
 
-                print(
-                    f"Saving timeseries {out_file}"
+                deterministic_metrics = [
+                    m
+                    for m in metrics_to_compute
+                    if is_deterministic(m)
+                ]
+
+                probabilistic_metrics = [
+                    m
+                    for m in metrics_to_compute
+                    if is_probabilistic(m)
+                ]
+
+                metric_ts_det = xr.Dataset()
+                metric_ts_prob = xr.Dataset()
+                if deterministic_metrics:
+                    print(
+                        f"Get {model} deterministic metric timeseries "
+                        f"for {location}"
+                    )
+
+                    metric_ts_det = get_metrics(
+                        an=an_loc,
+                        fc=ds,
+                        var=s.var_fc,
+                        metric_kind=metric_kind,
+                        leadtime_agg=leadtime_agg_mode,
+                        realization_agg=True,
+                        an_clim=an_clim_loc,
+                        fc_clim=ds_clim,
+                        orography_path=orography_path,
+                        metrics=deterministic_metrics,
+                        leadtime_windows=s.seasonal_leadtime_windows,
+                        leadtime_agg_coord=leadtime_agg_coord,
+                        clim_period=clim_period,
+                        period_reference=period_reference,
+                        period_dim=period_dim,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
+                        align=False,
+                        fair_correction=False,
+                    )
+
+                if probabilistic_metrics:
+                    print(
+                        f"Get {model} probabilistic metric timeseries "
+                        f"for {location}"
+                    )
+
+                    metric_ts_prob = get_metrics(
+                        an=an_loc,
+                        fc=ds,
+                        var=s.var_fc,
+                        metric_kind=metric_kind,
+                        leadtime_agg=leadtime_agg_mode,
+                        realization_agg=False,
+                        an_clim=an_clim_loc,
+                        fc_clim=ds_clim,
+                        orography_path=orography_path,
+                        metrics=probabilistic_metrics,
+                        leadtime_windows=s.seasonal_leadtime_windows,
+                        leadtime_agg_coord=leadtime_agg_coord,
+                        clim_period=clim_period,
+                        period_reference=period_reference,
+                        period_dim=period_dim,
+                        periods_requested=periods_requested,
+                        leadtime_unit=leadtime_units,
+                        align=False,
+                        fair_correction=False,
+                    )
+
+                metric_ts_by_model[model] = xr.merge(
+                    [metric_ts_det, metric_ts_prob]
                 )
 
-                plot_timeseries(
-                    das,
-                    var=s.var_fc,
-                    metric=m,
-                    models=available_models,
-                    lead_value=lead_value,
-                    out_file=out_file,
-                    time_range=valid_time_range,
-                    leadtime_dim=leadtime_agg_coord,
-                )
+            # ==================================================
+            # Plot FC and MLFC together
+            # ==================================================
 
-                n += 1
+            available_models = [
+                model
+                for model in plot_models
+                if model in metric_ts_by_model
+            ]
+            if not available_models:
+                continue
+
+            available_metrics = [
+                m
+                for m in metrics
+                if all(
+                    m in metric_ts_by_model[model]
+                    for model in available_models
+                )
+            ]
+
+            print(
+                f"Plotting metrics {available_metrics} "
+                f"for models {available_models} in {location}"
+            )
+
+            for m in available_metrics:
+                das = [
+                    apply_rolling_mean(
+                        metric_ts_by_model[model][m],
+                        window=rolling_mean_window,
+                        center=rolling_mean_center,
+                        min_periods=rolling_mean_min_periods,
+                    ).compute()
+                    for model in available_models
+                ]
+
+                for lead_value in das[0][leadtime_agg_coord].values:
+                    for model, da in zip(available_models, das):
+                        print_timeseries_extrema(
+                            da,
+                            model=model,
+                            metric=m,
+                            lead_value=lead_value,
+                            leadtime_dim=leadtime_agg_coord,
+                        )
+
+                    label = safe_label(
+                        lead_label(
+                            das[0],
+                            lead_value,
+                            leadtime_agg_coord,
+                        )
+                    )
+
+                    rolling_label = (
+                        f" roll {rolling_mean_window}"
+                        if rolling_mean_window is not None
+                        else ""
+                    )
+
+                    rolling_filename = (
+                        f"_roll{rolling_mean_window}"
+                        if rolling_mean_window is not None
+                        else ""
+                    )
+
+                    common_path = (
+                        Path("timeseries")
+                        / safe_label(period_dim)
+                        / safe_label("all")
+                        / (
+                            f"time_{safe_label(valid_time_range)}"
+                            f"_loc_{safe_label(location)}"
+                        )
+                        / m
+                        / leadtime_agg_mode
+                    )
+
+                    filename = (
+                        f"{s.var_fc}_{m}_"
+                        f"{'-'.join(available_models)}"
+                        f"_lead_{label}{rolling_filename}.png"
+                    )
+
+                    out_file = s.plot_dir / common_path / filename
+                    if out_file.exists() and not regenerate_plots:
+                        continue
+
+                    print(f"Saving timeseries {out_file}")
+
+                    plot_timeseries(
+                        das,
+                        var=s.var_fc,
+                        metric=m,
+                        models=available_models,
+                        lead_value=lead_value,
+                        out_file=out_file,
+                        time_range=valid_time_range,
+                        leadtime_dim=leadtime_agg_coord,
+                        train_end=(
+                            s.train_end
+                            if valid_time_range[0] <= s.train_end <= valid_time_range[1]
+                            else None
+                        ),
+                        val_end=(
+                            s.val_end
+                            if valid_time_range[0] <= s.val_end <= valid_time_range[1]
+                            else None
+                        ),
+                        plot_title=plot_title,
+                        plot_labels=plot_labels,
+                        title_suffix=rolling_label,
+                        plot_legend=plot_legend,
+                        title_size=title_size,
+                        label_size=label_size,
+                        tick_size=tick_size,
+                        dpi=dpi,
+                    )
+                    n += 1
+
+            # ==================================================
+            # Plot metric improvements
+            # ==================================================
+
+            for baseline_model, target_model in model_comparisons:
+                if baseline_model not in metric_ts_by_model:
+                    continue
+                if target_model not in metric_ts_by_model:
+                    continue
+
+                baseline_ds = metric_ts_by_model[baseline_model]
+                target_ds = metric_ts_by_model[target_model]
+
+                comparison_metrics = [
+                    m
+                    for m in metrics
+                    if m in baseline_ds and m in target_ds
+                ]
+
+                for m in comparison_metrics:
+                    improvements = build_metric_improvements(
+                        baseline_ds,
+                        target_ds,
+                        metric=m,
+                        baseline_model=baseline_model,
+                        target_model=target_model,
+                        improvement_units=("%", "Δ"),
+                    )
+
+                    for comparison_model, comparison_da in improvements.items():
+                        improvement_unit = get_improvement_unit(
+                            comparison_model
+                        )
+                        comparison_da = apply_rolling_mean(
+                            comparison_da,
+                            window=rolling_mean_window,
+                            center=rolling_mean_center,
+                            min_periods=rolling_mean_min_periods,
+                        ).compute()
+
+                        for lead_value in comparison_da[leadtime_agg_coord].values:
+                            print_timeseries_extrema(
+                                comparison_da,
+                                model=comparison_model,
+                                metric=m,
+                                lead_value=lead_value,
+                                leadtime_dim=leadtime_agg_coord,
+                            )
+
+                            label = safe_label(
+                                lead_label(
+                                    comparison_da,
+                                    lead_value,
+                                    leadtime_agg_coord,
+                                )
+                            )
+
+                            rolling_label = (
+                                f" roll {rolling_mean_window}"
+                                if rolling_mean_window is not None
+                                else ""
+                            )
+
+                            rolling_filename = (
+                                f"_roll{rolling_mean_window}"
+                                if rolling_mean_window is not None
+                                else ""
+                            )
+
+                            common_path = (
+                                Path("timeseries")
+                                / "comparisons"
+                                / safe_label(comparison_model)
+                                / safe_label(period_dim)
+                                / safe_label("all")
+                                / (
+                                    f"time_{safe_label(valid_time_range)}"
+                                    f"_loc_{safe_label(location)}"
+                                )
+                                / m
+                                / leadtime_agg_mode
+                            )
+
+                            filename = (
+                                f"{s.var_fc}_{m}_"
+                                f"{safe_label(comparison_model)}_"
+                                f"lead_{label}{rolling_filename}.png"
+                            )
+
+                            out_file = s.plot_dir / common_path / filename
+
+                            if out_file.exists() and not regenerate_plots:
+                                continue
+
+                            print(
+                                f"Saving improvement timeseries {out_file}"
+                            )
+
+                            plot_timeseries(
+                                [comparison_da],
+                                var=s.var_fc,
+                                metric=m,
+                                models=[comparison_model],
+                                lead_value=lead_value,
+                                out_file=out_file,
+                                time_range=valid_time_range,
+                                leadtime_dim=leadtime_agg_coord,
+                                train_end=(
+                                    s.train_end
+                                    if valid_time_range[0] <= s.train_end <= valid_time_range[1]
+                                    else None
+                                ),
+                                val_end=(
+                                    s.val_end
+                                    if valid_time_range[0] <= s.val_end <= valid_time_range[1]
+                                    else None
+                                ),
+                                plot_title=plot_title,
+                                plot_labels=plot_labels,
+                                title_suffix=rolling_label,
+                                plot_legend=plot_legend,
+                                improvement_unit=improvement_unit,
+                                timeseries_zero_line=True,
+                                title_size=title_size,
+                                label_size=label_size,
+                                tick_size=tick_size,
+                                dpi=dpi,
+                            )
+
+                            n += 1
 
     print(f"Done. Saved {n} plots.")
+
+
+def get_improvement_unit(
+    comparison_model: str,
+) -> Literal["%", "Δ", "normalized"]:
+    if comparison_model.endswith("_percentage"):
+        return "%"
+    if comparison_model.endswith("_difference"):
+        return "Δ"
+    if comparison_model.endswith("_normalized"):
+        return "normalized"
+    raise ValueError(
+        f"Cannot determine improvement unit from {comparison_model!r}."
+    )
+
+def apply_rolling_mean(
+    da: xr.DataArray | None,
+    *,
+    window: int | None,
+    center: bool,
+    min_periods: int,
+) -> xr.DataArray | None:
+    if da is None or window is None:
+        return da
+    time_dim = da.earthml.guessed_dims.time
+    if time_dim is None:
+        raise ValueError("Could not determine time dimension for rolling mean.")
+    return da.rolling(
+        {time_dim: window},
+        center=center,
+        min_periods=min_periods,
+    ).mean(skipna=True)
+
+def subset_timeseries_region(
+    obj: xr.DataArray | xr.Dataset | None,
+    region: dict | None,
+) -> xr.DataArray | xr.Dataset | None:
+    if obj is None or region is None:
+        return obj
+
+    lat_dim = obj.earthml.guessed_dims.latitude
+    lon_dim = obj.earthml.guessed_dims.longitude
+    if lat_dim is None or lon_dim is None:
+        raise ValueError("Could not determine latitude/longitude dimensions.")
+
+    # Normalize longitudes to [-180, 180].
+    if float(obj[lon_dim].max()) > 180:
+        lon = ((obj[lon_dim] + 180) % 360) - 180
+        obj = obj.assign_coords({lon_dim: lon}).sortby(lon_dim)
+
+    region_type = region.get("type", "rectangle")
+    if region_type == "rectangle":
+        lat0, lat1 = region["lat_range"]
+        lon0, lon1 = region["lon_range"]
+        lat_ascending = (
+            float(obj[lat_dim].values[0])
+            < float(obj[lat_dim].values[-1])
+        )
+        if lat_ascending:
+            lat0, lat1 = sorted((lat0, lat1))
+        else:
+            lat0, lat1 = sorted((lat0, lat1), reverse=True)
+
+        obj = obj.sel({lat_dim: slice(lat0, lat1)})
+
+        lon0 = ((lon0 + 180) % 360) - 180
+        lon1 = ((lon1 + 180) % 360) - 180
+        if lon0 <= lon1:
+            obj = obj.sel({lon_dim: slice(lon0, lon1)})
+        else:
+            obj = obj.where(
+                (obj[lon_dim] >= lon0) | (obj[lon_dim] <= lon1),
+                drop=True,
+            )
+
+        return obj
+
+    if region_type == "polygon":
+        coordinates = np.asarray(region["coordinates"], dtype=float).copy()
+        coordinates[:, 0] = ((coordinates[:, 0] + 180) % 360) - 180
+
+        lon2d, lat2d = np.meshgrid(
+            obj[lon_dim].values,
+            obj[lat_dim].values,
+        )
+
+        points = np.column_stack([lon2d.ravel(), lat2d.ravel()])
+
+        polygon = MplPath(coordinates)
+
+        mask = polygon.contains_points(points).reshape(lat2d.shape)
+        mask_da = xr.DataArray(
+            mask,
+            coords={
+                lat_dim: obj[lat_dim],
+                lon_dim: obj[lon_dim],
+            },
+            dims=(lat_dim, lon_dim),
+        )
+
+        return obj.where(mask_da)
+
+    raise ValueError(
+        f"Unsupported region type {region_type!r}. "
+        "Choose 'rectangle' or 'polygon'."
+    )
+
+
+def print_timeseries_extrema(
+    da: xr.DataArray,
+    *,
+    model: str,
+    metric: str,
+    lead_value,
+    leadtime_dim: str,
+) -> None:
+    """Print min/max values and their time locations."""
+    time_dim = da.earthml.guessed_dims.time
+
+    if time_dim is None:
+        raise ValueError("Could not determine time dimension.")
+
+    ts = da.sel({leadtime_dim: lead_value}).squeeze(drop=True)
+
+    valid = ts.where(np.isfinite(ts), drop=True)
+
+    if valid.size == 0:
+        print(
+            f"  {model:>16s} | {metric} | lead={lead_value}: "
+            "no finite values"
+        )
+        return
+
+    min_idx = int(valid.argmin(dim=time_dim))
+    max_idx = int(valid.argmax(dim=time_dim))
+
+    min_value = float(valid.isel({time_dim: min_idx}))
+    max_value = float(valid.isel({time_dim: max_idx}))
+
+    min_time = valid[time_dim].isel({time_dim: min_idx}).values
+    max_time = valid[time_dim].isel({time_dim: max_idx}).values
+
+    print(
+        f"  {model:>16s} | {metric} | lead={lead_value}\n"
+        f"    min = {min_value:.6g} @ "
+        f"{np.datetime_as_string(min_time, unit='h')}\n"
+        f"    max = {max_value:.6g} @ "
+        f"{np.datetime_as_string(max_time, unit='h')}"
+    )
 
 
 if __name__ == "__main__":
