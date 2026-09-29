@@ -243,6 +243,7 @@ def train(
         seed=42,
 
         channel_representation="variable",
+        # output_realizations="ensemble",
         output_realizations="deterministic",
 
         split_strategy="explicit",
@@ -401,7 +402,8 @@ def train(
         fill_nan_value=0.0,
         torch_mask="target",
         training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
-        # training_norm="LayerNorm",
+        # training_norm="GroupNorm",
+        # training_norm="LayerNorm", # unsupported for SmaAt UNet
         train_fraction=0.90,
         accumulate_grad_batches=2,
         # early_stopping_patience=20,
