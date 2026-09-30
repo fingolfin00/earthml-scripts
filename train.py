@@ -1320,7 +1320,8 @@ def _core_train(
 
         test_dataloader = DataLoader(
             test_dataset,
-            batch_size=s.batch_size,
+            # batch_size=s.batch_size,
+            batch_size=1,
             num_workers=0,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
@@ -1331,7 +1332,8 @@ def _core_train(
         if val_dataset is not None:
             val_test_dataloader = DataLoader(
                 val_dataset, # use the full validation period, even for subsampled exp
-                batch_size=s.batch_size,
+                # batch_size=s.batch_size,
+                batch_size=1,
                 num_workers=0,
                 shuffle=False,
                 pin_memory=(accelerator == "gpu"),
@@ -1340,7 +1342,8 @@ def _core_train(
 
         train_test_dataloader = DataLoader(
             train_dataset, # use the full training period, even for subsampled exp
-            batch_size=s.batch_size,
+            # batch_size=s.batch_size,
+            batch_size=1,
             num_workers=0,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
