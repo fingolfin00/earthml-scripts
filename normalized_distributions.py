@@ -75,7 +75,7 @@ DISTRIBUTION_PLOT: Literal[
     "both",
 ] = "kde"
 
-BINS = 50
+BINS = 250
 
 KDE_POINTS = 500
 
@@ -131,11 +131,6 @@ PERFORMANCE_CMAP = "RdBu"
 # e.g. 0.98 ignores the outermost 2% when setting vmax.
 # Values outside the range are clipped to the endpoint colors.
 PERFORMANCE_COLOR_QUANTILE = 0.90
-PERFORMANCE_FILL_ALPHA = 0.95
-
-# Scale factor applied to the automatic local-performance bandwidth.
-# 1.0 is a good starting point.
-PERFORMANCE_BANDWIDTH_SCALE = 1.0
 
 # Scatter settings
 PERFORMANCE_SCATTER_SIZE = 14
@@ -177,7 +172,7 @@ SPATIAL_STRUCTURE_FIELD: Literal[
     "error",
     "correction",
     "mlfc",
-] = "error"
+] = "correction"
 
 
 # Spatial-structure statistic.
@@ -1170,81 +1165,6 @@ def make_performance_norm(
     )
 
 
-def local_performance_on_grid(
-    values: np.ndarray,
-    performance: np.ndarray,
-    x_grid: np.ndarray,
-) -> np.ndarray:
-    """
-    Smooth local average performance as a function of distribution x.
-    Uses Gaussian distance weighting in field-statistic space.
-    """
-    valid = (
-        np.isfinite(values)
-        & np.isfinite(performance)
-    )
-
-    values = values[valid]
-    performance = performance[valid]
-
-    if len(values) < 2:
-        return np.full(
-            x_grid.shape,
-            np.nan,
-            dtype=float,
-        )
-
-    std = np.std(
-        values,
-        ddof=0,
-    )
-
-    if not np.isfinite(std) or std <= 0:
-        return np.full(
-            x_grid.shape,
-            np.nan,
-            dtype=float,
-        )
-
-    # Scott-like 1-D bandwidth
-    bandwidth = (
-        std
-        * len(values) ** (-1.0 / 5.0)
-        * PERFORMANCE_BANDWIDTH_SCALE
-    )
-
-    if not np.isfinite(bandwidth) or bandwidth <= 0:
-        return np.full(
-            x_grid.shape,
-            np.nan,
-            dtype=float,
-        )
-
-    distance = (
-        x_grid[:, None]
-        - values[None, :]
-    ) / bandwidth
-
-    weights = np.exp(
-        -0.5 * distance**2
-    )
-
-    denominator = weights.sum(axis=1)
-    numerator = (weights * performance[None, :]).sum(axis=1)
-
-    result = np.full(
-        x_grid.shape,
-        np.nan,
-        dtype=float,
-    )
-
-    valid_denominator = (denominator > 1e-12)
-
-    result[valid_denominator] = numerator[valid_denominator] / denominator[valid_denominator]
-
-    return result
-
-
 def performance_color(
     value,
     *,
@@ -1259,64 +1179,6 @@ def performance_color(
 
     return cmap(normalized)
 
-
-def fill_density_by_performance(
-    ax,
-    *,
-    x_grid: np.ndarray,
-    density: np.ndarray,
-    stats: pd.DataFrame,
-    quantity: str,
-    cmap,
-    norm: mcolors.Normalize,
-) -> None:
-    """
-    Fill the area below a test density using local average performance.
-    """
-    if "metric_improvement" not in stats.columns:
-        return
-
-    test_df = stats[
-        stats["split"] == "test"
-    ]
-
-    if test_df.empty:
-        return
-
-    values = test_df[quantity].to_numpy(dtype=float)
-
-    performance = test_df["metric_improvement"].to_numpy(dtype=float)
-
-    local_performance = (
-        local_performance_on_grid(
-            values,
-            performance,
-            x_grid,
-        )
-    )
-
-    for i in range(len(x_grid) - 1):
-        perf = (
-            local_performance[i]
-            + local_performance[i + 1]
-        ) / 2
-
-        if not np.isfinite(perf):
-            continue
-
-        ax.fill_between(
-            x_grid[i:i + 2],
-            0.0,
-            density[i:i + 2],
-            color=performance_color(
-                perf,
-                cmap=cmap,
-                norm=norm,
-            ),
-            alpha=PERFORMANCE_FILL_ALPHA,
-            linewidth=0,
-            zorder=1,
-        )
 
 # ============================================================================
 # Performance extrema
@@ -1738,10 +1600,6 @@ def plot_distribution(
         figsize=(8, 5),
     )
 
-    # ------------------------------------------------------------
-    # Performance color setup
-    # ------------------------------------------------------------
-
     performance_norm = (
         make_performance_norm(
             channel_df
@@ -1754,7 +1612,9 @@ def plot_distribution(
         PERFORMANCE_CMAP
     )
 
-    test_density_for_fill = None
+    # Used only to place best/worst timestep annotations on the
+    # test distribution envelope.
+    test_density_for_annotations = None
 
     # ------------------------------------------------------------
     # Plot each selected split
@@ -1824,7 +1684,6 @@ def plot_distribution(
             )
         ):
             kde = gaussian_kde(values)
-
             kde_density = kde(x_grid)
 
             ax.plot(
@@ -1836,7 +1695,7 @@ def plot_distribution(
                 zorder=5,
             )
 
-        # Plot split median
+        # Plot split median.
         ax.axvline(
             median,
             color=color,
@@ -1846,16 +1705,11 @@ def plot_distribution(
             zorder=3,
         )
 
-        # --------------------------------------------------------
-        # Save test distribution envelope for performance fill
-        # --------------------------------------------------------
-
         if split == "test":
             if kde_density is not None:
-                test_density_for_fill = kde_density
-
+                test_density_for_annotations = kde_density
             elif plot_type == "hist":
-                test_density_for_fill = (
+                test_density_for_annotations = (
                     histogram_density_on_grid(
                         values,
                         edges=edges,
@@ -1864,24 +1718,75 @@ def plot_distribution(
                 )
 
     # ------------------------------------------------------------
-    # Performance-colored fill
+    # Performance-colored density bands + correlation
     # ------------------------------------------------------------
+
+    test_perf_df = pd.DataFrame()
 
     if (
         "test" in available_splits
-        and COLOR_BY_PERFORMANCE
-        and performance_norm is not None
-        and test_density_for_fill is not None
+        and "metric_improvement" in channel_df.columns
     ):
-        fill_density_by_performance(
-            ax,
-            x_grid=x_grid,
-            density=test_density_for_fill,
-            stats=channel_df,
-            quantity=quantity,
-            cmap=performance_cmap,
-            norm=performance_norm,
+        test_perf_df = (
+            channel_df.loc[
+                channel_df["split"] == "test",
+                [quantity, "metric_improvement"],
+            ]
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
         )
+
+    if (
+        not test_perf_df.empty
+        and performance_norm is not None
+        and test_density_for_annotations is not None
+    ):
+        values = test_perf_df[quantity].to_numpy(dtype=float)
+        performance = test_perf_df[
+            "metric_improvement"
+        ].to_numpy(dtype=float)
+
+        # Assign every test sample to one of the same x-bins used by the
+        # histogram. Each band gets the plain arithmetic mean performance
+        # of the samples in that bin: no spatial/kernel smoothing.
+        bin_indices = np.digitize(
+            values,
+            edges,
+            right=False,
+        ) - 1
+
+        # Include values exactly equal to the rightmost edge in the last bin.
+        bin_indices[values == edges[-1]] = len(edges) - 2
+
+        for bin_index in range(len(edges) - 1):
+            in_bin = bin_indices == bin_index
+            if not np.any(in_bin):
+                continue
+
+            mean_performance = float(
+                np.mean(performance[in_bin])
+            )
+
+            x0 = edges[bin_index]
+            x1 = edges[bin_index + 1]
+            band_mask = (x_grid >= x0) & (x_grid <= x1)
+
+            if not np.any(band_mask):
+                continue
+
+            ax.fill_between(
+                x_grid[band_mask],
+                0.0,
+                test_density_for_annotations[band_mask],
+                color=performance_color(
+                    mean_performance,
+                    cmap=performance_cmap,
+                    norm=performance_norm,
+                ),
+                alpha=0.95,
+                linewidth=0,
+                zorder=1,
+            )
 
         add_performance_colorbar(
             fig,
@@ -1890,13 +1795,42 @@ def plot_distribution(
             norm=performance_norm,
         )
 
+    if len(test_perf_df) >= 2:
+        rho, p_value = spearmanr(
+            test_perf_df[quantity].to_numpy(dtype=float),
+            test_perf_df["metric_improvement"].to_numpy(dtype=float),
+        )
+
+        if np.isfinite(rho):
+            correlation_text = rf"Spearman $\rho$ = {rho:.2f}"
+            if np.isfinite(p_value):
+                correlation_text += f" (p={p_value:.2g})"
+
+            ax.text(
+                0.02,
+                0.98,
+                correlation_text,
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=9,
+                bbox={
+                    "boxstyle": "round,pad=0.25",
+                    "facecolor": "white",
+                    "edgecolor": "0.7",
+                    "linewidth": 0.5,
+                    "alpha": 0.85,
+                },
+                zorder=9,
+            )
+
     # ------------------------------------------------------------
     # Best/worst test-timestep annotations
     # ------------------------------------------------------------
 
     if (
         "test" in available_splits
-        and test_density_for_fill is not None
+        and test_density_for_annotations is not None
     ):
         extrema = get_performance_extrema(
             channel_df,
@@ -1925,7 +1859,7 @@ def plot_distribution(
                 np.interp(
                     x,
                     x_grid,
-                    test_density_for_fill,
+                    test_density_for_annotations,
                 )
             )
 
@@ -1935,15 +1869,17 @@ def plot_distribution(
             ):
                 continue
 
-            perf = float(
-                row["metric_improvement"]
-            )
-
-            marker_color = performance_color(
-                perf,
-                cmap=performance_cmap,
-                norm=performance_norm,
-            )
+            if performance_norm is not None:
+                perf = float(
+                    row["metric_improvement"]
+                )
+                marker_color = performance_color(
+                    perf,
+                    cmap=performance_cmap,
+                    norm=performance_norm,
+                )
+            else:
+                marker_color = "0.45"
 
             ax.plot(
                 x,
@@ -1961,7 +1897,6 @@ def plot_distribution(
                 format_extreme_annotation(row),
                 xy=(x, y),
                 occupied=occupied_annotations,
-                rotation=0,
             )
 
     # ------------------------------------------------------------
@@ -1976,7 +1911,7 @@ def plot_distribution(
             color="black",
             alpha=0.7,
         )
-    
+
     elif quantity == "std":
         ax.axvline(
             1.0,
@@ -2562,9 +2497,7 @@ def plot_spatial_structure_vs_performance(
     # Labels
     # ------------------------------------------------------------
 
-    unit = (
-        PERFORMANCE_IMPROVEMENT_UNIT
-    )
+    unit = PERFORMANCE_IMPROVEMENT_UNIT
 
     ax.set_xlabel(
         spatial_structure_label()
@@ -2676,6 +2609,7 @@ def plot_monthly_stats(
                     month_dir
                     / (
                         f"channel_{channel}_"
+                        f"{PERFORMANCE_METRIC}_color_encoding"
                         "mean_distribution.png"
                     )
                 ),
@@ -2695,6 +2629,7 @@ def plot_monthly_stats(
                     month_dir
                     / (
                         f"channel_{channel}_"
+                        f"{PERFORMANCE_METRIC}_color_encoding"
                         "std_distribution.png"
                     )
                 ),
@@ -2710,6 +2645,7 @@ def plot_monthly_stats(
                     month_dir
                     / (
                         f"channel_{channel}_"
+                        f"{PERFORMANCE_METRIC}_color_encoding"
                         "mean_vs_std.png"
                     )
                 ),
