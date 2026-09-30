@@ -45,8 +45,8 @@ def main() -> None:
     # Paths
     # ==========================================================
 
-    # exp_name = "weather_atmo"
-    exp_name = "weather_atmo_ablation_fixed_val"
+    exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_ablation_fixed_val"
     # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
     experiments_root = Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}")
@@ -94,6 +94,23 @@ def main() -> None:
     rolling_mean_min_periods = 1
 
     # ==========================================================
+    # Timeseries extrema
+    # ==========================================================
+
+    extrema_periods: tuple[
+        Literal["train", "val", "test", "full"],
+        ...
+    ] = (
+        "test",
+    )
+
+    extrema_n_min = 3
+    extrema_n_max = 3
+
+    extrema_annotate = True
+    extrema_print = True
+
+    # ==========================================================
     # Data processing
     # ==========================================================
 
@@ -123,12 +140,16 @@ def main() -> None:
     ]
 
     # ==========================================================
-    # Lead-time aggregation
+    # Lead-time aggregation and selection
     # ==========================================================
 
     leadtime_units = LeadtimeUnit.HOURS
 
     leadtime_agg_mode: LeadtimeAgg = "single"
+
+    # leadtimes = None # use all experiment leadtimes
+    leadtimes = [72]
+    # leadtimes = [24, 48, 72]
 
     # ==========================================================
     # Metrics
@@ -297,6 +318,7 @@ def main() -> None:
         train_start="2019-10-14",
         # train_subsamples=1000,
         train_subsamples=None,
+        extra_suffix_folder="",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -363,11 +385,31 @@ def main() -> None:
             f"{period_reference}_{clim_period.value}"
         )
 
+        # Select and validate leadtimes
+        selected_leadtimes = (
+            s.leadtimes
+            if leadtimes is None
+            else leadtimes
+        )
+
+        missing_leadtimes = (
+            set(selected_leadtimes)
+            - set(s.leadtimes)
+        )
+
+        if missing_leadtimes:
+            raise ValueError(
+                f"Requested leadtimes {sorted(missing_leadtimes)} "
+                f"are not available for experiment. "
+                f"Available leadtimes: {list(s.leadtimes)}"
+            )
+
         print(
             f"Generate {leadtime_agg_mode} timeseries "
             f"grouped by {period_dim} for "
             f"{s.var_an, s.var_fc} in {s.region_name} "
             f"(lon={valid_lon_range}, lat={valid_lat_range})"
+            f", leadtimes={selected_leadtimes}"
         )
 
         # ======================================================
@@ -419,15 +461,29 @@ def main() -> None:
 
         leadtime_dim = fc.earthml.guessed_dims.leadtime
 
-        fc = fc.sel({leadtime_dim: s.leadtimes})
-        an = an.sel({leadtime_dim: s.leadtimes})
+        fc = fc.sel(
+            {leadtime_dim: selected_leadtimes}
+        )
+        an = an.sel(
+            {leadtime_dim: selected_leadtimes}
+        )
+
+        if mlfc is not None:
+            mlfc = mlfc.sel(
+                {leadtime_dim: selected_leadtimes}
+            )
 
         fc_clim = fc_clim.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
         an_clim = an_clim.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
+
+        if mlfc_clim is not None:
+            mlfc_clim = mlfc_clim.sel(
+                {leadtime_dim: selected_leadtimes}
+            )
 
         # ======================================================
         # Climatological forecast
@@ -638,20 +694,11 @@ def main() -> None:
                         window=rolling_mean_window,
                         center=rolling_mean_center,
                         min_periods=rolling_mean_min_periods,
-                    ).compute()
+                    )
                     for model in available_models
                 ]
 
                 for lead_value in das[0][leadtime_agg_coord].values:
-                    for model, da in zip(available_models, das):
-                        print_timeseries_extrema(
-                            da,
-                            model=model,
-                            metric=m,
-                            lead_value=lead_value,
-                            leadtime_dim=leadtime_agg_coord,
-                        )
-
                     label = safe_label(
                         lead_label(
                             das[0],
@@ -705,16 +752,19 @@ def main() -> None:
                         out_file=out_file,
                         time_range=valid_time_range,
                         leadtime_dim=leadtime_agg_coord,
-                        train_end=(
-                            s.train_end
-                            if valid_time_range[0] <= s.train_end <= valid_time_range[1]
-                            else None
-                        ),
-                        val_end=(
-                            s.val_end
-                            if valid_time_range[0] <= s.val_end <= valid_time_range[1]
-                            else None
-                        ),
+
+                        train_start=s.train_start,
+
+                        train_end=s.train_end,
+                        val_end=s.val_end,
+                        test_end=s.test_end,
+
+                        extrema_periods=extrema_periods,
+                        extrema_n_min=extrema_n_min,
+                        extrema_n_max=extrema_n_max,
+                        extrema_annotate=extrema_annotate,
+                        extrema_print=extrema_print,
+
                         plot_title=plot_title,
                         plot_labels=plot_labels,
                         title_suffix=rolling_label,
@@ -724,6 +774,7 @@ def main() -> None:
                         tick_size=tick_size,
                         dpi=dpi,
                     )
+
                     n += 1
 
             # ==================================================
@@ -764,17 +815,9 @@ def main() -> None:
                             window=rolling_mean_window,
                             center=rolling_mean_center,
                             min_periods=rolling_mean_min_periods,
-                        ).compute()
+                        )
 
                         for lead_value in comparison_da[leadtime_agg_coord].values:
-                            print_timeseries_extrema(
-                                comparison_da,
-                                model=comparison_model,
-                                metric=m,
-                                lead_value=lead_value,
-                                leadtime_dim=leadtime_agg_coord,
-                            )
-
                             label = safe_label(
                                 lead_label(
                                     comparison_da,
@@ -833,16 +876,19 @@ def main() -> None:
                                 out_file=out_file,
                                 time_range=valid_time_range,
                                 leadtime_dim=leadtime_agg_coord,
-                                train_end=(
-                                    s.train_end
-                                    if valid_time_range[0] <= s.train_end <= valid_time_range[1]
-                                    else None
-                                ),
-                                val_end=(
-                                    s.val_end
-                                    if valid_time_range[0] <= s.val_end <= valid_time_range[1]
-                                    else None
-                                ),
+
+                                train_start=s.train_start,
+
+                                train_end=s.train_end,
+                                val_end=s.val_end,
+                                test_end=s.test_end,
+
+                                extrema_periods=extrema_periods,
+                                extrema_n_min=extrema_n_min,
+                                extrema_n_max=extrema_n_max,
+                                extrema_annotate=extrema_annotate,
+                                extrema_print=extrema_print,
+
                                 plot_title=plot_title,
                                 plot_labels=plot_labels,
                                 title_suffix=rolling_label,
@@ -963,49 +1009,6 @@ def subset_timeseries_region(
     raise ValueError(
         f"Unsupported region type {region_type!r}. "
         "Choose 'rectangle' or 'polygon'."
-    )
-
-
-def print_timeseries_extrema(
-    da: xr.DataArray,
-    *,
-    model: str,
-    metric: str,
-    lead_value,
-    leadtime_dim: str,
-) -> None:
-    """Print min/max values and their time locations."""
-    time_dim = da.earthml.guessed_dims.time
-
-    if time_dim is None:
-        raise ValueError("Could not determine time dimension.")
-
-    ts = da.sel({leadtime_dim: lead_value}).squeeze(drop=True)
-
-    valid = ts.where(np.isfinite(ts), drop=True)
-
-    if valid.size == 0:
-        print(
-            f"  {model:>16s} | {metric} | lead={lead_value}: "
-            "no finite values"
-        )
-        return
-
-    min_idx = int(valid.argmin(dim=time_dim))
-    max_idx = int(valid.argmax(dim=time_dim))
-
-    min_value = float(valid.isel({time_dim: min_idx}))
-    max_value = float(valid.isel({time_dim: max_idx}))
-
-    min_time = valid[time_dim].isel({time_dim: min_idx}).values
-    max_time = valid[time_dim].isel({time_dim: max_idx}).values
-
-    print(
-        f"  {model:>16s} | {metric} | lead={lead_value}\n"
-        f"    min = {min_value:.6g} @ "
-        f"{np.datetime_as_string(min_time, unit='h')}\n"
-        f"    max = {max_value:.6g} @ "
-        f"{np.datetime_as_string(max_time, unit='h')}"
     )
 
 
