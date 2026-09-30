@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from scipy.stats import gaussian_kde
+from scipy.stats import gaussian_kde, spearmanr
 import torch
 
 import matplotlib.pyplot as plt
@@ -104,12 +104,16 @@ SPLIT_COLORS = {
     "test": "C2",
 }
 
+COMPUTE_PERFORMANCE = True
+
 # ----------------------------------------------------------------------------
 # Performance coloring
 # ----------------------------------------------------------------------------
 
 COLOR_BY_PERFORMANCE = True
+
 PERFORMANCE_METRIC = "rmse"
+
 PERFORMANCE_IMPROVEMENT_UNIT: Literal[
     "Δ",
     "%",
@@ -142,6 +146,55 @@ PERFORMANCE_SCATTER_ALPHA = 0.80
 SCATTER_COLOR = "0.45"
 SCATTER_SIZE = 12
 SCATTER_ALPHA = 0.35
+
+# ----------------------------------------------------------------------------
+# Spatial-structure diagnostic
+# ----------------------------------------------------------------------------
+
+COMPUTE_SPATIAL_STRUCTURE = True
+
+# Field whose spatial structure is compared with performance.
+#
+# "fc":
+#     Structure of the baseline forecast field.
+#
+# "an":
+#     Structure of the verifying analysis field.
+#
+# "error":
+#     Structure of the baseline forecast error:
+#         FC - AN
+#
+# "correction":
+#     Structure of the ML correction:
+#         MLFC - FC
+#
+# "mlfc":
+#     Structure of the corrected forecast field.
+SPATIAL_STRUCTURE_FIELD: Literal[
+    "fc",
+    "an",
+    "error",
+    "correction",
+    "mlfc",
+] = "error"
+
+
+# Spatial-structure statistic.
+#
+# "rms_laplacian":
+#     sqrt(mean(laplacian**2))
+#
+# "mean_abs_laplacian":
+#     mean(abs(laplacian))
+SPATIAL_STRUCTURE_METRIC: Literal[
+    "rms_laplacian",
+    "mean_abs_laplacian",
+] = "mean_abs_laplacian"
+
+
+SPATIAL_STRUCTURE_SCATTER_SIZE = 18
+SPATIAL_STRUCTURE_SCATTER_ALPHA = 0.75
 
 # ============================================================================
 # Month names
@@ -352,48 +405,10 @@ def collect_normalized_field_stats(
         x = x.detach().cpu()
         y = y.detach().cpu()
 
-        mask = (
-            mask
-            .detach()
-            .cpu()
-            .bool()
-        )
+        mask = mask.detach().cpu().bool()
 
-        (
-            mean,
-            std,
-            minimum,
-            maximum,
-        ) = masked_field_stats(
-            x,
-            mask,
-        )
+        mean, std, minimum, maximum = masked_field_stats(x, mask)
 
-        (
-            target_mean,
-            target_std,
-            _,
-            _,
-        ) = masked_field_stats(
-            y,
-            mask,
-        )
-        x = x.detach().cpu()
-        mask = (
-            mask
-            .detach()
-            .cpu()
-            .bool()
-        )
-        (
-            mean,
-            std,
-            minimum,
-            maximum,
-        ) = masked_field_stats(
-            x,
-            mask,
-        )
         time = pd.Timestamp(
             sample_times[idx]
         )
@@ -408,16 +423,384 @@ def collect_normalized_field_stats(
                 "mean": float(mean[channel]),
                 "std": float(std[channel]),
             }
+
             if COMPUTE_EXTREMA:
-                row["min"] = float(
-                    minimum[channel]
-                )
-                row["max"] = float(
-                    maximum[channel]
-                )
+                row["min"] = float(minimum[channel])
+                row["max"] = float(maximum[channel])
+
             rows.append(row)
+
     return pd.DataFrame(rows)
 
+
+# ============================================================================
+# Spatial structure
+# ============================================================================
+
+
+def ensemble_mean_if_present(
+    da: xr.DataArray,
+    ds: xr.Dataset,
+) -> xr.DataArray:
+    """
+    Average the realization dimension when present.
+
+    This keeps the spatial-structure diagnostic consistent with
+    realization_agg=True in the performance metric calculation.
+    """
+    realization_dim = (
+        ds.earthml.guessed_dims.realization
+    )
+
+    if (
+        realization_dim is not None
+        and realization_dim in da.dims
+    ):
+        da = da.mean(
+            dim=realization_dim,
+            skipna=True,
+        )
+
+    return da
+
+
+def squeeze_singleton_leadtime(
+    da: xr.DataArray,
+    ds: xr.Dataset,
+) -> xr.DataArray:
+    """
+    Remove the selected singleton leadtime dimension if still present.
+    """
+    leadtime_dim = (
+        ds.earthml.guessed_dims.leadtime
+    )
+
+    if (
+        leadtime_dim is not None
+        and leadtime_dim in da.dims
+    ):
+        if da.sizes[leadtime_dim] != 1:
+            raise ValueError(
+                "Expected exactly one leadtime for "
+                "spatial-structure calculation, got "
+                f"{da.sizes[leadtime_dim]}."
+            )
+
+        da = da.squeeze(
+            leadtime_dim,
+            drop=True,
+        )
+
+    return da
+
+
+def get_spatial_structure_field(
+    *,
+    fc: xr.Dataset,
+    an: xr.Dataset,
+    mlfc: xr.Dataset,
+    var_fc: str,
+    var_an: str,
+    field: Literal[
+        "fc",
+        "an",
+        "error",
+        "correction",
+        "mlfc",
+    ],
+) -> xr.DataArray:
+    """
+    Build the field whose spatial structure will be measured.
+
+    Forecast-like fields are ensemble averaged before differences are
+    calculated, matching realization_agg=True in the metric calculation.
+    """
+    if var_fc not in fc:
+        raise KeyError(
+            f"{var_fc!r} not found in FC dataset."
+        )
+
+    if var_fc not in mlfc:
+        raise KeyError(
+            f"{var_fc!r} not found in MLFC dataset."
+        )
+
+    if var_an in an:
+        an_var = var_an
+    elif var_fc in an:
+        # Some preprocessing pipelines rename the analysis variable
+        # to the forecast variable name.
+        an_var = var_fc
+    else:
+        raise KeyError(
+            f"Neither {var_an!r} nor {var_fc!r} "
+            "found in analysis dataset."
+        )
+
+    fc_da = ensemble_mean_if_present(
+        fc[var_fc],
+        fc,
+    )
+    an_da = ensemble_mean_if_present(
+        an[an_var],
+        an,
+    )
+    mlfc_da = ensemble_mean_if_present(
+        mlfc[var_fc],
+        mlfc,
+    )
+
+    fc_da = squeeze_singleton_leadtime(
+        fc_da,
+        fc,
+    )
+    an_da = squeeze_singleton_leadtime(
+        an_da,
+        an,
+    )
+    mlfc_da = squeeze_singleton_leadtime(
+        mlfc_da,
+        mlfc,
+    )
+
+    # Align coordinates exactly before arithmetic.
+    fc_da, an_da, mlfc_da = xr.align(
+        fc_da,
+        an_da,
+        mlfc_da,
+        join="exact",
+    )
+
+    if field == "fc":
+        result = fc_da
+
+    elif field == "an":
+        result = an_da
+
+    elif field == "mlfc":
+        result = mlfc_da
+
+    elif field == "error":
+        result = fc_da - an_da
+
+    elif field == "correction":
+        result = mlfc_da - fc_da
+
+    else:
+        raise ValueError(
+            f"Unsupported spatial-structure field: "
+            f"{field!r}"
+        )
+
+    return result
+
+
+def spatial_structure_timeseries(
+    da: xr.DataArray,
+    *,
+    template_ds: xr.Dataset,
+    metric: Literal[
+        "rms_laplacian",
+        "mean_abs_laplacian",
+    ],
+) -> pd.DataFrame:
+    """
+    Calculate a spatial-structure statistic independently for each time.
+
+    The Laplacian is the unscaled five-point grid-cell Laplacian:
+
+        left + right + up + down - 4 * center
+
+    It therefore measures grid-scale roughness, not a physical spherical
+    Laplacian in units of distance^-2.
+
+    This is appropriate for comparing timesteps on the same fixed grid.
+    """
+    latitude_dim = (
+        template_ds
+        .earthml
+        .guessed_dims
+        .latitude
+    )
+    longitude_dim = (
+        template_ds
+        .earthml
+        .guessed_dims
+        .longitude
+    )
+    time_dim = (
+        template_ds
+        .earthml
+        .guessed_dims
+        .time
+    )
+
+    if (
+        latitude_dim is None
+        or latitude_dim not in da.dims
+    ):
+        raise ValueError(
+            "Could not determine latitude dimension "
+            "for spatial-structure calculation."
+        )
+
+    if (
+        longitude_dim is None
+        or longitude_dim not in da.dims
+    ):
+        raise ValueError(
+            "Could not determine longitude dimension "
+            "for spatial-structure calculation."
+        )
+
+    if (
+        time_dim is None
+        or time_dim not in da.dims
+    ):
+        raise ValueError(
+            "Could not determine time dimension "
+            "for spatial-structure calculation."
+        )
+
+    # ------------------------------------------------------------
+    # Five-point Laplacian
+    # ------------------------------------------------------------
+
+    center = da
+
+    north = da.shift({
+        latitude_dim: -1,
+    })
+    south = da.shift({
+        latitude_dim: 1,
+    })
+    east = da.shift({
+        longitude_dim: -1,
+    })
+    west = da.shift({
+        longitude_dim: 1,
+    })
+
+    valid = (
+        np.isfinite(center)
+        & np.isfinite(north)
+        & np.isfinite(south)
+        & np.isfinite(east)
+        & np.isfinite(west)
+    )
+
+    laplacian = (
+        north
+        + south
+        + east
+        + west
+        - 4.0 * center
+    ).where(valid)
+
+    spatial_dims = [
+        latitude_dim,
+        longitude_dim,
+    ]
+
+    # ------------------------------------------------------------
+    # Spatial aggregation
+    # ------------------------------------------------------------
+
+    if metric == "rms_laplacian":
+        structure = np.sqrt(
+            (
+                laplacian**2
+            ).mean(
+                dim=spatial_dims,
+                skipna=True,
+            )
+        )
+
+    elif metric == "mean_abs_laplacian":
+        structure = (
+            np.abs(laplacian)
+            .mean(
+                dim=spatial_dims,
+                skipna=True,
+            )
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported spatial-structure metric: "
+            f"{metric!r}"
+        )
+
+    structure = structure.squeeze(
+        drop=True
+    )
+
+    extra_dims = [
+        dim
+        for dim in structure.dims
+        if dim != time_dim
+    ]
+
+    if extra_dims:
+        raise ValueError(
+            "Spatial-structure metric still contains "
+            "unexpected dimensions: "
+            f"{structure.dims}"
+        )
+
+    result = pd.DataFrame({
+        "time": pd.to_datetime(
+            structure[
+                time_dim
+            ].values
+        ),
+        "spatial_structure": (
+            structure.values
+        ),
+    })
+
+    result["spatial_structure"] = (
+        pd.to_numeric(
+            result["spatial_structure"],
+            errors="coerce",
+        )
+    )
+
+    return (
+        result
+        .drop_duplicates(
+            subset="time"
+        )
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+
+
+def get_spatial_structure_timeseries(
+    *,
+    fc: xr.Dataset,
+    an: xr.Dataset,
+    mlfc: xr.Dataset,
+    s,
+) -> pd.DataFrame:
+    """
+    Build the selected diagnostic field and calculate its structure
+    timeseries.
+    """
+    field = get_spatial_structure_field(
+        fc=fc,
+        an=an,
+        mlfc=mlfc,
+        var_fc=s.var_fc,
+        var_an=s.var_an,
+        field=SPATIAL_STRUCTURE_FIELD,
+    )
+
+    return spatial_structure_timeseries(
+        field,
+        template_ds=fc,
+        metric=SPATIAL_STRUCTURE_METRIC,
+    )
 
 # ============================================================================
 # Metric performance
@@ -555,14 +938,17 @@ def get_metric_improvement_timeseries(
             improvement_unit,
         ),
     )
+
     if len(improvements) != 1:
         raise RuntimeError(
             "Expected exactly one improvement DataArray, "
             f"got {list(improvements)}"
         )
+
     comparison_model, improvement_da = next(
         iter(improvements.items())
     )
+
     print(
         f"Using performance metric: "
         f"{comparison_model}"
@@ -577,16 +963,18 @@ def get_metric_improvement_timeseries(
             leadtime=leadtime
         )
 
-    # Remove singleton dimensions such as period="all".
+    # Remove singleton dimensions such as period="all"
     improvement_da = improvement_da.squeeze(
         drop=True
     )
+
     time_dim = (
         improvement_da
         .earthml
         .guessed_dims
         .time
     )
+
     if time_dim is None:
         raise ValueError(
             "Could not determine time dimension "
@@ -594,17 +982,19 @@ def get_metric_improvement_timeseries(
         )
 
     # After selecting the lead and period, this should be a
-    # one-dimensional timeseries.
+    # one-dimensional timeseries
     extra_dims = [
         dim
         for dim in improvement_da.dims
         if dim != time_dim
     ]
+
     if extra_dims:
         raise ValueError(
             "Metric improvement still contains unexpected "
             f"dimensions: {improvement_da.dims}"
         )
+
     metric_df = pd.DataFrame({
         "time": pd.to_datetime(
             improvement_da[
@@ -615,12 +1005,14 @@ def get_metric_improvement_timeseries(
             improvement_da.values
         ),
     })
+
     metric_df["metric_improvement"] = (
         pd.to_numeric(
             metric_df["metric_improvement"],
             errors="coerce",
         )
     )
+
     metric_df = (
         metric_df
         .drop_duplicates(
@@ -629,6 +1021,49 @@ def get_metric_improvement_timeseries(
         .sort_values("time")
         .reset_index(drop=True)
     )
+
+    # ------------------------------------------------------------
+    # Spatial structure
+    # ------------------------------------------------------------
+
+    if COMPUTE_SPATIAL_STRUCTURE:
+        print(
+            "Calculating spatial structure: "
+            f"{SPATIAL_STRUCTURE_METRIC}("
+            f"{SPATIAL_STRUCTURE_FIELD})..."
+        )
+
+        structure_df = (
+            get_spatial_structure_timeseries(
+                fc=fc,
+                an=an,
+                mlfc=mlfc,
+                s=s,
+            )
+        )
+
+        metric_df = metric_df.merge(
+            structure_df,
+            on="time",
+            how="left",
+            validate="one_to_one",
+        )
+
+        n_missing = int(
+            metric_df[
+                "spatial_structure"
+            ]
+            .isna()
+            .sum()
+        )
+
+        if n_missing:
+            print(
+                f"WARNING: {n_missing}/"
+                f"{len(metric_df)} metric timesteps "
+                "have no spatial-structure value."
+            )
+
     return metric_df
 
 
@@ -748,18 +1183,22 @@ def local_performance_on_grid(
         np.isfinite(values)
         & np.isfinite(performance)
     )
+
     values = values[valid]
     performance = performance[valid]
+
     if len(values) < 2:
         return np.full(
             x_grid.shape,
             np.nan,
             dtype=float,
         )
+
     std = np.std(
         values,
         ddof=0,
     )
+
     if not np.isfinite(std) or std <= 0:
         return np.full(
             x_grid.shape,
@@ -773,46 +1212,36 @@ def local_performance_on_grid(
         * len(values) ** (-1.0 / 5.0)
         * PERFORMANCE_BANDWIDTH_SCALE
     )
+
     if not np.isfinite(bandwidth) or bandwidth <= 0:
         return np.full(
             x_grid.shape,
             np.nan,
             dtype=float,
         )
+
     distance = (
         x_grid[:, None]
         - values[None, :]
     ) / bandwidth
+
     weights = np.exp(
         -0.5 * distance**2
     )
-    denominator = weights.sum(
-        axis=1
-    )
-    numerator = (
-        weights
-        * performance[None, :]
-    ).sum(
-        axis=1
-    )
+
+    denominator = weights.sum(axis=1)
+    numerator = (weights * performance[None, :]).sum(axis=1)
+
     result = np.full(
         x_grid.shape,
         np.nan,
         dtype=float,
     )
-    valid_denominator = (
-        denominator > 1e-12
-    )
-    result[
-        valid_denominator
-    ] = (
-        numerator[
-            valid_denominator
-        ]
-        / denominator[
-            valid_denominator
-        ]
-    )
+
+    valid_denominator = (denominator > 1e-12)
+
+    result[valid_denominator] = numerator[valid_denominator] / denominator[valid_denominator]
+
     return result
 
 
@@ -827,6 +1256,7 @@ def performance_color(
         0.0,
         1.0,
     )
+
     return cmap(normalized)
 
 
@@ -845,21 +1275,18 @@ def fill_density_by_performance(
     """
     if "metric_improvement" not in stats.columns:
         return
+
     test_df = stats[
         stats["split"] == "test"
     ]
+
     if test_df.empty:
         return
-    values = test_df[
-        quantity
-    ].to_numpy(
-        dtype=float
-    )
-    performance = test_df[
-        "metric_improvement"
-    ].to_numpy(
-        dtype=float
-    )
+
+    values = test_df[quantity].to_numpy(dtype=float)
+
+    performance = test_df["metric_improvement"].to_numpy(dtype=float)
+
     local_performance = (
         local_performance_on_grid(
             values,
@@ -867,15 +1294,16 @@ def fill_density_by_performance(
             x_grid,
         )
     )
-    for i in range(
-        len(x_grid) - 1
-    ):
+
+    for i in range(len(x_grid) - 1):
         perf = (
             local_performance[i]
             + local_performance[i + 1]
         ) / 2
+
         if not np.isfinite(perf):
             continue
+
         ax.fill_between(
             x_grid[i:i + 2],
             0.0,
@@ -916,8 +1344,10 @@ def get_performance_extrema(
         "extreme",
         "rank",
     ]
+
     if "metric_improvement" not in stats.columns:
         return pd.DataFrame(columns=columns)
+
     perf = (
         stats.loc[
             stats["metric_improvement"].notna(),
@@ -930,16 +1360,22 @@ def get_performance_extrema(
         .sort_values("metric_improvement")
         .reset_index(drop=True)
     )
+
     if perf.empty:
         return pd.DataFrame(columns=columns)
+
     n_best = max(int(n_best), 0)
     n_worst = max(int(n_worst), 0)
+
     frames = []
     if n_worst > 0:
         worst = perf.head(n_worst).copy()
+
         worst["extreme"] = "worst"
         worst["rank"] = np.arange(1, len(worst) + 1)
+
         frames.append(worst)
+
     if n_best > 0:
         best = (
             perf.tail(n_best)
@@ -949,9 +1385,12 @@ def get_performance_extrema(
             )
             .copy()
         )
+
         best["extreme"] = "best"
         best["rank"] = np.arange(1, len(best) + 1)
+
         frames.append(best)
+
     if not frames:
         return pd.DataFrame(columns=columns)
     return (
@@ -971,7 +1410,9 @@ def format_extreme_annotation(row: pd.Series) -> str:
         if row["extreme"] == "best"
         else "W"
     )
+
     time = pd.Timestamp(row["time"])
+
     return (
         f"{prefix}{int(row['rank'])} "
         f"{time.strftime(ANNOTATION_DATE_FORMAT)}"
@@ -989,26 +1430,33 @@ def distribution_range(
         for values in groups
         if len(values) > 0
     ]
+
     if not arrays:
         return 0.0, 1.0
+
     all_values = np.concatenate(
         arrays
     )
+
     lo = float(
         np.nanmin(all_values)
     )
+
     hi = float(
         np.nanmax(all_values)
     )
+
     if np.isclose(lo, hi):
         padding = max(
             abs(lo) * 0.05,
             1e-6,
         )
+
     else:
         padding = 0.05 * (
             hi - lo
         )
+
     return (
         lo - padding,
         hi + padding,
@@ -1031,22 +1479,27 @@ def histogram_density_on_grid(
         bins=edges,
         density=True,
     )
+
     indices = np.searchsorted(
         edges,
         x_grid,
         side="right",
     ) - 1
+
     result = np.zeros_like(
         x_grid,
         dtype=float,
     )
+
     valid = (
         (indices >= 0)
         & (indices < len(density))
     )
+
     result[valid] = density[
         indices[valid]
     ]
+
     return result
 
 
@@ -1061,15 +1514,17 @@ def add_performance_colorbar(
         norm=norm,
         cmap=cmap,
     )
+
     sm.set_array([])
+
     cbar = fig.colorbar(
         sm,
         ax=ax,
         pad=0.02,
     )
-    unit = (
-        PERFORMANCE_IMPROVEMENT_UNIT
-    )
+
+    unit = PERFORMANCE_IMPROVEMENT_UNIT
+
     cbar.set_label(
         f"{PERFORMANCE_METRIC.upper()} "
         f"improvement ({unit})"
@@ -1237,16 +1692,20 @@ def plot_distribution(
         raise ValueError(
             f"Unsupported plot_type={plot_type!r}"
         )
+
     channel_df = stats[
         stats["channel"] == channel
     ]
+
     available_splits = [
         split
         for split in PLOT_SPLITS
         if split in channel_df["split"].unique()
     ]
+
     if not available_splits:
         return
+
     groups = {
         split: (
             channel_df.loc[
@@ -1258,25 +1717,31 @@ def plot_distribution(
         )
         for split in available_splits
     }
+
     lo, hi = distribution_range(
         list(groups.values())
     )
+
     edges = np.linspace(
         lo,
         hi,
         BINS + 1,
     )
+
     x_grid = np.linspace(
         lo,
         hi,
         KDE_POINTS,
     )
+
     fig, ax = plt.subplots(
         figsize=(8, 5),
     )
+
     # ------------------------------------------------------------
     # Performance color setup
     # ------------------------------------------------------------
+
     performance_norm = (
         make_performance_norm(
             channel_df
@@ -1284,29 +1749,39 @@ def plot_distribution(
         if COLOR_BY_PERFORMANCE
         else None
     )
+
     performance_cmap = plt.get_cmap(
         PERFORMANCE_CMAP
     )
+
     test_density_for_fill = None
+
     # ------------------------------------------------------------
     # Plot each selected split
     # ------------------------------------------------------------
+
     for split in available_splits:
         values = groups[split]
+
         if len(values) == 0:
             continue
+
         color = SPLIT_COLORS[split]
+
         median = float(
             np.median(values)
         )
+
         label = (
             f"{split} "
             f"(n={len(values)}, "
             f"median={median:.3f})"
         )
+
         # --------------------------------------------------------
         # Histogram
         # --------------------------------------------------------
+
         if plot_type in {
             "hist",
             "both",
@@ -1330,10 +1805,13 @@ def plot_distribution(
                 ),
                 zorder=4,
             )
+
         # --------------------------------------------------------
         # KDE
         # --------------------------------------------------------
+
         kde_density = None
+
         if (
             plot_type in {
                 "kde",
@@ -1346,9 +1824,9 @@ def plot_distribution(
             )
         ):
             kde = gaussian_kde(values)
-            kde_density = kde(
-                x_grid
-            )
+
+            kde_density = kde(x_grid)
+
             ax.plot(
                 x_grid,
                 kde_density,
@@ -1357,7 +1835,8 @@ def plot_distribution(
                 label=label,
                 zorder=5,
             )
-        # Plot split median.
+
+        # Plot split median
         ax.axvline(
             median,
             color=color,
@@ -1366,12 +1845,15 @@ def plot_distribution(
             alpha=0.8,
             zorder=3,
         )
+
         # --------------------------------------------------------
         # Save test distribution envelope for performance fill
         # --------------------------------------------------------
+
         if split == "test":
             if kde_density is not None:
                 test_density_for_fill = kde_density
+
             elif plot_type == "hist":
                 test_density_for_fill = (
                     histogram_density_on_grid(
@@ -1380,9 +1862,11 @@ def plot_distribution(
                         x_grid=x_grid,
                     )
                 )
+
     # ------------------------------------------------------------
     # Performance-colored fill
     # ------------------------------------------------------------
+
     if (
         "test" in available_splits
         and COLOR_BY_PERFORMANCE
@@ -1398,6 +1882,7 @@ def plot_distribution(
             cmap=performance_cmap,
             norm=performance_norm,
         )
+
         add_performance_colorbar(
             fig,
             ax,
@@ -1476,7 +1961,7 @@ def plot_distribution(
                 format_extreme_annotation(row),
                 xy=(x, y),
                 occupied=occupied_annotations,
-                rotation=45,
+                rotation=0,
             )
 
     # ------------------------------------------------------------
@@ -1762,6 +2247,349 @@ def plot_mean_vs_std(
     plt.close(fig)
 
 # ============================================================================
+# Spatial structure vs performance
+# ============================================================================
+
+
+def spatial_structure_label() -> str:
+    if SPATIAL_STRUCTURE_METRIC == "rms_laplacian":
+        metric_label = "RMS Laplacian"
+    elif (
+        SPATIAL_STRUCTURE_METRIC
+        == "mean_abs_laplacian"
+    ):
+        metric_label = "Mean |Laplacian|"
+    else:
+        metric_label = (
+            SPATIAL_STRUCTURE_METRIC
+        )
+
+    field_labels = {
+        "fc": "FC",
+        "an": "analysis",
+        "mlfc": "MLFC",
+        "error": "FC - analysis",
+        "correction": "MLFC - FC",
+    }
+
+    field_label = field_labels[
+        SPATIAL_STRUCTURE_FIELD
+    ]
+
+    return (
+        f"{metric_label} ({field_label})"
+    )
+
+
+def plot_spatial_structure_vs_performance(
+    stats: pd.DataFrame,
+    *,
+    output_path: Path,
+    title_suffix: str = "",
+) -> None:
+    """
+    Scatter spatial structure against metric improvement.
+
+    One point is shown per unique test initialization.
+    """
+    required_columns = {
+        "time",
+        "metric_improvement",
+        "spatial_structure",
+    }
+
+    if not required_columns.issubset(
+        stats.columns
+    ):
+        return
+
+    df = (
+        stats.loc[
+            stats["split"] == "test",
+            [
+                "time",
+                "metric_improvement",
+                "spatial_structure",
+            ],
+        ]
+        .drop_duplicates(
+            subset="time"
+        )
+        .copy()
+    )
+
+    df["metric_improvement"] = (
+        pd.to_numeric(
+            df["metric_improvement"],
+            errors="coerce",
+        )
+    )
+    df["spatial_structure"] = (
+        pd.to_numeric(
+            df["spatial_structure"],
+            errors="coerce",
+        )
+    )
+
+    valid = (
+        np.isfinite(
+            df["metric_improvement"]
+        )
+        & np.isfinite(
+            df["spatial_structure"]
+        )
+    )
+
+    df = df.loc[valid].copy()
+
+    if df.empty:
+        return
+
+    fig, ax = plt.subplots(
+        figsize=(7, 6),
+    )
+
+    # ------------------------------------------------------------
+    # Performance colors
+    # ------------------------------------------------------------
+
+    performance_norm = (
+        make_performance_norm(
+            stats
+        )
+    )
+
+    performance_cmap = plt.get_cmap(
+        PERFORMANCE_CMAP
+    )
+
+    if performance_norm is not None:
+        point_colors = [
+            performance_color(
+                value,
+                cmap=performance_cmap,
+                norm=performance_norm,
+            )
+            for value in (
+                df[
+                    "metric_improvement"
+                ].to_numpy(
+                    dtype=float
+                )
+            )
+        ]
+
+        ax.scatter(
+            df["spatial_structure"],
+            df["metric_improvement"],
+            s=SPATIAL_STRUCTURE_SCATTER_SIZE,
+            color=SCATTER_COLOR,
+            alpha=SPATIAL_STRUCTURE_SCATTER_ALPHA,
+            edgecolors="none",
+            zorder=3,
+        )
+
+        add_performance_colorbar(
+            fig,
+            ax,
+            cmap=performance_cmap,
+            norm=performance_norm,
+        )
+
+    else:
+        ax.scatter(
+            df["spatial_structure"],
+            df["metric_improvement"],
+            s=SPATIAL_STRUCTURE_SCATTER_SIZE,
+            color=SCATTER_COLOR,
+            alpha=SPATIAL_STRUCTURE_SCATTER_ALPHA,
+            edgecolors="none",
+            zorder=3,
+        )
+
+    # ------------------------------------------------------------
+    # Zero-improvement reference
+    # ------------------------------------------------------------
+
+    ax.axhline(
+        0.0,
+        linestyle="--",
+        linewidth=1.0,
+        color="black",
+        alpha=0.7,
+        zorder=2,
+    )
+
+    # ------------------------------------------------------------
+    # Rank correlation
+    # ------------------------------------------------------------
+
+    rho = np.nan
+    p_value = np.nan
+
+    if len(df) >= 2:
+        correlation = spearmanr(
+            df[
+                "spatial_structure"
+            ].to_numpy(
+                dtype=float
+            ),
+            df[
+                "metric_improvement"
+            ].to_numpy(
+                dtype=float
+            ),
+            nan_policy="omit",
+        )
+
+        rho = float(
+            correlation.statistic
+        )
+        p_value = float(
+            correlation.pvalue
+        )
+
+    correlation_lines = [
+        f"n = {len(df)}",
+    ]
+
+    if np.isfinite(rho):
+        correlation_lines.append(
+            rf"Spearman $\rho$ = {rho:.3f}"
+        )
+
+    if np.isfinite(p_value):
+        correlation_lines.append(
+            f"p = {p_value:.3g}"
+        )
+
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(
+            correlation_lines
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8,
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": "white",
+            "edgecolor": "0.6",
+            "linewidth": 0.5,
+            "alpha": 0.85,
+        },
+        zorder=6,
+    )
+
+    # ------------------------------------------------------------
+    # Best/worst performance annotations
+    # ------------------------------------------------------------
+
+    extrema = get_performance_extrema(
+        stats,
+        n_best=ANNOTATE_BEST_TIMESTEPS,
+        n_worst=ANNOTATE_WORST_TIMESTEPS,
+    )
+
+    occupied_annotations = []
+
+    for _, row in extrema.iterrows():
+        time = pd.Timestamp(
+            row["time"]
+        )
+
+        point = df[
+            df["time"] == time
+        ]
+
+        if point.empty:
+            continue
+
+        x = float(
+            point[
+                "spatial_structure"
+            ].iloc[0]
+        )
+        y = float(
+            point[
+                "metric_improvement"
+            ].iloc[0]
+        )
+
+        if not (
+            np.isfinite(x)
+            and np.isfinite(y)
+        ):
+            continue
+
+        if performance_norm is not None:
+            marker_color = (
+                performance_color(
+                    y,
+                    cmap=performance_cmap,
+                    norm=performance_norm,
+                )
+            )
+        else:
+            marker_color = SCATTER_COLOR
+
+        # Thin black ring around annotated points.
+        ax.plot(
+            x,
+            y,
+            marker="o",
+            linestyle="none",
+            markersize=5.0,
+            markerfacecolor=marker_color,
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            zorder=7,
+        )
+
+        annotate_nonoverlapping(
+            ax,
+            format_extreme_annotation(
+                row
+            ),
+            xy=(x, y),
+            occupied=occupied_annotations,
+            rotation=0,
+        )
+
+    # ------------------------------------------------------------
+    # Labels
+    # ------------------------------------------------------------
+
+    unit = (
+        PERFORMANCE_IMPROVEMENT_UNIT
+    )
+
+    ax.set_xlabel(
+        spatial_structure_label()
+    )
+
+    ax.set_ylabel(
+        f"{PERFORMANCE_METRIC.upper()} "
+        f"improvement ({unit})"
+    )
+
+    ax.set_title(
+        "Performance vs spatial structure"
+        f"{title_suffix}"
+    )
+
+    fig.tight_layout()
+
+    fig.savefig(
+        output_path,
+        dpi=200,
+    )
+
+    plt.close(fig)
+
+# ============================================================================
 # Monthly plots
 # ============================================================================
 
@@ -1769,38 +2597,25 @@ def plot_monthly_stats(
     stats: pd.DataFrame,
     output_dir: Path,
 ) -> None:
-    monthly_output = (
-        output_dir
-        / "monthly"
-    )
-    monthly_output.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-    channels = sorted(
-        stats[
-            "channel"
-        ].unique()
-    )
-    months = sorted(
-        stats[
-            "month"
-        ]
-        .dropna()
-        .unique()
-    )
+    monthly_output = output_dir / "monthly"
+
+    monthly_output.mkdir(parents=True, exist_ok=True)
+
+    channels = sorted(stats["channel"].unique())
+
+    months = sorted(stats["month"].dropna().unique())
+
     for month_value in months:
-        month = int(
-            month_value
-        )
+        month = int(month_value)
         month_stats = stats[
             stats["month"] == month
         ]
+
         if month_stats.empty:
             continue
-        month_name = MONTH_NAMES[
-            month
-        ]
+
+        month_name = MONTH_NAMES[month]
+
         month_dir = (
             monthly_output
             / (
@@ -1808,13 +2623,33 @@ def plot_monthly_stats(
                 f"{month_name.lower()}"
             )
         )
-        month_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        title_suffix = (
-            f" — {month_name}"
-        )
+
+        month_dir.mkdir(parents=True, exist_ok=True)
+
+        title_suffix = f" — {month_name}"
+
+        if (
+            COMPUTE_SPATIAL_STRUCTURE
+            and "spatial_structure"
+            in month_stats.columns
+            and "metric_improvement"
+            in month_stats.columns
+        ):
+            plot_spatial_structure_vs_performance(
+                month_stats,
+                title_suffix=title_suffix,
+                output_path=(
+                    month_dir
+                    / (
+                        f"{PERFORMANCE_METRIC}"
+                        "_improvement_vs_"
+                        f"{SPATIAL_STRUCTURE_FIELD}_"
+                        f"{SPATIAL_STRUCTURE_METRIC}"
+                        ".png"
+                    )
+                ),
+            )
+
         for channel in channels:
             channel_stats = (
                 month_stats[
@@ -1823,8 +2658,10 @@ def plot_monthly_stats(
                     ] == channel
                 ]
             )
+
             if channel_stats.empty:
                 continue
+
             plot_distribution(
                 month_stats,
                 quantity="mean",
@@ -1843,6 +2680,7 @@ def plot_monthly_stats(
                     )
                 ),
             )
+
             plot_distribution(
                 month_stats,
                 quantity="std",
@@ -1861,6 +2699,7 @@ def plot_monthly_stats(
                     )
                 ),
             )
+
             plot_mean_vs_std(
                 month_stats,
                 channel=channel,
@@ -1888,14 +2727,17 @@ def plot_stats(
         parents=True,
         exist_ok=True,
     )
+
     channels = sorted(
         stats[
             "channel"
         ].unique()
     )
+
     # ------------------------------------------------------------
     # Full-period plots
     # ------------------------------------------------------------
+
     for channel in channels:
         plot_distribution(
             stats,
@@ -1912,6 +2754,7 @@ def plot_stats(
                 )
             ),
         )
+
         plot_distribution(
             stats,
             quantity="std",
@@ -1927,6 +2770,7 @@ def plot_stats(
                 )
             ),
         )
+
         plot_mean_vs_std(
             stats,
             channel=channel,
@@ -1938,9 +2782,33 @@ def plot_stats(
                 )
             ),
         )
+
+    # ------------------------------------------------------------
+    # Spatial structure vs performance
+    # ------------------------------------------------------------
+
+    if (
+        COMPUTE_SPATIAL_STRUCTURE
+        and "spatial_structure" in stats.columns
+        and "metric_improvement" in stats.columns
+    ):
+        plot_spatial_structure_vs_performance(
+            stats,
+            output_path=(
+                output_dir
+                / (
+                    f"{PERFORMANCE_METRIC}_improvement"
+                    "_vs_"
+                    f"{SPATIAL_STRUCTURE_FIELD}_"
+                    f"{SPATIAL_STRUCTURE_METRIC}.png"
+                )
+            ),
+        )
+
     # ------------------------------------------------------------
     # Monthly
     # ------------------------------------------------------------
+
     if PLOT_MONTHLY:
         plot_monthly_stats(
             stats,
@@ -1978,11 +2846,15 @@ def print_summary(
             ]
         )
     )
+
     print()
+
     print(
         summary.to_string()
     )
+
     print()
+
     if (
         "metric_improvement"
         in stats.columns
@@ -2000,12 +2872,14 @@ def print_summary(
                 subset="time"
             )
         )
+
         if not test_perf.empty:
             print(
                 f"{PERFORMANCE_METRIC.upper()} "
                 f"improvement "
                 f"({PERFORMANCE_IMPROVEMENT_UNIT}):"
             )
+
             print(
                 test_perf[
                     "metric_improvement"
@@ -2013,6 +2887,75 @@ def print_summary(
                 .describe()
                 .to_string()
             )
+
+            print()
+
+    if (
+        "metric_improvement" in stats.columns
+        and "spatial_structure" in stats.columns
+    ):
+        structure_perf = (
+            stats.loc[
+                stats["split"] == "test",
+                [
+                    "time",
+                    "metric_improvement",
+                    "spatial_structure",
+                ],
+            ]
+            .drop_duplicates(
+                subset="time"
+            )
+            .dropna()
+        )
+
+        if not structure_perf.empty:
+            print(
+                "Spatial structure:"
+            )
+            print(
+                f"  field  = "
+                f"{SPATIAL_STRUCTURE_FIELD}"
+            )
+            print(
+                f"  metric = "
+                f"{SPATIAL_STRUCTURE_METRIC}"
+            )
+
+            print(
+                structure_perf[
+                    "spatial_structure"
+                ]
+                .describe()
+                .to_string()
+            )
+
+            if len(structure_perf) >= 2:
+                correlation = spearmanr(
+                    structure_perf[
+                        "spatial_structure"
+                    ],
+                    structure_perf[
+                        "metric_improvement"
+                    ],
+                    nan_policy="omit",
+                )
+
+                print()
+                print(
+                    "Spatial structure vs "
+                    f"{PERFORMANCE_METRIC.upper()} "
+                    "improvement:"
+                )
+                print(
+                    f"  Spearman rho = "
+                    f"{float(correlation.statistic):.4f}"
+                )
+                print(
+                    f"  p-value      = "
+                    f"{float(correlation.pvalue):.4g}"
+                )
+
             print()
 
 # ============================================================================
@@ -2026,11 +2969,13 @@ def process_leadtime(
     print(
         "=" * 80
     )
+
     print(
         f"{s.output_name}: "
         f"leadtime={leadtime} "
         f"{s.leadtime_unit}"
     )
+
     datasets = (
         make_train_test_datasets_for_leadtime(
             forecast_ds_path=(
@@ -2090,15 +3035,11 @@ def process_leadtime(
             defer_dataset_creation=False,
         )
     )
-    train_dataset = datasets[
-        "train"
-    ]
-    val_dataset = datasets[
-        "val"
-    ]
-    test_dataset = datasets[
-        "test"
-    ]
+
+    train_dataset = datasets["train"]
+    val_dataset = datasets["val"]
+    test_dataset = datasets["test"]
+
     if not isinstance(
         train_dataset,
         XarrayDataset,
@@ -2107,6 +3048,7 @@ def process_leadtime(
             "Expected XarrayDataset "
             "for training data"
         )
+
     if (
         val_dataset is not None
         and not isinstance(
@@ -2118,6 +3060,7 @@ def process_leadtime(
             "Expected XarrayDataset "
             "for validation data"
         )
+
     if not isinstance(
         test_dataset,
         XarrayDataset,
@@ -2126,36 +3069,47 @@ def process_leadtime(
             "Expected XarrayDataset "
             "for test data"
         )
+
     # ------------------------------------------------------------
     # Fit on TRAIN only
     # ------------------------------------------------------------
+
     normalize_input = (
         make_input_normalizer(
             s,
             train_dataset,
         )
     )
+
     # ------------------------------------------------------------
     # Apply same transform to every split
     # ------------------------------------------------------------
+
     train_dataset.transform_x = (
         normalize_input
     )
+
     if val_dataset is not None:
         val_dataset.transform_x = (
             normalize_input
         )
+
     test_dataset.transform_x = (
         normalize_input
     )
-    # Target transformation not needed.
+
+    # Target transformation not needed
     train_dataset.transform_y = None
+
     if val_dataset is not None:
         val_dataset.transform_y = None
+
     test_dataset.transform_y = None
+
     # ------------------------------------------------------------
     # Normalized-field statistics
     # ------------------------------------------------------------
+
     frames = [
         collect_normalized_field_stats(
             train_dataset,
@@ -2163,6 +3117,7 @@ def process_leadtime(
             leadtime=leadtime,
         )
     ]
+
     if val_dataset is not None:
         frames.append(
             collect_normalized_field_stats(
@@ -2171,6 +3126,7 @@ def process_leadtime(
                 leadtime=leadtime,
             )
         )
+
     frames.append(
         collect_normalized_field_stats(
             test_dataset,
@@ -2178,19 +3134,23 @@ def process_leadtime(
             leadtime=leadtime,
         )
     )
+
     stats = pd.concat(
         frames,
         ignore_index=True,
     )
+
     # ------------------------------------------------------------
     # Automatic metric performance
     # ------------------------------------------------------------
-    if COLOR_BY_PERFORMANCE:
+
+    if COMPUTE_PERFORMANCE:
         print(
             f"Calculating "
             f"{PERFORMANCE_METRIC} "
             f"improvement..."
         )
+
         metric_df = (
             get_metric_improvement_timeseries(
                 s,
@@ -2201,10 +3161,12 @@ def process_leadtime(
                 ),
             )
         )
+
         stats = add_metric_performance(
             stats,
             metric_df,
         )
+
     return stats
 
 # ============================================================================
@@ -2218,14 +3180,17 @@ def main() -> None:
             **FILTERS,
         )
     )
+
     if not settings:
         raise RuntimeError(
             "No matching experiments found."
         )
+
     print(
         f"Found {len(settings)} "
         "matching experiment(s)."
     )
+
     for s in settings:
         experiment_output = (
             OUTPUT_ROOT
@@ -2233,10 +3198,12 @@ def main() -> None:
             / "normalized"
             / "input_diagnostics"
         )
+
         experiment_output.mkdir(
             parents=True,
             exist_ok=True,
         )
+
         leadtimes = (
             [
                 int(x)
@@ -2245,39 +3212,47 @@ def main() -> None:
             if LEADTIMES is None
             else LEADTIMES
         )
+
         all_stats = []
+
         for leadtime in leadtimes:
             stats = process_leadtime(
                 s,
                 leadtime,
             )
+
             all_stats.append(
                 stats
             )
+
             leadtime_output = (
                 experiment_output
                 / f"leadtime_{leadtime}"
             )
+
             leadtime_output.mkdir(
                 parents=True,
                 exist_ok=True,
             )
+
             stats.to_csv(
                 leadtime_output
                 / "field_stats.csv",
                 index=False,
             )
+
             plot_stats(
                 stats,
                 leadtime_output,
             )
-            print_summary(
-                stats
-            )
+
+            print_summary(stats)
+
         all_stats = pd.concat(
             all_stats,
             ignore_index=True,
         )
+
         all_stats.to_csv(
             experiment_output
             / "field_stats_all_leadtimes.csv",
