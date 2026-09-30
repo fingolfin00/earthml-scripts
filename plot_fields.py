@@ -78,17 +78,16 @@ def main() -> None:
     tick_size = None
     dpi = 300
 
-    plot_title_strftime = "%m.%Y" # seasonal
-    # plot_title_strftime = "%d.%m.%Y %H:%M" # weather
+    # plot_title_strftime = "%m.%Y" # seasonal
+    plot_title_strftime = "%d.%m.%Y %H:%M" # weather
 
-    regenerate_plots = True
+    regenerate_plots = False
 
     # ==========================================================
     # Spatial subregion
     # ==========================================================
 
-    # locations = CITY_LOCATIONS
-    locations = SEA_LOCATIONS
+    locations = CITY_LOCATIONS | SEA_LOCATIONS
 
     plot_locations = [
         # Cities
@@ -102,7 +101,7 @@ def main() -> None:
         # Ocean
         # "gulfstream",
     ]
-    plot_locations = locations
+    # plot_locations = locations
 
     highlighted_regions = [
         {
@@ -199,6 +198,11 @@ def main() -> None:
     # )
 
     inference_period = None
+    # inference_period = ("2025-01-01", "2025-05-12")
+    # inference_period = ("2025-01-01T00:00:00", "2025-01-01T00:00:00")
+    # inference_period = ("2025-05-01T00:00:00", "2025-05-01T00:00:00")
+    # inference_period = ("2025-01-01T00:00:00", "2025-09-30T12:00:00")
+
 
     # Individual initialization times.
     #
@@ -252,24 +256,19 @@ def main() -> None:
         # "2024-05-01",
         # "2024-08-01",
         # "2024-12-31", # last val
-        # "2025-01-01", # first test
+        # "2025-01-01T00:00:00", # first test
         # "2025-03-01",
-        # "2025-05-01",
+        # "2025-02-13T00:00:00", # worse t2m RMSE change
+        # "2025-03-08T00:00:00", # best t2m RMSE change
+        # "2025-05-01T00:00:00",
         # "2025-08-01",
         # "2025-09-30" # last test
     ]
 
-    # Individual lead times.
-    #
-    # None -> all experiment lead times.
-
-    wanted_leadtimes = None
-
-    # Seasonal:
-    # wanted_leadtimes = [1, 2, 3, 4, 5, 6]
-
-    # Weather:
-    # wanted_leadtimes = [24, 72]
+    # Individual lead times
+    # wanted_leadtimes = None # all experiment leadtimes
+    # wanted_leadtimes = [1, 2, 3, 4, 5, 6] # seasonal
+    wanted_leadtimes = [72] # weather
 
     # ==========================================================
     # Data processing
@@ -759,33 +758,49 @@ def main() -> None:
                 "Could not determine forecast time dimension."
             )
 
+        selected_leadtimes = (
+            s.leadtimes
+            if wanted_leadtimes is None
+            else wanted_leadtimes
+        )
+
+        missing_leadtimes = (
+            set(selected_leadtimes)
+            - set(s.leadtimes)
+        )
+
+        if missing_leadtimes:
+            raise ValueError(
+                f"Requested leadtimes {sorted(missing_leadtimes)} "
+                f"are not available. "
+                f"Available leadtimes: {list(s.leadtimes)}"
+            )
+
         fc = fc.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
 
         an = an.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
 
         fc_clim = fc_clim.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
 
         an_clim = an_clim.sel(
-            {leadtime_dim: s.leadtimes}
+            {leadtime_dim: selected_leadtimes}
         )
 
         if mlfc is not None:
             mlfc = mlfc.sel(
-                {leadtime_dim: s.leadtimes}
+                {leadtime_dim: selected_leadtimes}
             )
 
         if mlfc_clim is not None:
-            mlfc_clim[s.var_fc] = _convert_kelvin_to_celsius(
-                mlfc_clim[s.var_fc],
-                var=s.var_fc,
+            mlfc_clim = mlfc_clim.sel(
+                {leadtime_dim: selected_leadtimes}
             )
-
 
         # ======================================================
         # Unit conversion
@@ -941,25 +956,7 @@ def main() -> None:
                     f"{missing_times}"
                 )
 
-        # ======================================================
-        # Select leads
-        # ======================================================
-
-        available_leads = (
-            fc[leadtime_dim].values
-        )
-
-        if wanted_leadtimes is None:
-            selected_leads = (
-                available_leads
-            )
-
-        else:
-            selected_leads = [
-                lead
-                for lead in wanted_leadtimes
-                if lead in available_leads
-            ]
+        selected_leads = fc[leadtime_dim].values
 
         # ======================================================
         # Plot
