@@ -104,8 +104,12 @@ def make_normalizers(s, train_dataset: XarrayDataset):
         dim="x",
     )
 
-    # Keep identical to the current NOAA-copy training behavior.
-    normalize_target = deepcopy(normalize_input)
+    normalize_target = norm_class(
+        mode=s.normalization_mode,
+    ).fit(
+        train_dataset,
+        dim="y",
+    )
 
     return normalize_input, normalize_target
 
@@ -423,7 +427,8 @@ def infer_setting(s) -> None:
 
         dataloader = DataLoader(
             test_dataset,
-            batch_size=s.batch_size,
+            batch_size=1,
+            # batch_size=s.batch_size,
             num_workers=0,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
