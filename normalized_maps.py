@@ -11,7 +11,6 @@ from earthml.plots import plot_field_map, safe_label
 
 from train import make_train_test_datasets_for_leadtime
 
-
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -32,17 +31,22 @@ FILTERS = dict(
     region_name="ConUS",
 )
 
-# None -> all experiment leadtimes.
+REGENERATE_PLOTS = True
+
+# None -> all experiment leadtimes
 LEADTIMES: list[int] | None = [72]
 
-# Split whose normalized network inputs should be plotted.
+# Split whose normalized network inputs should be plotted
 PLOT_SPLIT: Literal["train", "val", "test"] = "test"
 
-# Initialization times to plot. None -> all times in the selected split.
+# Initialization times to plot. None -> all times in the selected split
 WANTED_TIMES: list[str] | None = [
     "2025-03-08T00:00:00", # B1 t2m 72h
     "2025-02-02T00:00:00", # B4 t2m 72h, near W3 in stb-vs-mean scatter
+    "2025-02-13T00:00:00", # W1 t2m 72h
+    "2025-01-03T00:00:00", # W2 t2m 72h
     "2025-02-06T00:00:00", # W3 t2m 72h
+    "2025-02-18T00:00:00", # W4 t2m 72h
 ]
 
 # If one initialization corresponds to multiple dataset samples, for example
@@ -58,6 +62,13 @@ PLOT_NORMALIZED_CORRECTED = True
 PLOT_INPUT_TARGET_DIFFERENCE = True
 PLOT_CORRECTED_TARGET_DIFFERENCE = True
 
+PLOT_FC_SQUARED_ERROR = True
+PLOT_MLFC_SQUARED_ERROR = True
+PLOT_SQUARED_ERROR_IMPROVEMENT = True
+
+PLOT_ML_CORRECTION = True
+PLOT_IDEAL_CORRECTION = True
+
 # Channels to plot. None -> all available physical channels.
 # Extra input encoder channels are intentionally excluded.
 PLOT_INPUT_CHANNELS: list[int] | None = None
@@ -67,37 +78,58 @@ PLOT_TARGET_CHANNELS: list[int] | None = None
 LAT_RANGE: tuple[float, float] | None = None
 LON_RANGE: tuple[float, float] | None = None
 
+# Central degradation box
+# LAT_RANGE = (30, 45)
+# LON_RANGE = (-108, -90)
+
 # Plot appearance.
 PLOT_TYPE = "pcolormesh"
 PLOT_FIGSIZE = (12, 8)
-PLOT_CMAP = "cmocean:balance"
+
+# PLOT_CMAP = "bids:viridis_r"
+# PLOT_CMAP = "cmasher:torch_r"
+# PLOT_CMAP = "google:turbo"
+# PLOT_CMAP = "yorick:ncar_r" # interesting
+# PLOT_CMAP = "chrisluts:I_Red"
+PLOT_CMAP = "cmasher:sunburst_r"
+
+PLOT_CMAP_CENTERED = "cmocean:balance"
+
 PLOT_LEVELS = 21
 PLOT_TITLE = True
 PLOT_LABELS = True
+
 TITLE_SIZE = None
 LABEL_SIZE = None
 TICK_SIZE = None
+
 DPI = 300
-REGENERATE_PLOTS = False
 
 # Normalized fields are naturally centered around zero.
 # Input and target scales are calculated independently.
 NORMALIZED_INPUT_VMAX: float | None = None
-NORMALIZED_TARGET_VMAX: float | None = None
 NORMALIZED_INPUT_QUANTILE = 0.99
+
+NORMALIZED_TARGET_VMAX: float | None = None
 NORMALIZED_TARGET_QUANTILE = 0.99
+
 NORMALIZED_CORRECTED_VMAX: float | None = None
 NORMALIZED_CORRECTED_QUANTILE = 0.99
+
 NORMALIZED_DIFFERENCE_VMAX: float | None = None
 NORMALIZED_DIFFERENCE_QUANTILE = 0.99
 
-PLOT_TITLE_STRFTIME = "%d.%m.%Y %H:%M"
+NORMALIZED_SQUARED_ERROR_VMAX: float | None = None
+NORMALIZED_SQUARED_ERROR_QUANTILE = 0.99
 
+NORMALIZED_SQUARED_ERROR_IMPROVEMENT_VMAX: float | None = None
+NORMALIZED_SQUARED_ERROR_IMPROVEMENT_QUANTILE = 0.99
+
+PLOT_TITLE_STRFTIME = "%d.%m.%Y %H:%M"
 
 # ============================================================================
 # Normalization
 # ============================================================================
-
 
 def get_normalizer_class(s):
     if s.normalization == "monthly":
@@ -150,11 +182,110 @@ def make_target_normalizer(
         dim="y",
     )
 
+def normalized_fc_in_target_space(
+    s,
+    dataset: XarrayDataset,
+    normalize_target,
+    *,
+    sample_index: int,
+    init_time: pd.Timestamp,
+    leadtime: int,
+    channels: list[int] | None,
+) -> dict[int, xr.DataArray]:
+    if s.target_mode != "analysis":
+        raise ValueError(
+            "Ideal-correction maps currently require target_mode='analysis'."
+        )
+
+    da = dataset.input_ds[s.var_fc]
+
+    time_dim = da.earthml.guessed_dims.time
+    lead_dim = da.earthml.guessed_dims.leadtime
+
+    if time_dim is None:
+        raise ValueError("Could not determine forecast time dimension.")
+
+    da = da.sel({time_dim: np.datetime64(init_time)})
+
+    if lead_dim is not None and lead_dim in da.dims:
+        da = da.sel({lead_dim: leadtime})
+
+    da = da.squeeze(drop=True)
+
+    lat_dim = dataset.target_ds.earthml.guessed_dims.latitude
+    lon_dim = dataset.target_ds.earthml.guessed_dims.longitude
+
+    da = da.sel({
+        lat_dim: dataset.target_ds[lat_dim],
+        lon_dim: dataset.target_ds[lon_dim],
+    })
+
+    realization_dim = da.earthml.guessed_dims.realization
+    if realization_dim is not None and realization_dim in da.dims:
+        if dataset.y.shape[1] == 1:
+            da = da.mean(realization_dim, skipna=True)
+        else:
+            da = da.transpose(realization_dim, lat_dim, lon_dim)
+
+    values = np.asarray(da.values)
+
+    if values.ndim == 2:
+        values = values[None, ...]
+    elif values.ndim != 3:
+        raise ValueError(
+            "Expected FC field to resolve to (C,H,W), got "
+            f"shape={values.shape}, dims={da.dims}"
+        )
+
+    tensor = torch.as_tensor(values, dtype=dataset.y.dtype)
+    month = int(dataset.months[sample_index].item())
+    tensor = normalize_target(
+        tensor,
+        months=month,
+    ).detach().float().cpu()
+
+    target_mask = dataset.y_mask[sample_index].detach().cpu().bool()
+
+    selected_channels = (
+        list(range(tensor.shape[0]))
+        if channels is None
+        else channels
+    )
+
+    latitude = np.asarray(dataset.target_ds[lat_dim].values)
+    longitude = np.asarray(dataset.target_ds[lon_dim].values)
+
+    fields = {}
+
+    for channel in selected_channels:
+        arr = tensor[channel].numpy().astype(float, copy=True)
+        valid = target_mask[channel].numpy()
+        arr[~valid] = np.nan
+
+        fields[channel] = subset_spatially(
+            xr.DataArray(
+                arr,
+                dims=(lat_dim, lon_dim),
+                coords={
+                    lat_dim: latitude,
+                    lon_dim: longitude,
+                },
+                name="normalized_fc_target_space",
+                attrs={
+                    "units": "normalized",
+                    "long_name": (
+                        f"FC in target-normalized space "
+                        f"channel {channel}"
+                    ),
+                },
+            )
+        )
+
+    return fields
 
 # ============================================================================
 # Dataset helpers
 # ============================================================================
-
 
 def dataset_kwargs_from_settings(s) -> dict:
     return {
@@ -335,11 +466,9 @@ def select_sample_indices(
 
     return indices
 
-
 # ============================================================================
 # Tensor -> xarray field
 # ============================================================================
-
 
 def normalized_sample_fields(
     dataset: XarrayDataset,
@@ -621,6 +750,66 @@ def normalized_corrected_fields(
 
     return fields
 
+# ============================================================================
+# Subtraction helpers
+# ============================================================================
+
+def square_field_collection(
+    fields: dict[int, xr.DataArray],
+    *,
+    name: str,
+) -> dict[int, xr.DataArray]:
+    """Square every field in a channel collection."""
+    result: dict[int, xr.DataArray] = {}
+
+    for channel, field in fields.items():
+        squared = (field ** 2).copy()
+        squared.name = name
+        squared.attrs = {
+            "units": "normalized squared error",
+            "long_name": name.replace("_", " "),
+        }
+        result[channel] = squared
+
+    return result
+
+
+def subtract_aligned_field_collections(
+    lhs: dict[int, xr.DataArray],
+    rhs: dict[int, xr.DataArray],
+    *,
+    name: str,
+    units: str,
+) -> dict[int, xr.DataArray]:
+    """Subtract matching channel collections."""
+    if not lhs or not rhs:
+        return {}
+
+    if set(lhs) != set(rhs):
+        raise ValueError(
+            f"Cannot align channels for {name}: "
+            f"lhs={list(lhs)}, rhs={list(rhs)}."
+        )
+
+    result: dict[int, xr.DataArray] = {}
+
+    for channel in lhs:
+        a, b = xr.align(
+            lhs[channel],
+            rhs[channel],
+            join="exact",
+        )
+
+        diff = (a - b).copy()
+        diff.name = name
+        diff.attrs = {
+            "units": units,
+            "long_name": name.replace("_", " "),
+        }
+        result[channel] = diff
+
+    return result
+
 
 def subtract_field_collections(
     lhs: dict[int, xr.DataArray],
@@ -663,6 +852,7 @@ def subtract_field_collections(
 
     return result
 
+
 def subset_spatially(field: xr.DataArray) -> xr.DataArray:
     """Apply optional latitude/longitude plotting subset."""
     lat_dim = field.earthml.guessed_dims.latitude
@@ -697,11 +887,9 @@ def _coord_slice(
 
     return slice(max(start, end), min(start, end))
 
-
 # ============================================================================
 # Plot scaling
 # ============================================================================
-
 
 def get_symmetric_limit(
     fields: list[xr.DataArray],
@@ -733,11 +921,9 @@ def get_symmetric_limit(
 
     return vmax
 
-
 # ============================================================================
 # Plot one experiment / leadtime
 # ============================================================================
-
 
 def plot_normalized_leadtime(
     s,
@@ -759,7 +945,10 @@ def plot_normalized_leadtime(
     need_corrected = (
         PLOT_NORMALIZED_CORRECTED
         or PLOT_CORRECTED_TARGET_DIFFERENCE
+        or PLOT_MLFC_SQUARED_ERROR
+        or PLOT_SQUARED_ERROR_IMPROVEMENT
     )
+
     corrected_ds = (
         load_corrected_dataset(s, leadtime)
         if need_corrected
@@ -797,11 +986,20 @@ def plot_normalized_leadtime(
         sample_within_init = occurrence_counter.get(init_time, 0)
         occurrence_counter[init_time] = sample_within_init + 1
 
-        need_input = PLOT_NORMALIZED_INPUT or PLOT_INPUT_TARGET_DIFFERENCE
+        need_input = (
+            PLOT_NORMALIZED_INPUT
+            or PLOT_INPUT_TARGET_DIFFERENCE
+            or PLOT_FC_SQUARED_ERROR
+            or PLOT_SQUARED_ERROR_IMPROVEMENT
+        )
+
         need_target = (
             PLOT_NORMALIZED_TARGET
             or PLOT_INPUT_TARGET_DIFFERENCE
             or PLOT_CORRECTED_TARGET_DIFFERENCE
+            or PLOT_FC_SQUARED_ERROR
+            or PLOT_MLFC_SQUARED_ERROR
+            or PLOT_SQUARED_ERROR_IMPROVEMENT
         )
 
         input_fields = (
@@ -814,6 +1012,7 @@ def plot_normalized_leadtime(
             if need_input
             else {}
         )
+
         target_fields = (
             normalized_sample_fields(
                 dataset,
@@ -824,6 +1023,32 @@ def plot_normalized_leadtime(
             if need_target
             else {}
         )
+
+        fc_target_fields = (
+            normalized_fc_in_target_space(
+                s,
+                dataset,
+                normalize_target,
+                sample_index=sample_index,
+                init_time=init_time,
+                leadtime=leadtime,
+                channels=PLOT_TARGET_CHANNELS,
+            )
+            if PLOT_IDEAL_CORRECTION
+            else {}
+        )
+
+        ideal_correction = (
+            subtract_aligned_field_collections(
+                target_fields,
+                fc_target_fields,
+                name="normalized_ideal_correction",
+                units="normalized correction",
+            )
+            if PLOT_IDEAL_CORRECTION
+            else {}
+        )
+
         corrected_fields = (
             normalized_corrected_fields(
                 s,
@@ -839,6 +1064,17 @@ def plot_normalized_leadtime(
             else {}
         )
 
+        ml_correction = (
+            subtract_aligned_field_collections(
+                corrected_fields,
+                fc_target_fields,
+                name="normalized_actual_correction",
+                units="normalized correction",
+            )
+            if PLOT_ML_CORRECTION
+            else {}
+        )
+
         input_target_diff = (
             subtract_field_collections(
                 input_fields,
@@ -848,6 +1084,7 @@ def plot_normalized_leadtime(
             if PLOT_INPUT_TARGET_DIFFERENCE
             else {}
         )
+
         corrected_target_diff = (
             subtract_field_collections(
                 corrected_fields,
@@ -858,6 +1095,41 @@ def plot_normalized_leadtime(
             else {}
         )
 
+        fc_squared_error = (
+            square_field_collection(
+                input_target_diff,
+                name="normalized_fc_squared_error",
+            )
+            if (
+                PLOT_FC_SQUARED_ERROR
+                or PLOT_SQUARED_ERROR_IMPROVEMENT
+            )
+            else {}
+        )
+
+        mlfc_squared_error = (
+            square_field_collection(
+                corrected_target_diff,
+                name="normalized_mlfc_squared_error",
+            )
+            if (
+                PLOT_MLFC_SQUARED_ERROR
+                or PLOT_SQUARED_ERROR_IMPROVEMENT
+            )
+            else {}
+        )
+
+        squared_error_improvement = (
+            subtract_aligned_field_collections(
+                fc_squared_error,
+                mlfc_squared_error,
+                name="normalized_squared_error_improvement",
+                units="normalized squared error improvement",
+            )
+            if PLOT_SQUARED_ERROR_IMPROVEMENT
+            else {}
+        )
+
         selected_samples.append(
             (
                 sample_index,
@@ -865,9 +1137,15 @@ def plot_normalized_leadtime(
                 sample_within_init,
                 input_fields,
                 target_fields,
+                fc_target_fields,
+                ideal_correction,
                 corrected_fields,
+                ml_correction,
                 input_target_diff,
                 corrected_target_diff,
+                fc_squared_error,
+                mlfc_squared_error,
+                squared_error_improvement,
             )
         )
 
@@ -880,9 +1158,15 @@ def plot_normalized_leadtime(
 
     all_input = collect(3)
     all_target = collect(4)
-    all_corrected = collect(5)
-    all_input_diff = collect(6)
-    all_corrected_diff = collect(7)
+    # all_fc_target = collect(5) # target normalized in forecast space
+    all_ideal_correction = collect(6)
+    all_corrected = collect(7)
+    all_ml_correction = collect(8)
+    all_input_diff = collect(9)
+    all_corrected_diff = collect(10)
+    all_fc_squared_error = collect(11)
+    all_mlfc_squared_error = collect(12)
+    all_squared_error_improvement = collect(13)
 
     def resolve_vmax(
         fields: list[xr.DataArray],
@@ -900,20 +1184,76 @@ def plot_normalized_leadtime(
         NORMALIZED_INPUT_VMAX,
         NORMALIZED_INPUT_QUANTILE,
     )
+
     target_vmax = resolve_vmax(
         all_target,
         NORMALIZED_TARGET_VMAX,
         NORMALIZED_TARGET_QUANTILE,
     )
+
     corrected_vmax = resolve_vmax(
         all_corrected,
         NORMALIZED_CORRECTED_VMAX,
         NORMALIZED_CORRECTED_QUANTILE,
     )
+
     difference_vmax = resolve_vmax(
-        all_input_diff + all_corrected_diff,
+        all_input_diff + all_corrected_diff + all_ideal_correction + all_ml_correction,
         NORMALIZED_DIFFERENCE_VMAX,
         NORMALIZED_DIFFERENCE_QUANTILE,
+    )
+
+    def get_positive_limit(
+        fields: list[xr.DataArray],
+        quantile: float | None,
+    ) -> float:
+        """Return positive upper color limit for nonnegative fields."""
+        values = np.concatenate(
+            [
+                np.asarray(field.values, dtype=float).ravel()
+                for field in fields
+            ]
+        )
+
+        values = values[np.isfinite(values)]
+
+        if values.size == 0:
+            return 1.0
+
+        if quantile is None:
+            vmax = float(np.max(values))
+        else:
+            vmax = float(np.quantile(values, quantile))
+
+        if not np.isfinite(vmax) or vmax <= 0:
+            vmax = float(np.max(values))
+
+        if not np.isfinite(vmax) or vmax <= 0:
+            vmax = 1.0
+
+        return vmax
+
+    squared_error_fields = (
+        all_fc_squared_error
+        + all_mlfc_squared_error
+    )
+
+    if squared_error_fields:
+        squared_error_vmax = (
+            float(NORMALIZED_SQUARED_ERROR_VMAX)
+            if NORMALIZED_SQUARED_ERROR_VMAX is not None
+            else get_positive_limit(
+                squared_error_fields,
+                NORMALIZED_SQUARED_ERROR_QUANTILE,
+            )
+        )
+    else:
+        squared_error_vmax = None
+
+    squared_error_improvement_vmax = resolve_vmax(
+        all_squared_error_improvement,
+        NORMALIZED_SQUARED_ERROR_IMPROVEMENT_VMAX,
+        NORMALIZED_SQUARED_ERROR_IMPROVEMENT_QUANTILE,
     )
 
     lead_unit = getattr(s.leadtime_unit, "value", str(s.leadtime_unit))
@@ -932,9 +1272,15 @@ def plot_normalized_leadtime(
         sample_within_init,
         input_fields,
         target_fields,
+        fc_target_fields,
+        ideal_correction,
         corrected_fields,
+        ml_correction,
         input_target_diff,
         corrected_target_diff,
+        fc_squared_error,
+        mlfc_squared_error,
+        squared_error_improvement,
     ) in selected_samples:
         time_label = init_time.strftime("%Y%m%dT%H%M")
         time_title = init_time.strftime(PLOT_TITLE_STRFTIME)
@@ -948,6 +1294,7 @@ def plot_normalized_leadtime(
                 s.var_fc,
                 "Normalized input",
                 "input_fields",
+                True,
             ),
             (
                 PLOT_NORMALIZED_TARGET,
@@ -957,6 +1304,7 @@ def plot_normalized_leadtime(
                 s.var_an,
                 f"Normalized target ({s.target_mode})",
                 "target_fields",
+                True,
             ),
             (
                 PLOT_NORMALIZED_CORRECTED,
@@ -966,6 +1314,7 @@ def plot_normalized_leadtime(
                 s.var_an,
                 "Normalized corrected input",
                 "input_corrected_fields",
+                True,
             ),
             (
                 PLOT_INPUT_TARGET_DIFFERENCE,
@@ -973,8 +1322,9 @@ def plot_normalized_leadtime(
                 input_target_diff,
                 difference_vmax,
                 s.var_an,
-                "Normalized input - target",
+                "Normalized FC - AN",
                 "input_minus_target",
+                True,
             ),
             (
                 PLOT_CORRECTED_TARGET_DIFFERENCE,
@@ -982,12 +1332,72 @@ def plot_normalized_leadtime(
                 corrected_target_diff,
                 difference_vmax,
                 s.var_an,
-                "Normalized corrected - target",
+                "Normalized MLFC - AN",
                 "input_corrected_minus_target",
+                True,
+            ),
+            (
+                PLOT_FC_SQUARED_ERROR,
+                "fc_squared_error",
+                fc_squared_error,
+                squared_error_vmax,
+                s.var_an,
+                r"Normalized FC squared error: $(FC-AN)^2$",
+                "fc_squared_error",
+                False,
+            ),
+            (
+                PLOT_MLFC_SQUARED_ERROR,
+                "mlfc_squared_error",
+                mlfc_squared_error,
+                squared_error_vmax,
+                s.var_an,
+                r"Normalized MLFC squared error: $(MLFC-AN)^2$",
+                "mlfc_squared_error",
+                False,
+            ),
+            (
+                PLOT_SQUARED_ERROR_IMPROVEMENT,
+                "squared_error_improvement",
+                squared_error_improvement,
+                squared_error_improvement_vmax,
+                s.var_an,
+                r"Squared-error improvement: $(FC-AN)^2-(MLFC-AN)^2$",
+                "squared_error_improvement",
+                True,
+            ),
+            (
+                PLOT_IDEAL_CORRECTION,
+                "ideal_correction",
+                ideal_correction,
+                difference_vmax,
+                s.var_an,
+                r"Ideal correction: $AN-FC$",
+                "ideal_correction",
+                True,
+            ),
+            (
+                PLOT_ML_CORRECTION,
+                "ml_correction",
+                ml_correction,
+                difference_vmax,
+                s.var_an,
+                r"ML correction: $MLFC-FC$",
+                "ml_correction",
+                True,
             ),
         )
 
-        for enabled, kind, fields, vmax, var, title_prefix, output_name in collections:
+        for (
+            enabled,
+            kind,
+            fields,
+            vmax,
+            var,
+            title_prefix,
+            output_name,
+            centered,
+        ) in collections:
             if not enabled or not fields or vmax is None:
                 continue
 
@@ -995,9 +1405,11 @@ def plot_normalized_leadtime(
                 OUTPUT_ROOT
                 / s.output_name
                 / "normalized"
+                / "maps"
                 / output_name
                 / PLOT_SPLIT
                 / f"leadtime_{safe_label(leadtime)}"
+                / f"lat_{safe_label(LAT_RANGE)}_lon_{safe_label(LON_RANGE)}"
             )
             output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1049,9 +1461,9 @@ def plot_normalized_leadtime(
                     var=var,
                     title=title,
                     out_file=out_file,
-                    cmap=PLOT_CMAP,
-                    centered=True,
-                    vmin=-vmax,
+                    cmap=PLOT_CMAP_CENTERED if centered else PLOT_CMAP,
+                    centered=centered,
+                    vmin=-vmax if centered else 0.0,
                     vmax=vmax,
                     levels=PLOT_LEVELS,
                     plot_type=PLOT_TYPE,
@@ -1065,6 +1477,7 @@ def plot_normalized_leadtime(
                     tick_size=TICK_SIZE,
                     dpi=DPI,
                 )
+
                 saved += 1
 
     if corrected_ds is not None:
