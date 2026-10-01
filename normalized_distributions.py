@@ -58,6 +58,20 @@ FILTERS = dict(
 LEADTIMES: list[int] | None = [72]
 
 # ----------------------------------------------------------------------------
+# Diagnostic spatial region
+# ----------------------------------------------------------------------------
+
+# Optional box used consistently for normalized-input statistics, spectral
+# diagnostics, FC/AN/MLFC diagnostic fields, and performance (e.g. RMSE
+# improvement). None keeps the corresponding full experiment dimension.
+# Best/worst rankings therefore refer to performance inside this box.
+DIAGNOSTIC_LAT_RANGE: tuple[float, float] | None = None
+DIAGNOSTIC_LON_RANGE: tuple[float, float] | None = None
+
+# DIAGNOSTIC_LAT_RANGE = (30, 45)
+# DIAGNOSTIC_LON_RANGE = (-108, -90)
+
+# ----------------------------------------------------------------------------
 # Field statistics
 # ----------------------------------------------------------------------------
 
@@ -92,6 +106,7 @@ PLOT_SPLITS: tuple[
 
 # Number of best/worst performance timesteps to annotate.
 # Performance is currently available for the test split only.
+# ANNOTATE_BEST_TIMESTEPS = 30
 ANNOTATE_BEST_TIMESTEPS = 4
 ANNOTATE_WORST_TIMESTEPS = 4
 ANNOTATION_FONTSIZE = 5
@@ -143,53 +158,68 @@ SCATTER_SIZE = 12
 SCATTER_ALPHA = 0.35
 
 # ----------------------------------------------------------------------------
-# Spatial-structure diagnostic
+# Performance diagnostics
 # ----------------------------------------------------------------------------
 
-COMPUTE_SPATIAL_STRUCTURE = True
+COMPUTE_DIAGNOSTICS = True
 
-# Field whose spatial structure is compared with performance.
-#
-# "fc":
-#     Structure of the baseline forecast field.
-#
-# "an":
-#     Structure of the verifying analysis field.
-#
-# "error":
-#     Structure of the baseline forecast error:
-#         FC - AN
-#
-# "correction":
-#     Structure of the ML correction:
-#         MLFC - FC
-#
-# "mlfc":
-#     Structure of the corrected forecast field.
-SPATIAL_STRUCTURE_FIELD: Literal[
-    "fc",
-    "an",
-    "error",
-    "correction",
-    "mlfc",
-] = "correction"
-
-
-# Spatial-structure statistic.
-#
-# "rms_laplacian":
-#     sqrt(mean(laplacian**2))
-#
-# "mean_abs_laplacian":
-#     mean(abs(laplacian))
-SPATIAL_STRUCTURE_METRIC: Literal[
+# Scalar per-timestep diagnostics to compare against the performance metric.
+# Laplacian diagnostics use DIAGNOSTIC_FIELD; correction/ideal diagnostics
+# are defined directly from FC, analysis, and MLFC.
+DIAGNOSTIC_METRICS: tuple[Literal[
     "rms_laplacian",
     "mean_abs_laplacian",
-] = "mean_abs_laplacian"
+    "correction_ideal_correlation",
+    "correction_ideal_cosine",
+    "correction_rms_ratio",
+    "correction_projection",
+    "correction_orthogonal_rms",
+    "error_correction_mean_product",
+    "low_frequency_power_fraction",
+    "high_frequency_power_fraction",
+    "high_low_power_ratio",
+    "spectral_centroid",
+], ...] = (
+    # "rms_laplacian",
+    # "mean_abs_laplacian",
+    "correction_ideal_correlation",
+    "correction_ideal_cosine",
+    # "correction_rms_ratio",
+    # "correction_projection",
+    # "correction_orthogonal_rms",
+    # "error_correction_mean_product",
+    # "low_frequency_power_fraction",
+    # "high_frequency_power_fraction",
+    # "high_low_power_ratio",
+    # "spectral_centroid",
+)
 
+# Field used only by the Laplacian diagnostics above.
+DIAGNOSTIC_FIELD: Literal[
+    "fc",
+    "an",
+    "error", # fc - an
+    "correction", # mlfc - fc
+    "mlfc",
+] = "fc"
 
-SPATIAL_STRUCTURE_SCATTER_SIZE = 18
-SPATIAL_STRUCTURE_SCATTER_ALPHA = 0.75
+DIAGNOSTIC_SCATTER_SIZE = 18
+DIAGNOSTIC_SCATTER_ALPHA = 0.75
+
+HIGH_FREQ_THRESHOLD = 0.5
+
+# Number of annuli used for the wavenumber-resolved spectral diagnostic.
+SPECTRAL_N_BINS = 30
+PLOT_SPECTRAL_WAVENUMBER_CORRELATION = True
+
+# These diagnostics are calculated directly from the normalized input tensor
+# in collect_normalized_field_stats(), not from FC/AN/MLFC datasets.
+NORMALIZED_INPUT_DIAGNOSTICS = {
+    "low_frequency_power_fraction",
+    "high_frequency_power_fraction",
+    "high_low_power_ratio",
+    "spectral_centroid",
+}
 
 # ============================================================================
 # Month names
@@ -292,6 +322,164 @@ def get_sample_times(
             f"{len(sample_times)=}, {len(dataset)=}"
         )
     return sample_times
+
+
+
+def _longitude_bounds_for_coord(
+    coord: np.ndarray,
+    bounds: tuple[float, float],
+) -> tuple[float, float]:
+    """Convert longitude bounds to the coordinate convention when needed."""
+    values = np.asarray(coord, dtype=float)
+    start, end = map(float, bounds)
+
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return start, end
+
+    # Dataset uses 0..360 while requested bounds use -180..180.
+    if finite.min() >= 0.0 and (start < 0.0 or end < 0.0):
+        start %= 360.0
+        end %= 360.0
+
+    return start, end
+
+
+def _coordinate_indices(
+    coord: np.ndarray,
+    bounds: tuple[float, float] | None,
+    *,
+    longitude: bool = False,
+) -> np.ndarray:
+    """Return coordinate indices inside inclusive bounds."""
+    values = np.asarray(coord, dtype=float)
+
+    if bounds is None:
+        return np.arange(values.size, dtype=int)
+
+    start, end = map(float, bounds)
+    if longitude:
+        start, end = _longitude_bounds_for_coord(values, (start, end))
+
+    if longitude and start > end:
+        # Bounds cross the longitude seam in 0..360 coordinates.
+        selected = (values >= start) | (values <= end)
+    else:
+        lower = min(start, end)
+        upper = max(start, end)
+        selected = (values >= lower) & (values <= upper)
+
+    indices = np.flatnonzero(selected)
+    if indices.size == 0:
+        kind = "longitude" if longitude else "latitude"
+        raise ValueError(
+            f"Diagnostic {kind} range {bounds} selects no grid points. "
+            f"Available coordinate range is "
+            f"({np.nanmin(values):g}, {np.nanmax(values):g})."
+        )
+
+    return indices
+
+
+def subset_normalized_tensor_region(
+    dataset: XarrayDataset,
+    x: torch.Tensor,
+    mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Subset normalized input tensors to the configured diagnostic box."""
+    if DIAGNOSTIC_LAT_RANGE is None and DIAGNOSTIC_LON_RANGE is None:
+        return x, mask
+
+    source = dataset.input_ds
+    lat_dim = source.earthml.guessed_dims.latitude
+    lon_dim = source.earthml.guessed_dims.longitude
+
+    if lat_dim is None or lon_dim is None:
+        raise ValueError(
+            "Could not determine latitude/longitude dimensions for "
+            "diagnostic-region subsetting."
+        )
+
+    latitude = np.asarray(source[lat_dim].values)
+    longitude = np.asarray(source[lon_dim].values)
+
+    if x.shape[-2:] != (latitude.size, longitude.size):
+        raise ValueError(
+            "Normalized input tensor/spatial-coordinate shape mismatch: "
+            f"{tuple(x.shape[-2:])} != "
+            f"{(latitude.size, longitude.size)}"
+        )
+    if mask.shape[-2:] != x.shape[-2:]:
+        raise ValueError(
+            "Mask/input spatial shape mismatch before regional subsetting: "
+            f"{tuple(mask.shape[-2:])} != {tuple(x.shape[-2:])}"
+        )
+
+    lat_indices = _coordinate_indices(
+        latitude,
+        DIAGNOSTIC_LAT_RANGE,
+    )
+    lon_indices = _coordinate_indices(
+        longitude,
+        DIAGNOSTIC_LON_RANGE,
+        longitude=True,
+    )
+
+    lat_index = torch.as_tensor(lat_indices, dtype=torch.long, device=x.device)
+    lon_index = torch.as_tensor(lon_indices, dtype=torch.long, device=x.device)
+
+    x = x.index_select(-2, lat_index).index_select(-1, lon_index)
+    mask = mask.index_select(-2, lat_index).index_select(-1, lon_index)
+
+    return x, mask
+
+
+def subset_diagnostic_dataarray_region(
+    da: xr.DataArray,
+) -> xr.DataArray:
+    """Subset an aligned FC/AN/MLFC field to the configured diagnostic box."""
+    if DIAGNOSTIC_LAT_RANGE is None and DIAGNOSTIC_LON_RANGE is None:
+        return da
+
+    lat_dim = da.earthml.guessed_dims.latitude
+    lon_dim = da.earthml.guessed_dims.longitude
+
+    if lat_dim is None or lon_dim is None:
+        raise ValueError(
+            "Could not determine latitude/longitude dimensions for "
+            "diagnostic-region subsetting."
+        )
+
+    lat_indices = _coordinate_indices(
+        np.asarray(da[lat_dim].values),
+        DIAGNOSTIC_LAT_RANGE,
+    )
+    lon_indices = _coordinate_indices(
+        np.asarray(da[lon_dim].values),
+        DIAGNOSTIC_LON_RANGE,
+        longitude=True,
+    )
+
+    return da.isel({
+        lat_dim: lat_indices,
+        lon_dim: lon_indices,
+    })
+
+
+def diagnostic_region_label() -> str:
+    """Filesystem-safe label for the configured diagnostic spatial box."""
+    if DIAGNOSTIC_LAT_RANGE is None and DIAGNOSTIC_LON_RANGE is None:
+        return "full_domain"
+
+    parts = []
+    if DIAGNOSTIC_LAT_RANGE is not None:
+        lo, hi = sorted(map(float, DIAGNOSTIC_LAT_RANGE))
+        parts.append(f"lat_{lo:g}_{hi:g}")
+    if DIAGNOSTIC_LON_RANGE is not None:
+        lo, hi = sorted(map(float, DIAGNOSTIC_LON_RANGE))
+        parts.append(f"lon_{lo:g}_{hi:g}")
+
+    return "_".join(parts).replace("-", "m").replace(".", "p")
 
 # ============================================================================
 # Normalized field statistics
@@ -402,7 +590,24 @@ def collect_normalized_field_stats(
 
         mask = mask.detach().cpu().bool()
 
+        x, mask = subset_normalized_tensor_region(
+            dataset,
+            x,
+            mask,
+        )
+
         mean, std, minimum, maximum = masked_field_stats(x, mask)
+
+        (
+            low_frequency_power_fraction,
+            high_frequency_power_fraction,
+            high_low_power_ratio,
+            spectral_centroid,
+        ) = spectral_field_stats(
+            x,
+            mask,
+            high_frequency_threshold=HIGH_FREQ_THRESHOLD,
+        )
 
         time = pd.Timestamp(
             sample_times[idx]
@@ -415,8 +620,22 @@ def collect_normalized_field_stats(
                 "time": time,
                 "channel": channel,
                 "month": int(month),
+
                 "mean": float(mean[channel]),
                 "std": float(std[channel]),
+
+                "low_frequency_power_fraction": float(
+                    low_frequency_power_fraction[channel]
+                ),
+                "high_frequency_power_fraction": float(
+                    high_frequency_power_fraction[channel]
+                ),
+                "high_low_power_ratio": float(
+                    high_low_power_ratio[channel]
+                ),
+                "spectral_centroid": float(
+                    spectral_centroid[channel]
+                ),
             }
 
             if COMPUTE_EXTREMA:
@@ -427,25 +646,283 @@ def collect_normalized_field_stats(
 
     return pd.DataFrame(rows)
 
+# ============================================================================
+# Power diagnostics
+# ============================================================================
+
+def spectral_power_modes(
+    field: torch.Tensor,
+    valid: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Return normalized radial wavenumber and 2-D FFT power for all nonzero modes.
+
+    The field mean is removed over valid points and a 2-D Hann window is
+    applied before the FFT to reduce boundary leakage. Invalid grid points are
+    filled with zero after mean removal. This is intended for comparisons on
+    the same fixed grid/mask across timesteps.
+    """
+    field = field.double()
+    valid = valid.bool()
+
+    if field.ndim != 2 or valid.ndim != 2:
+        raise ValueError(
+            "Expected field/mask with shape (H,W), got "
+            f"{tuple(field.shape)} and {tuple(valid.shape)}"
+        )
+
+    if field.shape != valid.shape:
+        raise ValueError(
+            f"Field/mask shape mismatch: {tuple(field.shape)} != {tuple(valid.shape)}"
+        )
+
+    if not valid.any():
+        empty = torch.empty(0, dtype=torch.float64, device=field.device)
+        return empty, empty
+
+    mean = field[valid].mean()
+    field = torch.where(
+        valid,
+        field - mean,
+        torch.zeros_like(field),
+    )
+
+    height, width = field.shape
+
+    window_y = torch.hann_window(
+        height,
+        periodic=False,
+        dtype=field.dtype,
+        device=field.device,
+    )
+    window_x = torch.hann_window(
+        width,
+        periodic=False,
+        dtype=field.dtype,
+        device=field.device,
+    )
+    field = field * window_y[:, None] * window_x[None, :]
+
+    # Use the full 2-D FFT so radial annuli contain the complete symmetric
+    # spectrum rather than a one-sided rFFT with unequal multiplicities.
+    fft = torch.fft.fft2(field)
+    power = torch.abs(fft) ** 2
+
+    ky = torch.fft.fftfreq(
+        height,
+        dtype=field.dtype,
+        device=field.device,
+    )
+    kx = torch.fft.fftfreq(
+        width,
+        dtype=field.dtype,
+        device=field.device,
+    )
+
+    radial_k = torch.sqrt(
+        ky[:, None] ** 2
+        + kx[None, :] ** 2
+    )
+
+    k_max = radial_k.max()
+    if not torch.isfinite(k_max) or k_max <= 0:
+        empty = torch.empty(0, dtype=field.dtype, device=field.device)
+        return empty, empty
+
+    radial_k = radial_k / k_max
+    nonzero = radial_k > 0
+
+    return radial_k[nonzero], power[nonzero]
+
+
+def spectral_field_stats(
+    x: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    high_frequency_threshold: float = 0.35,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Calculate scalar spectral diagnostics for each physical channel."""
+    if x.ndim != 3:
+        raise ValueError(
+            f"Expected x with shape (C,H,W), got {tuple(x.shape)}"
+        )
+    if mask.ndim != 3:
+        raise ValueError(
+            f"Expected mask with shape (C,H,W), got {tuple(mask.shape)}"
+        )
+    if not 0.0 < high_frequency_threshold < 1.0:
+        raise ValueError(
+            "high_frequency_threshold must be strictly between 0 and 1."
+        )
+
+    n_channels = mask.shape[0]
+    x = x[:n_channels]
+
+    low_fraction = torch.full((n_channels,), torch.nan, dtype=torch.float64)
+    high_fraction = torch.full_like(low_fraction, torch.nan)
+    high_low_ratio = torch.full_like(low_fraction, torch.nan)
+    spectral_centroid = torch.full_like(low_fraction, torch.nan)
+
+    for channel in range(n_channels):
+        radial_k, power = spectral_power_modes(
+            x[channel],
+            mask[channel],
+        )
+
+        if power.numel() == 0:
+            continue
+
+        total_power = power.sum()
+        if not torch.isfinite(total_power) or total_power <= 0:
+            continue
+
+        high = radial_k >= high_frequency_threshold
+        low = radial_k < high_frequency_threshold
+
+        p_high = power[high].sum()
+        p_low = power[low].sum()
+
+        low_fraction[channel] = p_low / total_power
+        high_fraction[channel] = p_high / total_power
+
+        if p_low > 0:
+            high_low_ratio[channel] = p_high / p_low
+
+        spectral_centroid[channel] = (
+            radial_k * power
+        ).sum() / total_power
+
+    return (
+        low_fraction,
+        high_fraction,
+        high_low_ratio,
+        spectral_centroid,
+    )
+
+
+def radial_power_spectrum(
+    field: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    n_bins: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return normalized radial-wavenumber bin centers and power fractions.
+
+    Power fractions sum to one across non-empty bins (up to floating-point
+    precision) because each annular-bin power is normalized by total nonzero
+    wavenumber power.
+    """
+    if n_bins < 2:
+        raise ValueError("n_bins must be at least 2.")
+
+    radial_k, power = spectral_power_modes(field, mask)
+
+    if power.numel() == 0:
+        return (
+            np.full(n_bins, np.nan, dtype=float),
+            np.full(n_bins, np.nan, dtype=float),
+        )
+
+    total_power = power.sum()
+    if not torch.isfinite(total_power) or total_power <= 0:
+        return (
+            np.full(n_bins, np.nan, dtype=float),
+            np.full(n_bins, np.nan, dtype=float),
+        )
+
+    edges = torch.linspace(
+        0.0,
+        1.0,
+        n_bins + 1,
+        dtype=radial_k.dtype,
+        device=radial_k.device,
+    )
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    spectrum = torch.full_like(centers, torch.nan)
+
+    for index in range(n_bins):
+        if index == n_bins - 1:
+            in_bin = (
+                (radial_k >= edges[index])
+                & (radial_k <= edges[index + 1])
+            )
+        else:
+            in_bin = (
+                (radial_k >= edges[index])
+                & (radial_k < edges[index + 1])
+            )
+
+        if in_bin.any():
+            spectrum[index] = power[in_bin].sum() / total_power
+
+    return (
+        centers.detach().cpu().numpy(),
+        spectrum.detach().cpu().numpy(),
+    )
+
+
+def collect_radial_power_spectra(
+    dataset: XarrayDataset,
+    *,
+    split: str,
+    leadtime: int,
+    n_bins: int,
+) -> pd.DataFrame:
+    """Collect one normalized radial power spectrum per sample/channel."""
+    rows = []
+    sample_times = get_sample_times(dataset)
+
+    for idx in range(len(dataset)):
+        x, _, mask, _ = dataset[idx]
+        x = x.detach().cpu()
+        mask = mask.detach().cpu().bool()
+
+        x, mask = subset_normalized_tensor_region(
+            dataset,
+            x,
+            mask,
+        )
+
+        n_channels = mask.shape[0]
+        x = x[:n_channels]
+        time = pd.Timestamp(sample_times[idx])
+
+        for channel in range(n_channels):
+            wavenumber, power_fraction = radial_power_spectrum(
+                x[channel],
+                mask[channel],
+                n_bins=n_bins,
+            )
+
+            for k, p in zip(wavenumber, power_fraction):
+                rows.append({
+                    "split": split,
+                    "leadtime": leadtime,
+                    "sample": idx,
+                    "time": time,
+                    "channel": channel,
+                    "wavenumber": float(k),
+                    "power_fraction": float(p),
+                })
+
+    return pd.DataFrame(rows)
 
 # ============================================================================
-# Spatial structure
+# Performance diagnostics
 # ============================================================================
-
 
 def ensemble_mean_if_present(
     da: xr.DataArray,
     ds: xr.Dataset,
 ) -> xr.DataArray:
-    """
-    Average the realization dimension when present.
-
-    This keeps the spatial-structure diagnostic consistent with
-    realization_agg=True in the performance metric calculation.
-    """
-    realization_dim = (
-        ds.earthml.guessed_dims.realization
-    )
+    """Average the realization dimension when present."""
+    realization_dim = ds.earthml.guessed_dims.realization
 
     if (
         realization_dim is not None
@@ -463,12 +940,8 @@ def squeeze_singleton_leadtime(
     da: xr.DataArray,
     ds: xr.Dataset,
 ) -> xr.DataArray:
-    """
-    Remove the selected singleton leadtime dimension if still present.
-    """
-    leadtime_dim = (
-        ds.earthml.guessed_dims.leadtime
-    )
+    """Remove the selected singleton leadtime dimension if still present."""
+    leadtime_dim = ds.earthml.guessed_dims.leadtime
 
     if (
         leadtime_dim is not None
@@ -476,9 +949,8 @@ def squeeze_singleton_leadtime(
     ):
         if da.sizes[leadtime_dim] != 1:
             raise ValueError(
-                "Expected exactly one leadtime for "
-                "spatial-structure calculation, got "
-                f"{da.sizes[leadtime_dim]}."
+                "Expected exactly one leadtime for diagnostic calculation, "
+                f"got {da.sizes[leadtime_dim]}."
             )
 
         da = da.squeeze(
@@ -489,195 +961,101 @@ def squeeze_singleton_leadtime(
     return da
 
 
-def get_spatial_structure_field(
+def get_aligned_diagnostic_fields(
     *,
     fc: xr.Dataset,
     an: xr.Dataset,
     mlfc: xr.Dataset,
     var_fc: str,
     var_an: str,
-    field: Literal[
-        "fc",
-        "an",
-        "error",
-        "correction",
-        "mlfc",
-    ],
-) -> xr.DataArray:
-    """
-    Build the field whose spatial structure will be measured.
-
-    Forecast-like fields are ensemble averaged before differences are
-    calculated, matching realization_agg=True in the metric calculation.
-    """
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    """Return ensemble-mean FC, analysis, and MLFC on identical coordinates."""
     if var_fc not in fc:
-        raise KeyError(
-            f"{var_fc!r} not found in FC dataset."
-        )
+        raise KeyError(f"{var_fc!r} not found in FC dataset.")
 
     if var_fc not in mlfc:
-        raise KeyError(
-            f"{var_fc!r} not found in MLFC dataset."
-        )
+        raise KeyError(f"{var_fc!r} not found in MLFC dataset.")
 
     if var_an in an:
         an_var = var_an
     elif var_fc in an:
-        # Some preprocessing pipelines rename the analysis variable
-        # to the forecast variable name.
         an_var = var_fc
     else:
         raise KeyError(
-            f"Neither {var_an!r} nor {var_fc!r} "
-            "found in analysis dataset."
+            f"Neither {var_an!r} nor {var_fc!r} found in analysis dataset."
         )
 
-    fc_da = ensemble_mean_if_present(
-        fc[var_fc],
-        fc,
-    )
-    an_da = ensemble_mean_if_present(
-        an[an_var],
-        an,
-    )
-    mlfc_da = ensemble_mean_if_present(
-        mlfc[var_fc],
-        mlfc,
-    )
-
     fc_da = squeeze_singleton_leadtime(
-        fc_da,
+        ensemble_mean_if_present(fc[var_fc], fc),
         fc,
     )
     an_da = squeeze_singleton_leadtime(
-        an_da,
+        ensemble_mean_if_present(an[an_var], an),
         an,
     )
     mlfc_da = squeeze_singleton_leadtime(
-        mlfc_da,
+        ensemble_mean_if_present(mlfc[var_fc], mlfc),
         mlfc,
     )
 
-    # Align coordinates exactly before arithmetic.
-    fc_da, an_da, mlfc_da = xr.align(
+    return xr.align(
         fc_da,
         an_da,
         mlfc_da,
         join="exact",
     )
 
-    if field == "fc":
-        result = fc_da
 
-    elif field == "an":
-        result = an_da
+def diagnostic_spatial_dims(
+    da: xr.DataArray,
+    template_ds: xr.Dataset,
+) -> tuple[list[str], str]:
+    """Return spatial dimensions and the time dimension for diagnostics."""
+    latitude_dim = template_ds.earthml.guessed_dims.latitude
+    longitude_dim = template_ds.earthml.guessed_dims.longitude
+    time_dim = template_ds.earthml.guessed_dims.time
 
-    elif field == "mlfc":
-        result = mlfc_da
+    if latitude_dim is None or latitude_dim not in da.dims:
+        raise ValueError("Could not determine latitude dimension.")
+    if longitude_dim is None or longitude_dim not in da.dims:
+        raise ValueError("Could not determine longitude dimension.")
+    if time_dim is None or time_dim not in da.dims:
+        raise ValueError("Could not determine time dimension.")
 
-    elif field == "error":
-        result = fc_da - an_da
+    return [latitude_dim, longitude_dim], time_dim
 
-    elif field == "correction":
-        result = mlfc_da - fc_da
 
-    else:
-        raise ValueError(
-            f"Unsupported spatial-structure field: "
-            f"{field!r}"
+def rms_over_dims(
+    da: xr.DataArray,
+    dims: list[str],
+) -> xr.DataArray:
+    return np.sqrt(
+        (da**2).mean(
+            dim=dims,
+            skipna=True,
         )
+    )
 
-    return result
 
-
-def spatial_structure_timeseries(
+def laplacian_metric(
     da: xr.DataArray,
     *,
-    template_ds: xr.Dataset,
+    spatial_dims: list[str],
     metric: Literal[
         "rms_laplacian",
         "mean_abs_laplacian",
     ],
-) -> pd.DataFrame:
-    """
-    Calculate a spatial-structure statistic independently for each time.
+) -> xr.DataArray:
+    """Unscaled five-point grid-cell Laplacian aggregated spatially."""
+    latitude_dim, longitude_dim = spatial_dims
 
-    The Laplacian is the unscaled five-point grid-cell Laplacian:
-
-        left + right + up + down - 4 * center
-
-    It therefore measures grid-scale roughness, not a physical spherical
-    Laplacian in units of distance^-2.
-
-    This is appropriate for comparing timesteps on the same fixed grid.
-    """
-    latitude_dim = (
-        template_ds
-        .earthml
-        .guessed_dims
-        .latitude
-    )
-    longitude_dim = (
-        template_ds
-        .earthml
-        .guessed_dims
-        .longitude
-    )
-    time_dim = (
-        template_ds
-        .earthml
-        .guessed_dims
-        .time
-    )
-
-    if (
-        latitude_dim is None
-        or latitude_dim not in da.dims
-    ):
-        raise ValueError(
-            "Could not determine latitude dimension "
-            "for spatial-structure calculation."
-        )
-
-    if (
-        longitude_dim is None
-        or longitude_dim not in da.dims
-    ):
-        raise ValueError(
-            "Could not determine longitude dimension "
-            "for spatial-structure calculation."
-        )
-
-    if (
-        time_dim is None
-        or time_dim not in da.dims
-    ):
-        raise ValueError(
-            "Could not determine time dimension "
-            "for spatial-structure calculation."
-        )
-
-    # ------------------------------------------------------------
-    # Five-point Laplacian
-    # ------------------------------------------------------------
-
-    center = da
-
-    north = da.shift({
-        latitude_dim: -1,
-    })
-    south = da.shift({
-        latitude_dim: 1,
-    })
-    east = da.shift({
-        longitude_dim: -1,
-    })
-    west = da.shift({
-        longitude_dim: 1,
-    })
+    north = da.shift({latitude_dim: -1})
+    south = da.shift({latitude_dim: 1})
+    east = da.shift({longitude_dim: -1})
+    west = da.shift({longitude_dim: 1})
 
     valid = (
-        np.isfinite(center)
+        np.isfinite(da)
         & np.isfinite(north)
         & np.isfinite(south)
         & np.isfinite(east)
@@ -689,112 +1067,244 @@ def spatial_structure_timeseries(
         + south
         + east
         + west
-        - 4.0 * center
+        - 4.0 * da
     ).where(valid)
 
-    spatial_dims = [
-        latitude_dim,
-        longitude_dim,
-    ]
-
-    # ------------------------------------------------------------
-    # Spatial aggregation
-    # ------------------------------------------------------------
-
     if metric == "rms_laplacian":
-        structure = np.sqrt(
-            (
-                laplacian**2
-            ).mean(
-                dim=spatial_dims,
-                skipna=True,
-            )
+        return rms_over_dims(
+            laplacian,
+            spatial_dims,
         )
 
-    elif metric == "mean_abs_laplacian":
-        structure = (
-            np.abs(laplacian)
-            .mean(
-                dim=spatial_dims,
-                skipna=True,
-            )
+    if metric == "mean_abs_laplacian":
+        return np.abs(laplacian).mean(
+            dim=spatial_dims,
+            skipna=True,
         )
 
-    else:
-        raise ValueError(
-            f"Unsupported spatial-structure metric: "
-            f"{metric!r}"
-        )
+    raise ValueError(f"Unsupported Laplacian metric: {metric!r}")
 
-    structure = structure.squeeze(
-        drop=True
+
+def pairwise_spatial_correlation(
+    a: xr.DataArray,
+    b: xr.DataArray,
+    *,
+    spatial_dims: list[str],
+) -> xr.DataArray:
+    """Pearson correlation across space for each timestep."""
+    valid = np.isfinite(a) & np.isfinite(b)
+    a = a.where(valid)
+    b = b.where(valid)
+
+    a_anom = a - a.mean(
+        dim=spatial_dims,
+        skipna=True,
+    )
+    b_anom = b - b.mean(
+        dim=spatial_dims,
+        skipna=True,
     )
 
-    extra_dims = [
-        dim
-        for dim in structure.dims
-        if dim != time_dim
-    ]
-
-    if extra_dims:
-        raise ValueError(
-            "Spatial-structure metric still contains "
-            "unexpected dimensions: "
-            f"{structure.dims}"
+    covariance = (a_anom * b_anom).mean(
+        dim=spatial_dims,
+        skipna=True,
+    )
+    denominator = np.sqrt(
+        (a_anom**2).mean(
+            dim=spatial_dims,
+            skipna=True,
         )
-
-    result = pd.DataFrame({
-        "time": pd.to_datetime(
-            structure[
-                time_dim
-            ].values
-        ),
-        "spatial_structure": (
-            structure.values
-        ),
-    })
-
-    result["spatial_structure"] = (
-        pd.to_numeric(
-            result["spatial_structure"],
-            errors="coerce",
+        * (b_anom**2).mean(
+            dim=spatial_dims,
+            skipna=True,
         )
     )
 
-    return (
-        result
-        .drop_duplicates(
-            subset="time"
+    return covariance / denominator
+
+
+def pairwise_cosine_similarity(
+    a: xr.DataArray,
+    b: xr.DataArray,
+    *,
+    spatial_dims: list[str],
+) -> xr.DataArray:
+    """Cosine similarity across space for each timestep."""
+    valid = np.isfinite(a) & np.isfinite(b)
+    a = a.where(valid)
+    b = b.where(valid)
+
+    numerator = (a * b).mean(
+        dim=spatial_dims,
+        skipna=True,
+    )
+    denominator = np.sqrt(
+        (a**2).mean(
+            dim=spatial_dims,
+            skipna=True,
         )
-        .sort_values("time")
-        .reset_index(drop=True)
+        * (b**2).mean(
+            dim=spatial_dims,
+            skipna=True,
+        )
     )
 
+    return numerator / denominator
 
-def get_spatial_structure_timeseries(
+
+def get_diagnostic_timeseries(
     *,
     fc: xr.Dataset,
     an: xr.Dataset,
     mlfc: xr.Dataset,
     s,
 ) -> pd.DataFrame:
-    """
-    Build the selected diagnostic field and calculate its structure
-    timeseries.
-    """
-    field = get_spatial_structure_field(
+    """Calculate all configured scalar diagnostics independently per timestep."""
+    fc_da, an_da, mlfc_da = get_aligned_diagnostic_fields(
         fc=fc,
         an=an,
         mlfc=mlfc,
         var_fc=s.var_fc,
         var_an=s.var_an,
-        field=SPATIAL_STRUCTURE_FIELD,
     )
 
-    return spatial_structure_timeseries(
-        field,
-        template_ds=fc,
-        metric=SPATIAL_STRUCTURE_METRIC,
+    fc_da = subset_diagnostic_dataarray_region(fc_da)
+    an_da = subset_diagnostic_dataarray_region(an_da)
+    mlfc_da = subset_diagnostic_dataarray_region(mlfc_da)
+
+    spatial_dims, time_dim = diagnostic_spatial_dims(
+        fc_da,
+        fc,
+    )
+
+    error = fc_da - an_da
+    ideal_correction = an_da - fc_da
+    correction = mlfc_da - fc_da
+
+    field_map = {
+        "fc": fc_da,
+        "an": an_da,
+        "mlfc": mlfc_da,
+        "error": error,
+        "correction": correction,
+    }
+
+    result = pd.DataFrame({
+        "time": pd.to_datetime(fc_da[time_dim].values),
+    })
+
+    for metric in DIAGNOSTIC_METRICS:
+        if metric in NORMALIZED_INPUT_DIAGNOSTICS:
+            continue
+
+        if metric in {
+            "rms_laplacian",
+            "mean_abs_laplacian",
+        }:
+            values = laplacian_metric(
+                field_map[DIAGNOSTIC_FIELD],
+                spatial_dims=spatial_dims,
+                metric=metric,
+            )
+
+        elif metric == "correction_ideal_correlation":
+            values = pairwise_spatial_correlation(
+                correction,
+                ideal_correction,
+                spatial_dims=spatial_dims,
+            )
+
+        elif metric == "correction_ideal_cosine":
+            values = pairwise_cosine_similarity(
+                correction,
+                ideal_correction,
+                spatial_dims=spatial_dims,
+            )
+
+        elif metric == "correction_rms_ratio":
+            values = (
+                rms_over_dims(correction, spatial_dims)
+                / rms_over_dims(ideal_correction, spatial_dims)
+            )
+
+        elif metric == "correction_projection":
+            valid = (
+                np.isfinite(correction)
+                & np.isfinite(ideal_correction)
+            )
+            correction_valid = correction.where(valid)
+            ideal_valid = ideal_correction.where(valid)
+            values = (
+                (correction_valid * ideal_valid).mean(
+                    dim=spatial_dims,
+                    skipna=True,
+                )
+                / (ideal_valid**2).mean(
+                    dim=spatial_dims,
+                    skipna=True,
+                )
+            )
+
+        elif metric == "correction_orthogonal_rms":
+            valid = (
+                np.isfinite(correction)
+                & np.isfinite(ideal_correction)
+            )
+            correction_valid = correction.where(valid)
+            ideal_valid = ideal_correction.where(valid)
+            alpha = (
+                (correction_valid * ideal_valid).mean(
+                    dim=spatial_dims,
+                    skipna=True,
+                )
+                / (ideal_valid**2).mean(
+                    dim=spatial_dims,
+                    skipna=True,
+                )
+            )
+            orthogonal = correction_valid - alpha * ideal_valid
+            values = rms_over_dims(
+                orthogonal,
+                spatial_dims,
+            )
+
+        elif metric == "error_correction_mean_product":
+            valid = np.isfinite(error) & np.isfinite(correction)
+            values = (
+                error.where(valid)
+                * correction.where(valid)
+            ).mean(
+                dim=spatial_dims,
+                skipna=True,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported diagnostic metric: {metric!r}"
+            )
+
+        values = values.squeeze(drop=True)
+        extra_dims = [
+            dim
+            for dim in values.dims
+            if dim != time_dim
+        ]
+        if extra_dims:
+            raise ValueError(
+                f"Diagnostic {metric!r} still contains unexpected "
+                f"dimensions: {values.dims}"
+            )
+
+        result[metric] = pd.to_numeric(
+            values.values,
+            errors="coerce",
+        )
+
+    return (
+        result
+        .drop_duplicates(subset="time")
+        .sort_values("time")
+        .reset_index(drop=True)
     )
 
 # ============================================================================
@@ -833,8 +1343,16 @@ def get_metric_improvement_timeseries(
         if s.region is not None
         else [None, None]
     )
-    valid_lat_range = lat_lon[0]
-    valid_lon_range = lat_lon[1]
+    valid_lat_range = (
+        DIAGNOSTIC_LAT_RANGE
+        if DIAGNOSTIC_LAT_RANGE is not None
+        else lat_lon[0]
+    )
+    valid_lon_range = (
+        DIAGNOSTIC_LON_RANGE
+        if DIAGNOSTIC_LON_RANGE is not None
+        else lat_lon[1]
+    )
     fc, an, mlfc = get_and_subset_datasets(
         s,
         leadtime_units=leadtime_units,
@@ -1018,46 +1536,47 @@ def get_metric_improvement_timeseries(
     )
 
     # ------------------------------------------------------------
-    # Spatial structure
+    # Per-timestep diagnostics
     # ------------------------------------------------------------
 
-    if COMPUTE_SPATIAL_STRUCTURE:
-        print(
-            "Calculating spatial structure: "
-            f"{SPATIAL_STRUCTURE_METRIC}("
-            f"{SPATIAL_STRUCTURE_FIELD})..."
+    if COMPUTE_DIAGNOSTICS:
+        forecast_diagnostics = tuple(
+            metric
+            for metric in DIAGNOSTIC_METRICS
+            if metric not in NORMALIZED_INPUT_DIAGNOSTICS
         )
 
-        structure_df = (
-            get_spatial_structure_timeseries(
+        if forecast_diagnostics:
+            print(
+                "Calculating forecast/analysis diagnostics: "
+                + ", ".join(forecast_diagnostics)
+            )
+
+            diagnostics_df = get_diagnostic_timeseries(
                 fc=fc,
                 an=an,
                 mlfc=mlfc,
                 s=s,
             )
-        )
 
-        metric_df = metric_df.merge(
-            structure_df,
-            on="time",
-            how="left",
-            validate="one_to_one",
-        )
-
-        n_missing = int(
-            metric_df[
-                "spatial_structure"
-            ]
-            .isna()
-            .sum()
-        )
-
-        if n_missing:
-            print(
-                f"WARNING: {n_missing}/"
-                f"{len(metric_df)} metric timesteps "
-                "have no spatial-structure value."
+            metric_df = metric_df.merge(
+                diagnostics_df,
+                on="time",
+                how="left",
+                validate="one_to_one",
             )
+
+            for diagnostic in forecast_diagnostics:
+                n_missing = int(
+                    metric_df[diagnostic]
+                    .isna()
+                    .sum()
+                )
+                if n_missing:
+                    print(
+                        f"WARNING: {n_missing}/{len(metric_df)} "
+                        f"metric timesteps have no {diagnostic} value."
+                    )
 
     return metric_df
 
@@ -2182,60 +2701,43 @@ def plot_mean_vs_std(
     plt.close(fig)
 
 # ============================================================================
-# Spatial structure vs performance
+# Diagnostic vs performance
 # ============================================================================
 
 
-def spatial_structure_label() -> str:
-    if SPATIAL_STRUCTURE_METRIC == "rms_laplacian":
-        metric_label = "RMS Laplacian"
-    elif (
-        SPATIAL_STRUCTURE_METRIC
-        == "mean_abs_laplacian"
-    ):
-        metric_label = "Mean |Laplacian|"
-    else:
-        metric_label = (
-            SPATIAL_STRUCTURE_METRIC
-        )
-
-    field_labels = {
-        "fc": "FC",
-        "an": "analysis",
-        "mlfc": "MLFC",
-        "error": "FC - analysis",
-        "correction": "MLFC - FC",
+def diagnostic_label(metric: str) -> str:
+    labels = {
+        "rms_laplacian": f"RMS Laplacian ({DIAGNOSTIC_FIELD})",
+        "mean_abs_laplacian": f"Mean |Laplacian| ({DIAGNOSTIC_FIELD})",
+        "correction_ideal_correlation": "Spatial corr(correction, ideal correction)",
+        "correction_ideal_cosine": "Cosine(correction, ideal correction)",
+        "correction_rms_ratio": "RMS(correction) / RMS(ideal correction)",
+        "correction_projection": "Correction projection coefficient α",
+        "correction_orthogonal_rms": "RMS orthogonal correction",
+        "error_correction_mean_product": "Mean[(FC - analysis) × correction]",
+        "low_frequency_power_fraction": "Low-frequency power fraction",
+        "high_frequency_power_fraction": "High-frequency power fraction",
+        "high_low_power_ratio": "High / low-frequency power ratio",
+        "spectral_centroid": "Normalized spectral centroid",
     }
-
-    field_label = field_labels[
-        SPATIAL_STRUCTURE_FIELD
-    ]
-
-    return (
-        f"{metric_label} ({field_label})"
-    )
+    return labels.get(metric, metric)
 
 
-def plot_spatial_structure_vs_performance(
+def plot_diagnostic_vs_performance(
     stats: pd.DataFrame,
     *,
+    diagnostic: str,
     output_path: Path,
     title_suffix: str = "",
 ) -> None:
-    """
-    Scatter spatial structure against metric improvement.
-
-    One point is shown per unique test initialization.
-    """
+    """Scatter one scalar timestep diagnostic against metric improvement."""
     required_columns = {
         "time",
         "metric_improvement",
-        "spatial_structure",
+        diagnostic,
     }
 
-    if not required_columns.issubset(
-        stats.columns
-    ):
+    if not required_columns.issubset(stats.columns):
         return
 
     df = (
@@ -2244,107 +2746,42 @@ def plot_spatial_structure_vs_performance(
             [
                 "time",
                 "metric_improvement",
-                "spatial_structure",
+                diagnostic,
             ],
         ]
-        .drop_duplicates(
-            subset="time"
-        )
+        .drop_duplicates(subset="time")
         .copy()
     )
 
-    df["metric_improvement"] = (
-        pd.to_numeric(
-            df["metric_improvement"],
-            errors="coerce",
-        )
+    df["metric_improvement"] = pd.to_numeric(
+        df["metric_improvement"],
+        errors="coerce",
     )
-    df["spatial_structure"] = (
-        pd.to_numeric(
-            df["spatial_structure"],
-            errors="coerce",
-        )
+    df[diagnostic] = pd.to_numeric(
+        df[diagnostic],
+        errors="coerce",
     )
 
     valid = (
-        np.isfinite(
-            df["metric_improvement"]
-        )
-        & np.isfinite(
-            df["spatial_structure"]
-        )
+        np.isfinite(df["metric_improvement"])
+        & np.isfinite(df[diagnostic])
     )
-
     df = df.loc[valid].copy()
 
     if df.empty:
         return
 
-    fig, ax = plt.subplots(
-        figsize=(7, 6),
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    ax.scatter(
+        df[diagnostic],
+        df["metric_improvement"],
+        s=DIAGNOSTIC_SCATTER_SIZE,
+        color=SCATTER_COLOR,
+        alpha=DIAGNOSTIC_SCATTER_ALPHA,
+        edgecolors="none",
+        zorder=3,
     )
-
-    # ------------------------------------------------------------
-    # Performance colors
-    # ------------------------------------------------------------
-
-    performance_norm = (
-        make_performance_norm(
-            stats
-        )
-    )
-
-    performance_cmap = plt.get_cmap(
-        PERFORMANCE_CMAP
-    )
-
-    if performance_norm is not None:
-        point_colors = [
-            performance_color(
-                value,
-                cmap=performance_cmap,
-                norm=performance_norm,
-            )
-            for value in (
-                df[
-                    "metric_improvement"
-                ].to_numpy(
-                    dtype=float
-                )
-            )
-        ]
-
-        ax.scatter(
-            df["spatial_structure"],
-            df["metric_improvement"],
-            s=SPATIAL_STRUCTURE_SCATTER_SIZE,
-            color=SCATTER_COLOR,
-            alpha=SPATIAL_STRUCTURE_SCATTER_ALPHA,
-            edgecolors="none",
-            zorder=3,
-        )
-
-        add_performance_colorbar(
-            fig,
-            ax,
-            cmap=performance_cmap,
-            norm=performance_norm,
-        )
-
-    else:
-        ax.scatter(
-            df["spatial_structure"],
-            df["metric_improvement"],
-            s=SPATIAL_STRUCTURE_SCATTER_SIZE,
-            color=SCATTER_COLOR,
-            alpha=SPATIAL_STRUCTURE_SCATTER_ALPHA,
-            edgecolors="none",
-            zorder=3,
-        )
-
-    # ------------------------------------------------------------
-    # Zero-improvement reference
-    # ------------------------------------------------------------
 
     ax.axhline(
         0.0,
@@ -2355,55 +2792,27 @@ def plot_spatial_structure_vs_performance(
         zorder=2,
     )
 
-    # ------------------------------------------------------------
-    # Rank correlation
-    # ------------------------------------------------------------
-
     rho = np.nan
     p_value = np.nan
-
     if len(df) >= 2:
         correlation = spearmanr(
-            df[
-                "spatial_structure"
-            ].to_numpy(
-                dtype=float
-            ),
-            df[
-                "metric_improvement"
-            ].to_numpy(
-                dtype=float
-            ),
+            df[diagnostic].to_numpy(dtype=float),
+            df["metric_improvement"].to_numpy(dtype=float),
             nan_policy="omit",
         )
+        rho = float(correlation.statistic)
+        p_value = float(correlation.pvalue)
 
-        rho = float(
-            correlation.statistic
-        )
-        p_value = float(
-            correlation.pvalue
-        )
-
-    correlation_lines = [
-        f"n = {len(df)}",
-    ]
-
+    correlation_lines = [f"n = {len(df)}"]
     if np.isfinite(rho):
-        correlation_lines.append(
-            rf"Spearman $\rho$ = {rho:.3f}"
-        )
-
+        correlation_lines.append(rf"Spearman $\rho$ = {rho:.3f}")
     if np.isfinite(p_value):
-        correlation_lines.append(
-            f"p = {p_value:.3g}"
-        )
+        correlation_lines.append(f"p = {p_value:.3g}")
 
     ax.text(
         0.02,
         0.98,
-        "\n".join(
-            correlation_lines
-        ),
+        "\n".join(correlation_lines),
         transform=ax.transAxes,
         ha="left",
         va="top",
@@ -2418,59 +2827,36 @@ def plot_spatial_structure_vs_performance(
         zorder=6,
     )
 
-    # ------------------------------------------------------------
-    # Best/worst performance annotations
-    # ------------------------------------------------------------
-
     extrema = get_performance_extrema(
         stats,
         n_best=ANNOTATE_BEST_TIMESTEPS,
         n_worst=ANNOTATE_WORST_TIMESTEPS,
     )
-
     occupied_annotations = []
+    performance_norm = make_performance_norm(stats)
+    performance_cmap = plt.get_cmap(PERFORMANCE_CMAP)
 
     for _, row in extrema.iterrows():
-        time = pd.Timestamp(
-            row["time"]
-        )
-
-        point = df[
-            df["time"] == time
-        ]
-
+        time = pd.Timestamp(row["time"])
+        point = df[df["time"] == time]
         if point.empty:
             continue
 
-        x = float(
-            point[
-                "spatial_structure"
-            ].iloc[0]
-        )
-        y = float(
-            point[
-                "metric_improvement"
-            ].iloc[0]
-        )
-
-        if not (
-            np.isfinite(x)
-            and np.isfinite(y)
-        ):
+        x = float(point[diagnostic].iloc[0])
+        y = float(point["metric_improvement"].iloc[0])
+        if not (np.isfinite(x) and np.isfinite(y)):
             continue
 
-        if performance_norm is not None:
-            marker_color = (
-                performance_color(
-                    y,
-                    cmap=performance_cmap,
-                    norm=performance_norm,
-                )
+        marker_color = (
+            performance_color(
+                y,
+                cmap=performance_cmap,
+                norm=performance_norm,
             )
-        else:
-            marker_color = SCATTER_COLOR
+            if performance_norm is not None
+            else SCATTER_COLOR
+        )
 
-        # Thin black ring around annotated points.
         ax.plot(
             x,
             y,
@@ -2485,42 +2871,164 @@ def plot_spatial_structure_vs_performance(
 
         annotate_nonoverlapping(
             ax,
-            format_extreme_annotation(
-                row
-            ),
+            format_extreme_annotation(row),
             xy=(x, y),
             occupied=occupied_annotations,
-            rotation=0,
         )
 
-    # ------------------------------------------------------------
-    # Labels
-    # ------------------------------------------------------------
-
-    unit = PERFORMANCE_IMPROVEMENT_UNIT
-
-    ax.set_xlabel(
-        spatial_structure_label()
-    )
-
+    ax.set_xlabel(diagnostic_label(diagnostic))
     ax.set_ylabel(
         f"{PERFORMANCE_METRIC.upper()} "
-        f"improvement ({unit})"
+        f"improvement ({PERFORMANCE_IMPROVEMENT_UNIT})"
     )
-
     ax.set_title(
-        "Performance vs spatial structure"
+        f"Performance vs {diagnostic_label(diagnostic)}"
         f"{title_suffix}"
     )
 
     fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
-    fig.savefig(
-        output_path,
-        dpi=200,
+
+def plot_spearman_vs_spatial_wavenumber(
+    spectral_df: pd.DataFrame,
+    *,
+    channel: int,
+    output_path: Path,
+    title_suffix: str = "",
+) -> pd.DataFrame:
+    """
+    Plot Spearman correlation between normalized radial-bin power fraction
+    and performance as a function of normalized spatial wavenumber.
+    """
+    required = {
+        "time",
+        "channel",
+        "wavenumber",
+        "power_fraction",
+        "metric_improvement",
+    }
+    if spectral_df.empty or not required.issubset(spectral_df.columns):
+        return pd.DataFrame()
+
+    df = spectral_df.loc[
+        spectral_df["channel"] == channel,
+        list(required),
+    ].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # If one initialization corresponds to multiple dataset samples, average
+    # their spectral power before correlating so each timestep counts once.
+    df = (
+        df.groupby(
+            ["time", "channel", "wavenumber"],
+            as_index=False,
+        )
+        .agg(
+            power_fraction=("power_fraction", "mean"),
+            metric_improvement=("metric_improvement", "first"),
+        )
     )
 
+    rows = []
+    for wavenumber, group in df.groupby("wavenumber", sort=True):
+        valid = (
+            group[["power_fraction", "metric_improvement"]]
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+
+        rho = np.nan
+        p_value = np.nan
+
+        if (
+            len(valid) >= 3
+            and valid["power_fraction"].nunique() > 1
+            and valid["metric_improvement"].nunique() > 1
+        ):
+            correlation = spearmanr(
+                valid["power_fraction"].to_numpy(dtype=float),
+                valid["metric_improvement"].to_numpy(dtype=float),
+                nan_policy="omit",
+            )
+            rho = float(correlation.statistic)
+            p_value = float(correlation.pvalue)
+
+        rows.append({
+            "wavenumber": float(wavenumber),
+            "rho": rho,
+            "p_value": p_value,
+            "n": len(valid),
+        })
+
+    correlation_df = pd.DataFrame(rows).sort_values("wavenumber")
+    valid_rho = correlation_df[np.isfinite(correlation_df["rho"])]
+
+    if valid_rho.empty:
+        return correlation_df
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    ax.scatter(
+        valid_rho["wavenumber"],
+        valid_rho["rho"],
+        s=26,
+        color=SCATTER_COLOR,
+        alpha=0.85,
+        zorder=3,
+    )
+
+    # A light connecting line makes persistent scale ranges easier to see
+    # while the markers remain the actual wavenumber-bin correlations.
+    ax.plot(
+        valid_rho["wavenumber"],
+        valid_rho["rho"],
+        linewidth=0.8,
+        color=SCATTER_COLOR,
+        alpha=0.6,
+        zorder=2,
+    )
+
+    ax.axhline(
+        0.0,
+        linestyle="--",
+        linewidth=1.0,
+        color="black",
+        alpha=0.7,
+        zorder=1,
+    )
+
+    ax.axvline(
+        HIGH_FREQ_THRESHOLD,
+        linestyle=":",
+        linewidth=1.0,
+        color="black",
+        alpha=0.7,
+        label=f"current high-frequency threshold = {HIGH_FREQ_THRESHOLD:g}",
+        zorder=1,
+    )
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(-1.0, 1.0)
+    ax.set_xlabel("Normalized radial spatial wavenumber")
+    ax.set_ylabel(
+        rf"Spearman $\rho$(power fraction, "
+        f"{PERFORMANCE_METRIC.upper()} improvement)"
+    )
+    ax.set_title(
+        f"Channel {channel}: spectral power vs performance"
+        f"{title_suffix}"
+    )
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
     plt.close(fig)
+
+    return correlation_df
 
 # ============================================================================
 # Monthly plots
@@ -2562,26 +3070,24 @@ def plot_monthly_stats(
         title_suffix = f" — {month_name}"
 
         if (
-            COMPUTE_SPATIAL_STRUCTURE
-            and "spatial_structure"
-            in month_stats.columns
-            and "metric_improvement"
-            in month_stats.columns
+            COMPUTE_DIAGNOSTICS
+            and "metric_improvement" in month_stats.columns
         ):
-            plot_spatial_structure_vs_performance(
-                month_stats,
-                title_suffix=title_suffix,
-                output_path=(
-                    month_dir
-                    / (
-                        f"{PERFORMANCE_METRIC}"
-                        "_improvement_vs_"
-                        f"{SPATIAL_STRUCTURE_FIELD}_"
-                        f"{SPATIAL_STRUCTURE_METRIC}"
-                        ".png"
-                    )
-                ),
-            )
+            for diagnostic in DIAGNOSTIC_METRICS:
+                if diagnostic not in month_stats.columns:
+                    continue
+                plot_diagnostic_vs_performance(
+                    month_stats,
+                    diagnostic=diagnostic,
+                    title_suffix=title_suffix,
+                    output_path=(
+                        month_dir
+                        / (
+                            f"{PERFORMANCE_METRIC}_improvement_vs_"
+                            f"{diagnostic}.png"
+                        )
+                    ),
+                )
 
         for channel in channels:
             channel_stats = (
@@ -2608,9 +3114,9 @@ def plot_monthly_stats(
                 output_path=(
                     month_dir
                     / (
-                        f"channel_{channel}_"
-                        f"{PERFORMANCE_METRIC}_color_encoding"
-                        "mean_distribution.png"
+                        f"channel_{channel}"
+                        f"_{PERFORMANCE_METRIC}_color_encoding"
+                        "_mean_distribution.png"
                     )
                 ),
             )
@@ -2628,9 +3134,9 @@ def plot_monthly_stats(
                 output_path=(
                     month_dir
                     / (
-                        f"channel_{channel}_"
-                        f"{PERFORMANCE_METRIC}_color_encoding"
-                        "std_distribution.png"
+                        f"channel_{channel}"
+                        f"_{PERFORMANCE_METRIC}_color_encoding"
+                        "_std_distribution.png"
                     )
                 ),
             )
@@ -2644,9 +3150,9 @@ def plot_monthly_stats(
                 output_path=(
                     month_dir
                     / (
-                        f"channel_{channel}_"
-                        f"{PERFORMANCE_METRIC}_color_encoding"
-                        "mean_vs_std.png"
+                        f"channel_{channel}"
+                        f"_{PERFORMANCE_METRIC}_color_encoding"
+                        "_mean_vs_std.png"
                     )
                 ),
             )
@@ -2685,8 +3191,9 @@ def plot_stats(
             output_path=(
                 output_dir
                 / (
-                    f"channel_{channel}_"
-                    "mean_distribution.png"
+                    f"channel_{channel}"
+                    f"_{PERFORMANCE_METRIC}_color_encoding"
+                    "_mean_distribution.png"
                 )
             ),
         )
@@ -2701,8 +3208,9 @@ def plot_stats(
             output_path=(
                 output_dir
                 / (
-                    f"channel_{channel}_"
-                    "std_distribution.png"
+                    f"channel_{channel}"
+                    f"_{PERFORMANCE_METRIC}_color_encoding"
+                    "_std_distribution.png"
                 )
             ),
         )
@@ -2713,33 +3221,35 @@ def plot_stats(
             output_path=(
                 output_dir
                 / (
-                    f"channel_{channel}_"
-                    "mean_vs_std.png"
+                    f"channel_{channel}"
+                    f"_{PERFORMANCE_METRIC}_color_encoding"
+                    "_mean_vs_std.png"
                 )
             ),
         )
 
     # ------------------------------------------------------------
-    # Spatial structure vs performance
+    # Diagnostics vs performance
     # ------------------------------------------------------------
 
     if (
-        COMPUTE_SPATIAL_STRUCTURE
-        and "spatial_structure" in stats.columns
+        COMPUTE_DIAGNOSTICS
         and "metric_improvement" in stats.columns
     ):
-        plot_spatial_structure_vs_performance(
-            stats,
-            output_path=(
-                output_dir
-                / (
-                    f"{PERFORMANCE_METRIC}_improvement"
-                    "_vs_"
-                    f"{SPATIAL_STRUCTURE_FIELD}_"
-                    f"{SPATIAL_STRUCTURE_METRIC}.png"
-                )
-            ),
-        )
+        for diagnostic in DIAGNOSTIC_METRICS:
+            if diagnostic not in stats.columns:
+                continue
+            plot_diagnostic_vs_performance(
+                stats,
+                diagnostic=diagnostic,
+                output_path=(
+                    output_dir
+                    / (
+                        f"{PERFORMANCE_METRIC}_improvement_vs_"
+                        f"{DIAGNOSTIC_FIELD}_{diagnostic}.png"
+                    )
+                ),
+            )
 
     # ------------------------------------------------------------
     # Monthly
@@ -2827,72 +3337,48 @@ def print_summary(
             print()
 
     if (
-        "metric_improvement" in stats.columns
-        and "spatial_structure" in stats.columns
+        COMPUTE_DIAGNOSTICS
+        and "metric_improvement" in stats.columns
     ):
-        structure_perf = (
-            stats.loc[
-                stats["split"] == "test",
-                [
-                    "time",
-                    "metric_improvement",
-                    "spatial_structure",
-                ],
-            ]
-            .drop_duplicates(
-                subset="time"
-            )
-            .dropna()
-        )
+        print("Diagnostics vs performance:")
 
-        if not structure_perf.empty:
-            print(
-                "Spatial structure:"
-            )
-            print(
-                f"  field  = "
-                f"{SPATIAL_STRUCTURE_FIELD}"
-            )
-            print(
-                f"  metric = "
-                f"{SPATIAL_STRUCTURE_METRIC}"
-            )
+        for diagnostic in DIAGNOSTIC_METRICS:
+            if diagnostic not in stats.columns:
+                continue
 
-            print(
-                structure_perf[
-                    "spatial_structure"
+            diagnostic_perf = (
+                stats.loc[
+                    stats["split"] == "test",
+                    [
+                        "time",
+                        "metric_improvement",
+                        diagnostic,
+                    ],
                 ]
-                .describe()
-                .to_string()
+                .drop_duplicates(subset="time")
+                .dropna()
             )
 
-            if len(structure_perf) >= 2:
+            if diagnostic_perf.empty:
+                continue
+
+            line = f"  {diagnostic}: "
+            if len(diagnostic_perf) >= 2:
                 correlation = spearmanr(
-                    structure_perf[
-                        "spatial_structure"
-                    ],
-                    structure_perf[
-                        "metric_improvement"
-                    ],
+                    diagnostic_perf[diagnostic],
+                    diagnostic_perf["metric_improvement"],
                     nan_policy="omit",
                 )
+                line += (
+                    f"rho={float(correlation.statistic):.4f}, "
+                    f"p={float(correlation.pvalue):.4g}"
+                )
+            else:
+                line += "insufficient samples"
 
-                print()
-                print(
-                    "Spatial structure vs "
-                    f"{PERFORMANCE_METRIC.upper()} "
-                    "improvement:"
-                )
-                print(
-                    f"  Spearman rho = "
-                    f"{float(correlation.statistic):.4f}"
-                )
-                print(
-                    f"  p-value      = "
-                    f"{float(correlation.pvalue):.4g}"
-                )
+            print(line)
 
-            print()
+        print()
 
 # ============================================================================
 # Build normalized diagnostics for one leadtime
@@ -2901,7 +3387,7 @@ def print_summary(
 def process_leadtime(
     s,
     leadtime: int,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     print(
         "=" * 80
     )
@@ -2910,6 +3396,10 @@ def process_leadtime(
         f"{s.output_name}: "
         f"leadtime={leadtime} "
         f"{s.leadtime_unit}"
+    )
+    print(
+        "Diagnostic spatial region: "
+        f"lat={DIAGNOSTIC_LAT_RANGE}, lon={DIAGNOSTIC_LON_RANGE}"
     )
 
     datasets = (
@@ -3076,6 +3566,18 @@ def process_leadtime(
         ignore_index=True,
     )
 
+    # Wavenumber-resolved spectra are only needed for the test set because
+    # performance is currently defined only over the test interval.
+    if PLOT_SPECTRAL_WAVENUMBER_CORRELATION:
+        spectral_df = collect_radial_power_spectra(
+            test_dataset,
+            split="test",
+            leadtime=leadtime,
+            n_bins=SPECTRAL_N_BINS,
+        )
+    else:
+        spectral_df = pd.DataFrame()
+
     # ------------------------------------------------------------
     # Automatic metric performance
     # ------------------------------------------------------------
@@ -3103,7 +3605,18 @@ def process_leadtime(
             metric_df,
         )
 
-    return stats
+        if not spectral_df.empty:
+            spectral_df = spectral_df.merge(
+                metric_df[["time", "metric_improvement"]],
+                on="time",
+                how="left",
+                validate="many_to_one",
+            )
+
+    elif not spectral_df.empty:
+        spectral_df["metric_improvement"] = np.nan
+
+    return stats, spectral_df
 
 # ============================================================================
 # Main
@@ -3133,6 +3646,7 @@ def main() -> None:
             / s.output_name
             / "normalized"
             / "input_diagnostics"
+            / diagnostic_region_label()
         )
 
         experiment_output.mkdir(
@@ -3152,7 +3666,7 @@ def main() -> None:
         all_stats = []
 
         for leadtime in leadtimes:
-            stats = process_leadtime(
+            stats, spectral_df = process_leadtime(
                 s,
                 leadtime,
             )
@@ -3181,6 +3695,39 @@ def main() -> None:
                 stats,
                 leadtime_output,
             )
+
+            if (
+                PLOT_SPECTRAL_WAVENUMBER_CORRELATION
+                and not spectral_df.empty
+                and "metric_improvement" in spectral_df.columns
+            ):
+                spectral_df.to_csv(
+                    leadtime_output / "radial_power_spectra.csv",
+                    index=False,
+                )
+
+                for channel in sorted(spectral_df["channel"].unique()):
+                    correlation_df = plot_spearman_vs_spatial_wavenumber(
+                        spectral_df,
+                        channel=int(channel),
+                        output_path=(
+                            leadtime_output
+                            / (
+                                f"channel_{int(channel)}_"
+                                "spearman_vs_spatial_wavenumber.png"
+                            )
+                        ),
+                    )
+
+                    if not correlation_df.empty:
+                        correlation_df.to_csv(
+                            leadtime_output
+                            / (
+                                f"channel_{int(channel)}_"
+                                "spearman_vs_spatial_wavenumber.csv"
+                            ),
+                            index=False,
+                        )
 
             print_summary(stats)
 
