@@ -15,7 +15,8 @@ from train import make_train_test_datasets_for_leadtime
 # Configuration
 # ============================================================================
 
-EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo"
+EXP_NAME = "weather_atmo_orography"
 
 EXPERIMENTS_ROOT = Path(
     f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
@@ -42,12 +43,28 @@ PLOT_SPLIT: Literal["train", "val", "test"] = "test"
 # Initialization times to plot. None -> all times in the selected split
 WANTED_TIMES: list[str] | None = [
     "2025-03-08T00:00:00", # B1 t2m 72h
+    "2025-02-22T00:00:00", # B2 t2m 72h
+    "2025-03-23T00:00:00", # B3 t2m 72h
     "2025-02-02T00:00:00", # B4 t2m 72h, near W3 in stb-vs-mean scatter
+    "2025-03-07T00:00:00", # B5 t2m 72h
+    "2025-02-21T00:00:00", # B6 t2m 72h
+    "2025-04-06T00:00:00", # B7 t2m 72h
+    "2025-02-01T00:00:00", # B8 t2m 72h
+    "2025-04-07T00:00:00", # B9 t2m 72h
+    "2025-03-06T00:00:00", # B10 t2m 72h
+
     "2025-02-13T00:00:00", # W1 t2m 72h
     "2025-01-03T00:00:00", # W2 t2m 72h
     "2025-02-06T00:00:00", # W3 t2m 72h
     "2025-02-18T00:00:00", # W4 t2m 72h
+    "2025-02-16T00:00:00", # W5 t2m 72h
+    "2025-01-01T12:00:00", # W6 t2m 72h
+    "2025-02-12T12:00:00", # W7 t2m 72h
+    "2025-04-24T00:00:00", # W8 t2m 72h
+    "2025-03-29T00:00:00", # W9 t2m 72h
+    "2025-05-25T12:00:00", # W10 t2m 72h
 ]
+# WANTED_TIMES: list[str] | None = None
 
 # If one initialization corresponds to multiple dataset samples, for example
 # when realizations are samples:
@@ -55,7 +72,7 @@ WANTED_TIMES: list[str] | None = [
 #   int  -> plot only this sample within each initialization (0-based)
 SAMPLE_WITHIN_INIT: int | None = None
 
-# What to plot.
+# What to plot
 PLOT_NORMALIZED_INPUT = True
 PLOT_NORMALIZED_TARGET = True
 PLOT_NORMALIZED_CORRECTED = True
@@ -68,13 +85,14 @@ PLOT_SQUARED_ERROR_IMPROVEMENT = True
 
 PLOT_ML_CORRECTION = True
 PLOT_IDEAL_CORRECTION = True
+PLOT_MEAN_ABS_ML_CORRECTION = False
 
-# Channels to plot. None -> all available physical channels.
-# Extra input encoder channels are intentionally excluded.
+# Channels to plot. None -> all available physical channels
+# Extra input encoder channels are intentionally excluded
 PLOT_INPUT_CHANNELS: list[int] | None = None
 PLOT_TARGET_CHANNELS: list[int] | None = None
 
-# Optional spatial subset applied only for plotting.
+# Optional spatial subset applied only for plotting
 LAT_RANGE: tuple[float, float] | None = None
 LON_RANGE: tuple[float, float] | None = None
 
@@ -82,16 +100,16 @@ LON_RANGE: tuple[float, float] | None = None
 # LAT_RANGE = (30, 45)
 # LON_RANGE = (-108, -90)
 
-# Plot appearance.
+# Plot appearance
 PLOT_TYPE = "pcolormesh"
 PLOT_FIGSIZE = (12, 8)
 
 # PLOT_CMAP = "bids:viridis_r"
 # PLOT_CMAP = "cmasher:torch_r"
-# PLOT_CMAP = "google:turbo"
+PLOT_CMAP = "google:turbo"
 # PLOT_CMAP = "yorick:ncar_r" # interesting
 # PLOT_CMAP = "chrisluts:I_Red"
-PLOT_CMAP = "cmasher:sunburst_r"
+# PLOT_CMAP = "cmasher:sunburst_r"
 
 PLOT_CMAP_CENTERED = "cmocean:balance"
 
@@ -105,8 +123,8 @@ TICK_SIZE = None
 
 DPI = 300
 
-# Normalized fields are naturally centered around zero.
-# Input and target scales are calculated independently.
+# Normalized fields are naturally centered around zero
+# Input and target scales are calculated independently
 NORMALIZED_INPUT_VMAX: float | None = None
 NORMALIZED_INPUT_QUANTILE = 0.99
 
@@ -124,6 +142,10 @@ NORMALIZED_SQUARED_ERROR_QUANTILE = 0.99
 
 NORMALIZED_SQUARED_ERROR_IMPROVEMENT_VMAX: float | None = None
 NORMALIZED_SQUARED_ERROR_IMPROVEMENT_QUANTILE = 0.99
+
+# NORMALIZED_MEAN_ABS_ML_CORRECTION_VMAX: float | None = None
+NORMALIZED_MEAN_ABS_ML_CORRECTION_VMAX: float | None = 0.35
+NORMALIZED_MEAN_ABS_ML_CORRECTION_QUANTILE = 0.99
 
 PLOT_TITLE_STRFTIME = "%d.%m.%Y %H:%M"
 
@@ -465,6 +487,77 @@ def select_sample_indices(
         indices.append(int(matching[sample_within_init]))
 
     return indices
+
+
+def mean_absolute_field_collections(
+    collections: list[dict[int, xr.DataArray]],
+    *,
+    name: str,
+    sign: Literal["all", "positive", "negative"] = "all",
+) -> dict[int, xr.DataArray]:
+    """
+    Mean absolute field over samples.
+
+    sign="all":
+        mean(|field|)
+
+    sign="positive":
+        mean(|field| | field > 0)
+
+    sign="negative":
+        mean(|field| | field < 0)
+    """
+    if not collections:
+        return {}
+
+    channels = set(collections[0])
+
+    for fields in collections[1:]:
+        if set(fields) != channels:
+            raise ValueError(
+                f"Channel mismatch while calculating {name}: "
+                f"expected {sorted(channels)}, got {sorted(fields)}"
+            )
+
+    result: dict[int, xr.DataArray] = {}
+
+    for channel in sorted(channels):
+        aligned = xr.align(
+            *[fields[channel] for fields in collections],
+            join="exact",
+        )
+
+        stacked = xr.concat(
+            aligned,
+            dim="sample",
+        )
+
+        if sign == "all":
+            values = abs(stacked)
+
+        elif sign == "positive":
+            values = abs(stacked).where(stacked > 0)
+
+        elif sign == "negative":
+            values = abs(stacked).where(stacked < 0)
+
+        else:
+            raise ValueError(f"Unsupported sign={sign!r}")
+
+        mean_abs = values.mean(
+            dim="sample",
+            skipna=True,
+        )
+
+        mean_abs.name = name
+        mean_abs.attrs = {
+            "units": "normalized correction",
+            "long_name": name.replace("_", " "),
+        }
+
+        result[channel] = mean_abs
+
+    return result
 
 # ============================================================================
 # Tensor -> xarray field
@@ -947,6 +1040,14 @@ def plot_normalized_leadtime(
         or PLOT_CORRECTED_TARGET_DIFFERENCE
         or PLOT_MLFC_SQUARED_ERROR
         or PLOT_SQUARED_ERROR_IMPROVEMENT
+        or PLOT_ML_CORRECTION
+        or PLOT_MEAN_ABS_ML_CORRECTION
+    )
+
+    need_fc_target = (
+        PLOT_IDEAL_CORRECTION
+        or PLOT_ML_CORRECTION
+        or PLOT_MEAN_ABS_ML_CORRECTION
     )
 
     corrected_ds = (
@@ -1034,7 +1135,7 @@ def plot_normalized_leadtime(
                 leadtime=leadtime,
                 channels=PLOT_TARGET_CHANNELS,
             )
-            if PLOT_IDEAL_CORRECTION
+            if need_fc_target
             else {}
         )
 
@@ -1071,7 +1172,10 @@ def plot_normalized_leadtime(
                 name="normalized_actual_correction",
                 units="normalized correction",
             )
-            if PLOT_ML_CORRECTION
+            if (
+                PLOT_ML_CORRECTION
+                or PLOT_MEAN_ABS_ML_CORRECTION
+            )
             else {}
         )
 
@@ -1265,6 +1369,186 @@ def plot_normalized_leadtime(
     }.get(str(lead_unit).lower(), str(lead_unit))
 
     saved = 0
+
+    # ----------------------------------------------------------------------------
+    # Mean absolute ML corrections
+    # ----------------------------------------------------------------------------
+
+    ml_correction_samples = [
+        sample[8]
+        for sample in selected_samples
+        if sample[8]
+    ]
+
+    if PLOT_MEAN_ABS_ML_CORRECTION:
+        mean_abs_ml_correction = mean_absolute_field_collections(
+            ml_correction_samples,
+            name="normalized_mean_absolute_ml_correction",
+            sign="all",
+        )
+
+        mean_abs_positive_ml_correction = mean_absolute_field_collections(
+            ml_correction_samples,
+            name="normalized_mean_absolute_positive_ml_correction",
+            sign="positive",
+        )
+
+        mean_abs_negative_ml_correction = mean_absolute_field_collections(
+            ml_correction_samples,
+            name="normalized_mean_absolute_negative_ml_correction",
+            sign="negative",
+        )
+    else:
+        mean_abs_ml_correction = {}
+        mean_abs_positive_ml_correction = {}
+        mean_abs_negative_ml_correction = {}
+
+        mean_abs_ml_correction_fields = list(
+            mean_abs_ml_correction.values()
+        )
+
+    mean_abs_ml_correction_fields = (
+        list(mean_abs_ml_correction.values())
+        + list(mean_abs_positive_ml_correction.values())
+        + list(mean_abs_negative_ml_correction.values())
+    )
+
+    if mean_abs_ml_correction_fields:
+        mean_abs_ml_correction_vmax = (
+            float(NORMALIZED_MEAN_ABS_ML_CORRECTION_VMAX)
+            if NORMALIZED_MEAN_ABS_ML_CORRECTION_VMAX is not None
+            else get_positive_limit(
+                mean_abs_ml_correction_fields,
+                NORMALIZED_MEAN_ABS_ML_CORRECTION_QUANTILE,
+            )
+        )
+    else:
+        mean_abs_ml_correction_vmax = None
+        
+
+    aggregate_correction_maps = (
+        (
+            "mean_absolute_ml_correction",
+            mean_abs_ml_correction,
+            r"Mean absolute ML correction: $\mathrm{mean}(|MLFC-FC|)$",
+        ),
+        (
+            "mean_absolute_positive_ml_correction",
+            mean_abs_positive_ml_correction,
+            r"Mean absolute positive ML correction: "
+            r"$\mathrm{mean}(|MLFC-FC|\,|\,MLFC-FC>0)$",
+        ),
+        (
+            "mean_absolute_negative_ml_correction",
+            mean_abs_negative_ml_correction,
+            r"Mean absolute negative ML correction: "
+            r"$\mathrm{mean}(|MLFC-FC|\,|\,MLFC-FC<0)$",
+        ),
+    )
+
+    if (
+        PLOT_MEAN_ABS_ML_CORRECTION
+        and mean_abs_ml_correction_vmax is not None
+    ):
+        n_samples = len(selected_samples)
+
+        selected_times = pd.DatetimeIndex(
+            sample_times[sample_indices]
+        )
+
+        sample_range_label = (
+            f"n{len(sample_indices)}"
+            f"_{selected_times.min():%Y%m%d}"
+            f"-{selected_times.max():%Y%m%d}"
+        )
+
+        for output_name, fields, title_prefix in aggregate_correction_maps:
+            if not fields:
+                continue
+
+            output_dir = (
+                OUTPUT_ROOT
+                / s.output_name
+                / "normalized"
+                / "maps"
+                / output_name
+                / PLOT_SPLIT
+                / f"leadtime_{safe_label(leadtime)}"
+                / sample_range_label
+                / f"lat_{safe_label(LAT_RANGE)}_lon_{safe_label(LON_RANGE)}"
+            )
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            for channel, field in fields.items():
+                filename = (
+                    f"{s.var_an}_{output_name}"
+                    f"_channel_{channel}"
+                    f"_lead_{safe_label(leadtime)}.png"
+                )
+                out_file = output_dir / filename
+
+                if out_file.exists() and not REGENERATE_PLOTS:
+                    continue
+
+                valid_values = field.values[np.isfinite(field.values)]
+
+                if valid_values.size:
+                    spatial_mean = float(np.mean(valid_values))
+                    spatial_std = float(np.std(valid_values, ddof=0))
+                else:
+                    spatial_mean = np.nan
+                    spatial_std = np.nan
+
+                title = (
+                    f"{title_prefix}"
+                    f" · channel {channel}"
+                    f" · {PLOT_SPLIT}"
+                    f" · lead {leadtime}{lead_unit_label}"
+                    f" · N={n_samples}"
+                    f" · mean {spatial_mean:.3f}"
+                    f" · std {spatial_std:.3f}"
+                    if PLOT_TITLE
+                    else None
+                )
+
+                lat_dim = field.earthml.guessed_dims.latitude
+                lon_dim = field.earthml.guessed_dims.longitude
+
+                if lat_dim is None or lon_dim is None:
+                    raise ValueError(
+                        "Could not determine latitude/longitude dimensions "
+                        f"for {output_name}."
+                    )
+
+                print(f"Saving {output_name} map {out_file}")
+
+                plot_field_map(
+                    da=field,
+                    var=s.var_an,
+                    title=title,
+                    out_file=out_file,
+                    cmap=PLOT_CMAP,
+                    centered=False,
+                    vmin=0.0,
+                    vmax=mean_abs_ml_correction_vmax,
+                    levels=PLOT_LEVELS,
+                    plot_type=PLOT_TYPE,
+                    figsize=PLOT_FIGSIZE,
+                    spatial_dims=(lat_dim, lon_dim),
+                    regions=None,
+                    plot_title=PLOT_TITLE,
+                    plot_labels=PLOT_LABELS,
+                    title_size=TITLE_SIZE,
+                    label_size=LABEL_SIZE,
+                    tick_size=TICK_SIZE,
+                    dpi=DPI,
+                )
+
+                saved += 1
+
+    # ----------------------------------------------------------------------------
+    # All other maps
+    # ----------------------------------------------------------------------------
 
     for (
         sample_index,
