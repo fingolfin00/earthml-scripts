@@ -4,10 +4,14 @@ from typing import Literal
 
 import gc
 
+import numpy as np
+import pandas as pd
+import xarray as xr
+
 import torch
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 import lightning as L
-import xarray as xr
 
 from earthml import (
     Normalize,
@@ -28,10 +32,12 @@ from train import (
 )
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Configuration
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 exp_name = "weather_atmo"
+# exp_name = "weather_atmo_one_year_test"
 # exp_name = "weather_atmo_ablation_fixed_val"
 # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
@@ -41,17 +47,42 @@ EXPERIMENTS_ROOT = Path(
 )
 
 VARIABLES = [
+    # Atmosphere
+    # "mslp",
     "t2m",
+    # "d2m",
+    # "u10",
+    # "v10",
+    # "sst",
+    # "tprate",
+    # "tcc",
+
+    # Ocean
+    # "mlotst",
+    # "ssh",
+    # "sss",
+    # "t20d",
 ]
 
 REGIONS = [
     "ConUS",
+    # "Europe",
+    # "Pacific",
+    # "World",
+    # None,
 ]
 
-TEST_START = "2025-05-01T00:00:00"
-TEST_END = "2025-05-01T00:00:00"
+# TEST_START = "2025-01-01T00:00:00"
+# TEST_END = "2025-01-01T00:00:00"
+# TEST_END = "2025-05-01T00:00:00"
+# TEST_END = "2025-09-30T12:00:00"
 # TEST_END = "2025-05-12" # corresponds to 264 samples
 # TEST_END = "2025-10-10" # currently latest available day
+
+# Feature map extraction inference
+TEST_START = "2025-02-01T00:00:00"
+# TEST_END = "2025-02-10T00:00:00"
+TEST_END = "2025-03-31T00:00:00"
 
 WEIGHTS: Literal["best", "last"] = "best"
 
@@ -61,10 +92,442 @@ CHECKPOINT_OVERRIDES: dict[int, Path] = {
     # 12: Path("/path/to/custom.ckpt"),
 }
 
-OVERWRITE = False
-LOG_MONTHLY = False
-INTERPOLATE_ANALYSIS = True
+OVERWRITE = True
 
+LOG_MONTHLY = False
+
+INTERPOLATE_ANALYSIS = False # weather
+
+# -----------------------------------------------------------------------------
+# Save feature maps config
+# -----------------------------------------------------------------------------
+
+FEATURE_MAP_TIMES: list[str] | None = [
+    # Ten-month test 01-09 2025, channel norm
+    # "2025-03-08T00:00:00", # B1 t2m 72h
+    # "2025-02-22T00:00:00", # B2 t2m 72h
+    # "2025-03-23T00:00:00", # B3 t2m 72h
+    # "2025-02-02T00:00:00", # B4 / B5 t2m 72h, near W3 / W4 in std-vs-mean scatter
+    # "2025-03-07T00:00:00", # B5 t2m 72h
+    # "2025-02-21T00:00:00", # B6 t2m 72h
+    # "2025-04-06T00:00:00", # B7 t2m 72h
+    # "2025-02-01T00:00:00", # B8 t2m 72h
+    # "2025-04-07T00:00:00", # B9 t2m 72h
+    # "2025-03-06T00:00:00", # B10 t2m 72h
+
+    # "2025-02-13T00:00:00", # W1 t2m 72h
+    # "2025-01-03T00:00:00", # W2 t2m 72h
+    # "2025-02-06T00:00:00", # W3 / W4 t2m 72h
+    # "2025-02-18T00:00:00", # W4 t2m 72h
+    # "2025-02-16T00:00:00", # W5 t2m 72h
+    # "2025-01-01T12:00:00", # W6 t2m 72h
+    # "2025-02-12T12:00:00", # W7 t2m 72h
+    # "2025-04-24T00:00:00", # W8 t2m 72h
+    # "2025-03-29T00:00:00", # W9 t2m 72h
+    # "2025-05-25T12:00:00", # W10 t2m 72h
+
+    # One year test, channel norm
+    "2025-03-08T00:00:00", # B1 t2m 72h
+    "2025-02-22T00:00:00", # B2 t2m 72h
+    "2025-03-23T00:00:00", # B3 t2m 72h
+    "2025-03-07T00:00:00", # B4 t2m 72h
+    "2025-02-02T00:00:00", # B5 t2m 72h, near W4 in std-vs-mean scatter
+    "2025-02-21T00:00:00", # B6 t2m 72h
+    "2025-04-06T00:00:00", # B7 t2m 72h
+    "2025-04-07T00:00:00", # B8 t2m 72h
+    "2025-02-25T00:00:00", # B9 t2m 72h
+    "2025-02-24T00:00:00", # B10 t2m 72h
+
+    "2025-02-13T00:00:00", # W1 t2m 72h
+    "2025-02-14T00:00:00", # W2 t2m 72h
+    "2024-11-28T00:00:00", # W3 t2m 72h
+    "2025-02-06T00:00:00", # W4 t2m 72h
+    "2025-03-29T00:00:00", # W5 t2m 72h
+    "2024-11-29T00:00:00", # W6 t2m 72h
+    "2025-01-16T00:00:00", # W7 t2m 72h
+    "2025-04-24T00:00:00", # W8 t2m 72h
+    "2024-10-14T00:00:00", # W9 t2m 72h
+    "2025-05-05T12:00:00", # W10 t2m 72h
+]
+
+SAVE_FEATURE_MAPS = True
+
+# =============================================================================
+# Feature map collector class
+# =============================================================================
+
+class FeatureMapCollector:
+    def __init__(self, model):
+        self.model = model
+
+        self.handles: list = []
+        self.features: dict[str, torch.Tensor] = {}
+
+    def _make_hook(self, name: str):
+        def hook(module, inputs, output):
+            if not isinstance(output, torch.Tensor):
+                raise TypeError(
+                    f"Expected tensor output from {name}, "
+                    f"got {type(output)}"
+                )
+
+            self.features[name] = (
+                output
+                .detach()
+                .float()
+                .cpu()
+            )
+
+        return hook
+
+    def register(self):
+        # ------------------------------------------------------
+        # Initial encoder block
+        # ------------------------------------------------------
+        self.handles.append(
+            self.model.inc.register_forward_hook(
+                self._make_hook("encoder_raw_0")
+            )
+        )
+
+        # ------------------------------------------------------
+        # Downsampling encoder blocks
+        # ------------------------------------------------------
+        for level, module in enumerate(
+            self.model.downs,
+            start=1,
+        ):
+            self.handles.append(
+                module.register_forward_hook(
+                    self._make_hook(
+                        f"encoder_raw_{level}"
+                    )
+                )
+            )
+
+        # ------------------------------------------------------
+        # Attention-filtered encoder representations
+        # ------------------------------------------------------
+        for level, module in enumerate(
+            self.model.encoder_cbam
+        ):
+            self.handles.append(
+                module.register_forward_hook(
+                    self._make_hook(
+                        f"encoder_cbam_{level}"
+                    )
+                )
+            )
+
+        # ------------------------------------------------------
+        # Decoder blocks
+        # ------------------------------------------------------
+        for level, module in enumerate(
+            self.model.ups
+        ):
+            self.handles.append(
+                module.register_forward_hook(
+                    self._make_hook(
+                        f"decoder_{level}"
+                    )
+                )
+            )
+
+        # ------------------------------------------------------
+        # Network output
+        # ------------------------------------------------------
+        self.handles.append(
+            self.model.outc.register_forward_hook(
+                self._make_hook("output")
+            )
+        )
+
+    def clear(self):
+        self.features.clear()
+
+    def remove(self):
+        for handle in self.handles:
+            handle.remove()
+
+        self.handles.clear()
+
+# =============================================================================
+# Feature map generation utils
+# =============================================================================
+
+def get_sample_times(
+    dataset: XarrayDataset,
+) -> np.ndarray:
+    time_dim = dataset.input_ds.earthml.guessed_dims.time
+
+    if time_dim is None:
+        raise ValueError(
+            "Could not determine input time dimension."
+        )
+
+    init_times = dataset.input_ds[time_dim].values
+
+    return np.repeat(
+        init_times,
+        dataset.samples_per_init,
+    )
+
+
+def extract_feature_maps(
+    model,
+    dataset: XarrayDataset,
+    normalize_target,
+    wanted_times: list[str],
+    output_dir: Path,
+    device,
+    latitudes: torch.Tensor,
+) -> None:
+    sample_times = get_sample_times(dataset)
+
+    requested_times = pd.to_datetime(
+        wanted_times
+    ).to_numpy(dtype="datetime64[ns]")
+
+    sample_times_ns = np.asarray(
+        sample_times,
+        dtype="datetime64[ns]",
+    )
+
+    collector = FeatureMapCollector(model)
+    collector.register()
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    was_training = model.training
+    model.eval()
+
+    try:
+        for requested_time in requested_times:
+            matching_indices = np.flatnonzero(
+                sample_times_ns == requested_time
+            )
+
+            if matching_indices.size == 0:
+                print(
+                    "WARNING: no test sample for "
+                    f"{requested_time}"
+                )
+                continue
+
+            for sample_within_init, sample_index in enumerate(
+                matching_indices
+            ):
+                sample_index = int(sample_index)
+
+                # Transformed input/target used by the network.
+                x, y, _, _ = dataset[sample_index]
+
+                # Add target mask
+                target_mask = (
+                    dataset.y_mask[sample_index]
+                    .detach()
+                    .cpu()
+                    .bool()
+                )
+
+                # Raw physical forecast, before input normalization.
+                raw_baseline = (
+                    dataset.x[sample_index]
+                    .detach()
+                    .float()
+                    .cpu()
+                )
+
+                # Keep only forecast channels corresponding to target.
+                raw_baseline = raw_baseline[
+                    : y.shape[0]
+                ]
+
+                # Put the physical FC into TARGET-normalized space.
+                if isinstance(
+                    normalize_target,
+                    MonthlyNormalize,
+                ):
+                    month = int(
+                        dataset.months[sample_index].item()
+                    )
+
+                    baseline_target_norm = normalize_target(
+                        raw_baseline,
+                        months=month,
+                    )
+                else:
+                    baseline_target_norm = normalize_target(
+                        raw_baseline,
+                    )
+
+                if x.ndim != 3:
+                    raise ValueError(
+                        "Expected input tensor (C,H,W), "
+                        f"got {tuple(x.shape)}"
+                    )
+
+                collector.clear()
+
+                x_batch = (
+                    x
+                    .unsqueeze(0)
+                    .to(device)
+                )
+
+                with torch.inference_mode():
+                    prediction = model(x_batch)
+
+                # Remove batch dimension from everything.
+                features = {
+                    name: value[0].clone()
+                    for name, value
+                    in collector.features.items()
+                }
+
+                # Validation
+                if target_mask.shape != y.shape:
+                    raise ValueError(
+                        f"Target mask/target shape mismatch: "
+                        f"{tuple(target_mask.shape)} != "
+                        f"{tuple(y.shape)}"
+                    )
+
+                if latitudes.ndim != 1:
+                    raise ValueError(
+                        f"Expected latitudes (H,), "
+                        f"got {tuple(latitudes.shape)}"
+                    )
+
+                if latitudes.shape[0] != y.shape[-2]:
+                    raise ValueError(
+                        f"Latitude count {latitudes.shape[0]} "
+                        f"does not match target height {y.shape[-2]}"
+                    )
+
+                # Prepare payload
+                payload = {
+                    "sample_index": sample_index,
+                    "sample_within_init": (
+                        sample_within_init
+                    ),
+                    "init_time": str(
+                        pd.Timestamp(requested_time)
+                    ),
+
+                    "input": (
+                        x.detach()
+                        .float()
+                        .cpu()
+                    ),
+
+                    "target": (
+                        y.detach()
+                        .float()
+                        .cpu()
+                    ),
+
+                    "prediction": (
+                        prediction[0]
+                        .detach()
+                        .float()
+                        .cpu()
+                    ),
+
+                    "baseline_target_norm": (
+                        baseline_target_norm
+                        .detach()
+                        .float()
+                        .cpu()
+                    ),
+
+                    "target_mask": target_mask,
+
+                    "latitudes": latitudes.detach().float().cpu(),
+
+                    "features": features,
+                }
+
+                time_label = (
+                    pd.Timestamp(requested_time)
+                    .strftime("%Y%m%dT%H%M%S")
+                )
+
+                path = (
+                    output_dir
+                    / (
+                        f"features_init_{time_label}"
+                        f"_sample_{sample_within_init}.pt"
+                    )
+                )
+
+                torch.save(
+                    payload,
+                    path,
+                )
+
+                print(
+                    f"Saved feature maps: {path}"
+                )
+
+                for name, feature in features.items():
+                    print(
+                        f"  {name:20s} "
+                        f"shape={tuple(feature.shape)} "
+                        f"mean={feature.mean().item():+.4f} "
+                        f"std={feature.std().item():.4f} "
+                        f"min={feature.min().item():+.4f} "
+                        f"max={feature.max().item():+.4f}"
+                    )
+
+    finally:
+        collector.remove()
+
+        if was_training:
+            model.train()
+
+
+def feature_spatial_coords(
+    dataset: XarrayDataset,
+    height: int,
+    width: int,
+):
+    lat_dim = dataset.input_ds.earthml.guessed_dims.latitude
+    lon_dim = dataset.input_ds.earthml.guessed_dims.longitude
+
+    latitude = np.asarray(
+        dataset.input_ds[lat_dim].values
+    )
+
+    longitude = np.asarray(
+        dataset.input_ds[lon_dim].values
+    )
+
+    feature_latitude = np.linspace(
+        latitude[0],
+        latitude[-1],
+        height,
+    )
+
+    feature_longitude = np.linspace(
+        longitude[0],
+        longitude[-1],
+        width,
+    )
+
+    return (
+        lat_dim,
+        lon_dim,
+        feature_latitude,
+        feature_longitude,
+    )
+
+# =============================================================================
+# Inference utils
+# =============================================================================
 
 def dataset_kwargs_from_settings(s) -> dict:
     return {
@@ -425,6 +888,24 @@ def infer_setting(s) -> None:
 
         del template_model
 
+        # Save feature maps if requested
+        if SAVE_FEATURE_MAPS and FEATURE_MAP_TIMES:
+            feature_output_dir = (
+                output_dir
+                / "feature_maps"
+                / f"leadtime_{leadtime}"
+            )
+
+            extract_feature_maps(
+                model=model,
+                dataset=test_dataset,
+                normalize_target=normalize_target,
+                wanted_times=FEATURE_MAP_TIMES,
+                output_dir=feature_output_dir,
+                device=device,
+                latitudes=latitudes,
+            )
+
         dataloader = DataLoader(
             test_dataset,
             batch_size=1,
@@ -457,6 +938,7 @@ def infer_setting(s) -> None:
             s=s,
             model=model,
             dataset=test_dataset,
+            normalize_input=normalize_input,
             normalize_target=normalize_target,
             dataloader=dataloader,
             preds_store=lead_output,
@@ -523,8 +1005,12 @@ def main() -> None:
         net_name="SmaAt_UNet",
         # net_name="ConvNeXtTransformerUNet",
         # target_mode="anomaly_residual",
+        # extra_suffix_folder="264samples_randomsamples",
         extra_suffix_folder="",
+        # extra_suffix_folder="264samples_consecutive",
+        # extra_suffix_folder="NOAA_copy",
         train_subsamples=None,
+        normalization_mode="channel",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
