@@ -2,6 +2,7 @@ from typing import Literal
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from matplotlib.path import Path as MplPath
@@ -46,6 +47,7 @@ def main() -> None:
     # ==========================================================
 
     exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_one_year_test"
     # exp_name = "weather_atmo_ablation_fixed_val"
     # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
@@ -132,12 +134,23 @@ def main() -> None:
     # Time selection
     # ==========================================================
 
-    time_range = None
-    inference_period = None
+    time_range: tuple[str, str] | Literal[
+        "train", "val", "test", "train_val", "full"
+    ] = (
+        "test"
+        # ("2025-02-01", "2025-02-28")
+    )
 
-    periods_requested = [
-        "all",
-    ]
+    clim_time_range: tuple[str, str] | Literal[
+        "train", "val", "test", "train_val", "full"
+    ] = (
+        # "train"
+        "train_val"
+    )
+
+    inference_period: tuple[str, str] | None = None
+
+    periods_requested = ["all"]
 
     # ==========================================================
     # Lead-time aggregation and selection
@@ -326,36 +339,66 @@ def main() -> None:
     n = 0
 
     for s in settings:
-        if inference_period is None:
-            valid_time_range = (
-                # (s.test_start, s.test_end)
-                (s.train_start, s.test_end)
-                if time_range is None
-                else time_range
-            )
-            mlfc_path = None
-
+        # Time range
+        if time_range == "train":
+            valid_time_range = (s.train_start, s.train_end)
+        elif time_range == "val":
+            valid_time_range = (s.val_start, s.val_end)
+        elif time_range == "test":
+            valid_time_range = (s.test_start, s.test_end)
+        elif time_range == "train_val":
+            valid_time_range = (s.train_start, s.val_end)
+        elif time_range == "full":
+            valid_time_range = (s.train_start, s.test_end)
+        elif isinstance(time_range, tuple):
+            valid_time_range = time_range
         else:
-            valid_time_range = (
-                inference_period
-                if time_range is None
-                else time_range
+            raise ValueError(f"Invalid time_range={time_range}")
+
+        mlfc_path = None
+
+        if inference_period is not None:
+            valid_start, valid_end = map(
+                pd.Timestamp,
+                valid_time_range,
+            )
+            inference_start, inference_end = map(
+                pd.Timestamp,
+                inference_period,
             )
 
-            inference_start, inference_end = inference_period
+            if (
+                inference_start <= valid_start
+                and valid_end <= inference_end
+            ):
+                valid_time_range = valid_time_range
+            else:
+                valid_time_range = inference_period
+
+            inference_start_str, inference_end_str = inference_period
 
             mlfc_path = (
                 s.exp_dir
                 / "inference"
-                / f"{inference_start}_{inference_end}"
+                / f"{inference_start_str}_{inference_end_str}"
                 / "test_corrected.zarr"
             )
 
-        clim_time_range = (
-            s.train_start,
-            s.train_end,
-            # s.val_end,
-        )
+        # Climatology time range
+        if clim_time_range == "train":
+            valid_clim_time_range = (s.train_start, s.train_end)
+        elif clim_time_range == "val":
+            valid_clim_time_range = (s.val_start, s.val_end)
+        elif clim_time_range == "test":
+            valid_clim_time_range = (s.test_start, s.test_end)
+        elif clim_time_range == "train_val":
+            valid_clim_time_range = (s.train_start, s.val_end)
+        elif clim_time_range == "full":
+            valid_clim_time_range = (s.train_start, s.test_end)
+        elif isinstance(clim_time_range, tuple):
+            valid_clim_time_range = clim_time_range
+        else:
+            raise ValueError(f"Invalid time_range={time_range}")
 
         lat_lon = (
             list(s.region.values())
@@ -410,6 +453,8 @@ def main() -> None:
             f"{s.var_an, s.var_fc} in {s.region_name} "
             f"(lon={valid_lon_range}, lat={valid_lat_range})"
             f", leadtimes={selected_leadtimes}"
+            f", time={valid_time_range}"
+            f", clim={valid_clim_time_range}"
         )
 
         # ======================================================
@@ -445,7 +490,7 @@ def main() -> None:
             rolling_min_periods=1,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
-            time_range=clim_time_range,
+            time_range=valid_clim_time_range,
             time_start=None,
             interpolate=interpolate,
             engine="zarr",
@@ -721,6 +766,7 @@ def main() -> None:
 
                     common_path = (
                         Path("timeseries")
+                        / "absolute"
                         / safe_label(period_dim)
                         / safe_label("all")
                         / (
@@ -928,9 +974,11 @@ def apply_rolling_mean(
 ) -> xr.DataArray | None:
     if da is None or window is None:
         return da
+
     time_dim = da.earthml.guessed_dims.time
     if time_dim is None:
         raise ValueError("Could not determine time dimension for rolling mean.")
+
     return da.rolling(
         {time_dim: window},
         center=center,
