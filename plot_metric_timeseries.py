@@ -144,8 +144,8 @@ def main() -> None:
     clim_time_range: tuple[str, str] | Literal[
         "train", "val", "test", "train_val", "full"
     ] = (
-        # "train"
-        "train_val"
+        "train" # seasonal
+        # "train_val" # weather
     )
 
     inference_period: tuple[str, str] | None = None
@@ -172,10 +172,9 @@ def main() -> None:
         # ------------------------------------------------------
         # Deterministic absolute fields
         # ------------------------------------------------------
-        "bias",
+        # "bias",
         "rmse",
-        "scc",
-
+        # "scc",
         # "mae",
         # "mse",
         # "nrmse",
@@ -293,29 +292,17 @@ def main() -> None:
     # Spatial subset
     # ==========================================================
 
-    # ConUS
-    lat_range = (50, 25)
-    lon_range = (-130, -60)
-
-    # Europe
-    # lat_range = (80, 30)
-    # lon_range = (-30, 60)
-
-    # Pacific
-    # lat_range = (20, -20)
-    # lon_range = (-195, -135)
-
-    # Whole configured region
-    lat_range = None
-    lon_range = None
-
-    # ==========================================================
-    # Timeseries spatial subregions
-    # ==========================================================
-
     # locations = SEA_LOCATIONS
     # locations = CITY_LOCATIONS
     locations = {"all": None}
+
+    # locations = {
+    #     "Central ConUS": {
+    #         "type": "rectangle",
+    #         "lat_range": (30, 45),
+    #         "lon_range": (-108, -90),
+    #     },
+    # }
 
     # ==========================================================
     # Experiment selection
@@ -400,23 +387,15 @@ def main() -> None:
         else:
             raise ValueError(f"Invalid time_range={time_range}")
 
-        lat_lon = (
+        # Whole available region spatial coordinates
+        whole_region_lat_lon = (
             list(s.region.values())
             if s.region is not None
             else [None, None]
         )
 
-        valid_lat_range = (
-            lat_lon[0]
-            if lat_range is None
-            else lat_range
-        )
-
-        valid_lon_range = (
-            lat_lon[1]
-            if lon_range is None
-            else lon_range
-        )
+        valid_lat_range = whole_region_lat_lon[0]
+        valid_lon_range = whole_region_lat_lon[1]
 
         leadtime_agg_coord = (
             "leadtime"
@@ -706,10 +685,6 @@ def main() -> None:
                     [metric_ts_det, metric_ts_prob]
                 )
 
-            # ==================================================
-            # Plot FC and MLFC together
-            # ==================================================
-
             available_models = [
                 model
                 for model in plot_models
@@ -727,10 +702,30 @@ def main() -> None:
                 )
             ]
 
+            # Construct common labels
+            rolling_label = (
+                f"\nroll {rolling_mean_window}"
+                if rolling_mean_window is not None
+                else ""
+            )
+            rolling_filename = (
+                f"_roll{rolling_mean_window}"
+                if rolling_mean_window is not None
+                else ""
+            )
+
+            location_label = f" · {location}" if location_config is not None else ""
+
+            title_suffix = rolling_label + location_label
+
             print(
                 f"Plotting metrics {available_metrics} "
                 f"for models {available_models} in {location}"
             )
+
+            # ==================================================
+            # Plot FC and MLFC
+            # ==================================================
 
             for m in available_metrics:
                 das = [
@@ -750,18 +745,6 @@ def main() -> None:
                             lead_value,
                             leadtime_agg_coord,
                         )
-                    )
-
-                    rolling_label = (
-                        f" roll {rolling_mean_window}"
-                        if rolling_mean_window is not None
-                        else ""
-                    )
-
-                    rolling_filename = (
-                        f"_roll{rolling_mean_window}"
-                        if rolling_mean_window is not None
-                        else ""
                     )
 
                     common_path = (
@@ -813,7 +796,7 @@ def main() -> None:
 
                         plot_title=plot_title,
                         plot_labels=plot_labels,
-                        title_suffix=rolling_label,
+                        title_suffix=title_suffix,
                         plot_legend=plot_legend,
                         title_size=title_size,
                         label_size=label_size,
@@ -872,18 +855,6 @@ def main() -> None:
                                 )
                             )
 
-                            rolling_label = (
-                                f" roll {rolling_mean_window}"
-                                if rolling_mean_window is not None
-                                else ""
-                            )
-
-                            rolling_filename = (
-                                f"_roll{rolling_mean_window}"
-                                if rolling_mean_window is not None
-                                else ""
-                            )
-
                             common_path = (
                                 Path("timeseries")
                                 / "comparisons"
@@ -937,7 +908,7 @@ def main() -> None:
 
                                 plot_title=plot_title,
                                 plot_labels=plot_labels,
-                                title_suffix=rolling_label,
+                                title_suffix=title_suffix,
                                 plot_legend=plot_legend,
                                 improvement_unit=improvement_unit,
                                 timeseries_zero_line=True,
