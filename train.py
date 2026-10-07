@@ -219,10 +219,21 @@ def train(
         # test_end="2025-09-30",
         # # test_end="2025-05-12", # same season of short exp train period
         # train_subsamples=None,
-        # val_subsamples=None
+        # val_subsamples=None,
         # # Ablation
         # # train_subsamples=264,
         # # val_subsamples=72,
+
+        # one year of test ECMWF experiment
+        # train_start="2019-10-14", # some data removed
+        # train_end="2023-10-13", # ignored if split strategy is time/random
+        # val_start="2023-10-14", # ignored if split strategy is time/random
+        # val_end="2024-10-13",
+        # test_start="2024-10-14",
+        # test_end="2025-09-30",
+        # # test_end="2025-05-12", # same season of short exp train period
+        train_subsamples=None,
+        val_subsamples=None,
 
         # SPS4 experiment
         train_start="1993-01-01",
