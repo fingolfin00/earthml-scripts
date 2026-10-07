@@ -61,7 +61,7 @@ SPECTRAL_FIELD: Literal[
     "mlfc_error",
     "ideal_correction",
     "ml_correction",
-] = "mlfc_error"
+] = "ideal_correction"
 
 CHANNEL = 0
 
@@ -477,6 +477,148 @@ def plot_metric_improvement_by_scale(
     )
     plt.close(fig)
 
+
+def plot_metric_improvement_vs_spectral_scale(
+    df: pd.DataFrame,
+    *,
+    s,
+    leadtime: int,
+    scale_metric: ScaleMetrics,
+    output_path: Path,
+) -> None:
+    """
+    Scatter metric improvement against characteristic spectral scale.
+
+    Each point corresponds to one initialization time.
+    """
+
+    plot_df = (
+        df[
+            [
+                "time",
+                "metric_improvement",
+                scale_metric,
+            ]
+        ]
+        .dropna()
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+
+    if len(plot_df) < 2:
+        raise ValueError(
+            f"Need at least two finite timesteps to plot "
+            f"metric improvement vs {scale_metric}, "
+            f"got {len(plot_df)}."
+        )
+
+    x = plot_df[scale_metric].to_numpy(dtype=float)
+    y = plot_df["metric_improvement"].to_numpy(dtype=float)
+
+    # ----------------------------------------------------------
+    # Correlations
+    # ----------------------------------------------------------
+
+    pearson_r = float(
+        plot_df[scale_metric].corr(
+            plot_df["metric_improvement"],
+            method="pearson",
+        )
+    )
+
+    spearman_r = float(
+        plot_df[scale_metric].corr(
+            plot_df["metric_improvement"],
+            method="spearman",
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Plot
+    # ----------------------------------------------------------
+
+    fig, ax = plt.subplots(figsize=PLOT_FIGSIZE)
+
+    ax.scatter(
+        x,
+        y,
+        s=POINT_SIZE,
+        edgecolors="black",
+        linewidths=0.25,
+        alpha=0.8,
+        zorder=3,
+    )
+
+    ax.axhline(
+        0.0,
+        color="black",
+        linewidth=0.8,
+        alpha=0.8,
+        zorder=1,
+    )
+
+    # Linear least-squares trend.
+    if np.unique(x).size >= 2:
+        slope, intercept = np.polyfit(x, y, deg=1)
+
+        x_line = np.linspace(
+            np.min(x),
+            np.max(x),
+            200,
+        )
+
+        ax.plot(
+            x_line,
+            slope * x_line + intercept,
+            color="black",
+            linewidth=1.2,
+            linestyle="--",
+            zorder=2,
+        )
+
+    # ----------------------------------------------------------
+    # Labels
+    # ----------------------------------------------------------
+
+    lead_unit = getattr(
+        s.leadtime_unit,
+        "value",
+        s.leadtime_unit,
+    )
+
+    field_label = SPECTRAL_FIELD_LABELS.get(
+        SPECTRAL_FIELD,
+        SPECTRAL_FIELD,
+    )
+
+    ax.set_xlabel(
+        SCALE_METRIC_LABELS[scale_metric]
+    )
+    ax.set_ylabel("Metric improvement")
+
+    ax.set_title(
+        f"Metric improvement vs spectral scale of {field_label}"
+        f" · channel {CHANNEL}"
+        f" · lead {leadtime} {lead_unit}\n"
+        f"Pearson r = {pearson_r:.3f}"
+        f" · Spearman ρ = {spearman_r:.3f}"
+    )
+
+    fig.tight_layout()
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    fig.savefig(
+        output_path,
+        dpi=DPI,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
+
 # ============================================================================
 # One experiment / leadtime
 # ============================================================================
@@ -528,20 +670,47 @@ def process_leadtime(
                 f"Unsupported scale metric: {scale_metric!r}"
             )
 
-        output_path = output_dir / f"{scale_metric}.png"
+        # ------------------------------------------------------
+        # Timeseries colored by spectral scale
+        # ------------------------------------------------------
 
-        if output_path.exists() and not REGENERATE_PLOTS:
-            continue
-
-        print(f"Saving {scale_metric} plot {output_path}")
-
-        plot_metric_improvement_by_scale(
-            merged,
-            s=s,
-            leadtime=leadtime,
-            scale_metric=scale_metric,
-            output_path=output_path,
+        output_path = (
+            output_dir
+            / f"{scale_metric}.png"
         )
+
+        if REGENERATE_PLOTS or not output_path.exists():
+            print(f"Saving {scale_metric} plot {output_path}")
+
+            plot_metric_improvement_by_scale(
+                merged,
+                s=s,
+                leadtime=leadtime,
+                scale_metric=scale_metric,
+                output_path=output_path,
+            )
+
+        # ------------------------------------------------------
+        # Metric improvement vs spectral scale scatter
+        # ------------------------------------------------------
+
+        scatter_path = (
+            output_dir
+            / f"scatter_metric_improvement_vs_{scale_metric}.png"
+        )
+
+        if REGENERATE_PLOTS or not scatter_path.exists():
+            print(
+                f"Saving metric/spectral scatter {scatter_path}"
+            )
+
+            plot_metric_improvement_vs_spectral_scale(
+                merged,
+                s=s,
+                leadtime=leadtime,
+                scale_metric=scale_metric,
+                output_path=scatter_path,
+            )
 
 # ============================================================================
 # Main
