@@ -1197,6 +1197,24 @@ def _core_train(
         # Normalization
         # ==========================================================
 
+        if (
+            s.normalization_mode == "sample"
+            and s.normalization != "full"
+        ):
+            raise ValueError(
+                "normalization_mode='sample' requires "
+                "normalization='full'."
+            )
+
+        if (
+            s.normalization_mode == "sample"
+            and s.target_mode != "analysis"
+        ):
+            raise NotImplementedError(
+                "Sample normalization currently supports "
+                "target_mode='analysis' only."
+            )
+
         if s.normalization == "monthly":
             NormClass = MonthlyNormalize
         elif s.normalization == "full":
@@ -1486,6 +1504,7 @@ def _core_train(
                 s=s,
                 model=model,
                 dataset=test_dataset,
+                normalize_input=normalize_input,
                 normalize_target=normalize_target,
                 dataloader=test_dataloader,
                 preds_store=test_store,
@@ -1500,6 +1519,7 @@ def _core_train(
                     s=s,
                     model=model,
                     dataset=val_dataset,
+                    normalize_input=normalize_input,
                     normalize_target=normalize_target,
                     dataloader=val_test_dataloader,
                     preds_store=val_store,
@@ -1513,6 +1533,7 @@ def _core_train(
                 s=s,
                 model=model,
                 dataset=train_dataset,
+                normalize_input=normalize_input,
                 normalize_target=normalize_target,
                 dataloader=train_test_dataloader,
                 preds_store=train_store,
@@ -3098,6 +3119,7 @@ def _test(
     s: Settings,
     model,
     dataset: XarrayDataset,
+    normalize_input: Normalize | MonthlyNormalize,
     normalize_target: Normalize | MonthlyNormalize,
     dataloader: DataLoader,
     preds_store: Path,
@@ -3141,13 +3163,26 @@ def _test(
         baseline = dataset.x.detach().float().cpu()
 
         # Remove optional auxiliary input channels and keep only
-        # the forecast channels corresponding to the target.
+        # the forecast channels corresponding to the target
         baseline = baseline[
             :,
             : targets_norm.shape[1],
         ]
 
-        if isinstance(
+        if s.normalization_mode == "sample":
+            baseline_mean, baseline_std = (
+                normalize_input.sample_params(
+                    dataset.x.detach().float().cpu()
+                )
+            )
+
+            baseline_norm = normalize_target(
+                baseline,
+                mean=baseline_mean,
+                std=baseline_std,
+            )
+
+        elif isinstance(
             normalize_target,
             MonthlyNormalize,
         ):
@@ -3155,6 +3190,7 @@ def _test(
                 baseline,
                 months=test_months,
             )
+
         else:
             baseline_norm = normalize_target(
                 baseline,
@@ -3234,10 +3270,34 @@ def _test(
 
     months = test_months[:preds_norm.shape[0]]
 
-    preds = normalize_target.inverse_tensor(
-        preds_norm,
-        months=months,
-    )
+    # Handle sample normalization mode seprately
+    if s.normalization_mode == "sample":
+        raw_input = dataset.x.detach().float().cpu()
+
+        sample_mean, sample_std = normalize_input.sample_params(
+            raw_input
+        )
+
+        if sample_mean.shape[0] != preds_norm.shape[0]:
+            raise ValueError(
+                "Sample normalization parameter count "
+                "does not match prediction count: "
+                f"{sample_mean.shape[0]} != "
+                f"{preds_norm.shape[0]}"
+            )
+
+        preds = normalize_target.inverse_tensor(
+            preds_norm,
+            mean=sample_mean,
+            std=sample_std,
+        )
+
+    else:
+        preds = normalize_target.inverse_tensor(
+            preds_norm,
+            months=months,
+        )
+
     preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
     preds_ds = preds_ds.chunk(safe_chunk_spec(preds_ds, dataset.input_ds)).unify_chunks()
