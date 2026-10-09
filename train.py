@@ -1,6 +1,10 @@
-from typing import Sequence, Literal, TypedDict
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, Literal, TypedDict
 
 from pathlib import Path
+from itertools import product
+from copy import deepcopy
+from dataclasses import replace
 
 import gc
 
@@ -70,359 +74,655 @@ PredictionRecord = tuple[
 
 TestWeights = Literal["best", "last", "current"]
 
+# ==========================================================
+# Experiment configuration
+# ==========================================================
+
+EXPERIMENT_TYPE: Literal["weather", "seasonal"] = "seasonal"
+
+# Only for weather
+EXPERIMENT_NAME = "weather_atmo"
+# EXPERIMENT_NAME = "weather_atmo_one_year_test"
+# EXPERIMENT_NAME = "weather_atmo_orography"
+# EXPERIMENT_NAME = "weather_atmo_ablation_fixed_val"
+# EXPERIMENT_NAME = "weather_atmo_short_zero_vs_replicate_padding"
+
+REGIONS = {
+    # "ConUS": {
+    #     "lon": (-130, -60),
+    #     "lat": (50, 25),
+    # },
+    # "Europe": { # too large
+    #     "lon": (-30, 60),
+    #     "lat": (80, 30),
+    # },
+    # "Europe": {
+    #     "lon": (-15, 40),
+    #     "lat": (72.5, 30),
+    # },
+    # "Pacific": {
+    #     "lon": (-200, -120),
+    #     "lat": (30, -30),
+    # },
+    "World": None,
+}
+
+VARIABLES = [
+    # Atmo
+    # "mslp",
+    "t2m",
+    # "d2m",
+    # "u10",
+    # "v10",
+    # "sst",
+    # "tprate",
+    # "tcc",
+    # Ocean
+    # "mlotst",
+    # "ssh",
+    # "sss",
+    # "t20d",
+]
+
+ABLATION_MODE: Literal[
+    "ofat", # one factor at a time
+    "grid", # all combinations
+] = "ofat"
+
+ABLATIONS = {
+    # "train_subsamples": [
+    #     264,
+    #     500,
+    #     1000,
+    #     1200,
+    #     1250,
+    #     1300,
+    #     1500,
+    #     2000,
+    #     None,
+    # ],
+    # "normalization_mode": [
+    #     "channel",
+    #     "sample",
+    # ],
+    # "init_learning_rate": [
+    #     1e-4,
+    #     3e-4,
+    #     1e-3,
+    # ],
+    # "smaatunet_kwargs.base_channels": [
+    #     32,
+    #     64,
+    #     128,
+    # ],
+}
 
 # ==========================================================
-# Main functions. User settings are here
+# Main
 # ==========================================================
 
-def main():
-    regions = {
-        # "ConUS": {
-        #     "lon": (-130, -60),
-        #     "lat": (50, 25),
-        # },
-        # "Europe": { # too large
-        #     "lon": (-30, 60),
-        #     "lat": (80, 30),
-        # },
-        # "Europe": {
-        #    "lon": (-15, 40),
-        #    "lat": (72.5, 30),
-        #},
-        # "Pacific": {
-        #     "lon": (-200, -120),
-        #     "lat": (30, -30),
-        # },
-        "World": None,
-    }
+def main() -> None:
+    for region_name, region_location in REGIONS.items():
+        for var in VARIABLES:
+            if var in {"mlotst", "ssh", "sss", "t20d"}:
+                var_type_fc = "ocean"
+                reanalysis_model = "oras5"
+            else:
+                var_type_fc = "atmo"
+                reanalysis_model = "era5"
 
-    for region_name, region_location in regions.items():
-        for var in [
-            # Atmo
-            # "mslp",
-            "t2m",
-            # "d2m",
-            # "u10",
-            # "v10",
-            # "sst",
-            # "tprate",
-            # "tcc",
-            # Ocean
-            # "mlotst",
-            # "ssh",
-            # "sss",
-            # "t20d",
-        ]:
-            train(
-                var=var,
+            accelerator, _ = resolve_accelerator_and_device()
+
+            weather_settings = Settings(
+                root_dir=None,
+                data_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo"),
+                exp_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXPERIMENT_NAME}"),
+                plot_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/plots/{EXPERIMENT_NAME}"),
+
+                extra_suffix_folder="",
+
+                var_file_fc=var,
+                var_file_an=var,
+                var_fc=var,
+                var_an=var,
+
+                model_fc="forecast",
+                model_an="analysis",
+
+                lead_period_offset=0,
+
+                leadtime_unit=LeadtimeUnit.HOURS,
+                leadtimes=[12, 24, 36, 48, 60, 72],
+                # leadtimes=[72,],
+                seasonal_window_size=1,
+
+                # short ECMWF experiment
+                # train_start="2023-01-01",
+                # train_end="2023-05-12", # 132nd day of the year (264 train samples)
+                # val_start="2024-01-01",
+                # val_end="2024-02-05", # 36th day of the year (72 val samples)
+                # test_start="2025-01-01",
+                # # test_end="2025-10-01",
+                # test_end="2025-05-12", # same season of short exp train period
+                # train_subsamples=None,
+                # val_subsamples=None,
+
+                # long ECMWF experiment
+                # train_start="2019-10-14", # some data removed
+                # train_end="2023-12-31", # ignored if split strategy is time/random
+                # val_start="2024-01-01", # ignored if split strategy is time/random
+                # val_end="2024-12-31",
+                # test_start="2025-01-01",
+                # test_end="2025-09-30",
+                # # test_end="2025-05-12", # same season of short exp train period
+                # train_subsamples=None,
+                # val_subsamples=None,
+
+                # one year of test ECMWF experiment
+                train_start="2019-10-14", # some data removed
+                train_end="2023-10-13", # ignored if split strategy is time/random
+                val_start="2023-10-14", # ignored if split strategy is time/random
+                val_end="2024-10-13",
+                test_start="2024-10-14",
+                test_end="2025-09-30",
+                # test_end="2025-05-12", # same season of short exp train period
+                train_subsamples=None,
+                # val_subsamples=None,
+                val_subsamples=72, # ablation
+
+                # separate_training_by_init_period=ClimPeriod.MONTH,
+                separate_training_by_init_period=None,
+
+                regional_training=False,
+                regional_training_lat_size=60.0,
+                regional_training_lon_size=30.0,
                 region_name=region_name,
-                region_location=region_location,
+                region=region_location,
+
+                clim_period=ClimPeriod.DAYOFYEAR_HOUR,
+
+                target_mode="analysis",
+
+                seed=42,
+
+                channel_representation="variable",
+                # output_realizations="ensemble",
+                output_realizations="deterministic",
+
+                split_strategy="explicit",
+                shuffle_train_batch=True,
+
+                normalization="full",
+                normalization_mode="channel",
+
+                seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
+                ensemble_encoding=False,
+                spatial_encoding=False,
+                orography_encoding=False,
+                orography_path=Path("/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"),
+
+                input_realization_avg=False, # pass esemble mean for input
+
+                # NN
+                net_name="SmaAt_UNet",
+                smaatunet_kwargs=dict(
+                    reduction_ratio=16,
+                    depth=5,
+                    kernels_per_layer=2,
+                    base_channels=64,
+                    bilinear=True,
+                    # longitude_padding = "circular", # global (seasonal)
+                    # longitude_padding="zero", # creates artifacts near the border
+                    # longitude_padding = "replicate", # regional (weather)
+                ),
+
+                # net_name="ConvNeXtTransformerUNet",
+                # convnext_kwargs=dict(
+                #     encoder_depths=(1, 1, 1),
+                #     decoder_depths=(1, 1),
+                #     dims=(8, 16, 32),
+                #     drop_path_rate=0.0,
+                #     layer_scale_init_value=1e-6,
+                #     stem_stride=1,
+
+                #     transformer_depth=0, # disable transform block
+                #     # transformer_depth=1, # enable depth 1 transform block
+                #     transformer_heads=8,
+                #     transformer_mlp_ratio=4.0,
+                #     transformer_dropout=0.0,
+
+                #     refinement_depth=2,
+
+                #     # zero_init_output=True,
+                # ),
+
+                # convnext_kwargs = dict(
+                #     encoder_depths=(2, 2, 3, 3),
+                #     decoder_depths=(2, 2, 2),
+                #     dims=(32, 64, 128, 256),
+                #     stem_stride=1,
+
+                #     drop_path_rate=0.1,
+                #     layer_scale_init_value=1e-6,
+
+                #     transformer_depth=1,
+                #     transformer_heads=8,
+                #     transformer_mlp_ratio=4.0,
+                #     transformer_dropout=0.0,
+
+                #     refinement_depth=2,
+
+                #     # zero_init_output=True,
+                # ),
+
+                # Loss
+                # loss_name="MSELoss",
+                # loss_kwargs={},
+
+                # loss_name="MaskedMSELoss",
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="GeoMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
+                loss_kwargs=dict(
+                    eps=1e-8,
+                ),
+
+                # loss_name="HuberLoss",
+                # loss_kwargs=dict(
+                #     delta=2.0,
+                # ),
+
+                # loss_name="VarNormMaskMSELoss",
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="GeoMaskedMSEMultiScaleLoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     scales_degrees=(30.0, 60.0, 120.0), # scales_degrees are converted automatically to pool_kernel_sizes
+                #     scale_weights=(0.1, 0.4, 0.5),
+                #     lambda_multiscale=0.5,
+                #     lambda_batch_mean=1.0,
+                #     lambda_identity=0.5,
+                #     pool_stride=3,
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="SpatialCVaRMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
+                #     cvar_fraction=0.2,
+                #     lambda_cvar=0.2,
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     # Geographic size of each spatial patch used to compare
+                #     # corrected-model MSE against the zero-residual baseline MSE.
+                #     # Automatically converted to a grid-cell patch_size.
+                #     spatial_patch_size_degrees=10.0,
+                #     # Strength of the spatial degradation penalty relative to the
+                #     # global GeoMaskedMSE term. Larger values more strongly discourage
+                #     # local regions from becoming worse than the baseline forecast.
+                #     lambda_degradation=0.2,
+                #     # Fraction of spatial patches used for the degradation penalty.
+                #     # 0.2 means the loss focuses on the worst 20% of patches according
+                #     # to relative degradation.
+                #     degradation_fraction=0.2,
+                #     # Stabilizes relative degradation where baseline patch MSE is very
+                #     # small. The denominator is floored at 2% of the mean baseline
+                #     # patch MSE, avoiding excessively large relative penalties.
+                #     relative_floor_fraction=0.02,
+                #     # Numerical stability constant used in divisions and clamping.
+                #     eps=1e-8,
+                # ),
+
+                # init_learning_rate=1e-4,
+                init_learning_rate=1e-3,
+                # weight_decay=1e-3,
+                weight_decay=1e-4,
+                # weight_decay=0,
+                batch_size=16,
+                target_realization_avg=False,
+                fill_nan_value=0.0,
+                torch_mask="target",
+                training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
+                # training_norm="GroupNorm",
+                # training_norm="LayerNorm", # unsupported for SmaAt UNet
+                train_fraction=0.90,
+                accumulate_grad_batches=2,
+                max_epochs=100,
+                early_stopping_patience=30,
+
+                torch_workers=4,
+                trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
             )
 
+            seasonal_settings = Settings(
+                root_dir=Path("/Users/jacopodallaglio/ML/training/seasonal"),
+                data_root_dir=None,
+                exp_root_dir=None,
+                plot_root_dir=None,
+
+                extra_suffix_folder="",
+
+                var_file_fc=var,
+                var_file_an=var,
+                var_fc=var,
+                var_an=var,
+
+                model_fc=f"sps4_{var_type_fc}",
+                model_an=reanalysis_model,
+
+                lead_period_offset=-1,
+
+                leadtime_unit=LeadtimeUnit.MONTHS,
+                # leadtimes=[4, 5, 6],
+                leadtimes=[1, 2, 3, 4, 5, 6],
+
+                # SPS4 experiment
+                train_start="1993-01-01",
+                # train_end="2020-12-01",
+                train_end="2014-12-01",
+                val_start="2015-01-01",
+                val_end="2020-12-01",
+                test_start="2021-01-01",
+                test_end="2024-12-01",
+                train_subsamples=None,
+                val_subsamples=None,
+
+                # separate_training_by_init_period=ClimPeriod.MONTH,
+                separate_training_by_init_period=None,
+
+                regional_training=False,
+                regional_training_lat_size=60.0,
+                regional_training_lon_size=30.0,
+                region_name=region_name,
+                region=region_location,
+
+                clim_period=ClimPeriod.MONTH,
+
+                target_mode="analysis",
+
+                seed=42,
+
+                channel_representation="variable",
+                # output_realizations="ensemble",
+                output_realizations="deterministic",
+
+                split_strategy="explicit",
+                shuffle_train_batch=True,
+
+                normalization="full",
+                normalization_mode="channel",
+
+                seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
+                ensemble_encoding=False,
+                spatial_encoding=False,
+                orography_encoding=False,
+                orography_path=Path("/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"),
+
+                input_realization_avg=False, # pass esemble mean for input
+
+                # NN
+                net_name="SmaAt_UNet",
+                smaatunet_kwargs=dict(
+                    reduction_ratio=16,
+                    depth=5,
+                    kernels_per_layer=2,
+                    base_channels=64,
+                    bilinear=True,
+                    # longitude_padding = "circular", # global (seasonal)
+                    # longitude_padding="zero", # creates artifacts near the border
+                    # longitude_padding = "replicate", # regional (weather)
+                ),
+
+                # net_name="ConvNeXtTransformerUNet",
+                # convnext_kwargs=dict(
+                #     encoder_depths=(1, 1, 1),
+                #     decoder_depths=(1, 1),
+                #     dims=(8, 16, 32),
+                #     drop_path_rate=0.0,
+                #     layer_scale_init_value=1e-6,
+                #     stem_stride=1,
+
+                #     transformer_depth=0, # disable transform block
+                #     # transformer_depth=1, # enable depth 1 transform block
+                #     transformer_heads=8,
+                #     transformer_mlp_ratio=4.0,
+                #     transformer_dropout=0.0,
+
+                #     refinement_depth=2,
+
+                #     # zero_init_output=True,
+                # ),
+
+                # convnext_kwargs = dict(
+                #     encoder_depths=(2, 2, 3, 3),
+                #     decoder_depths=(2, 2, 2),
+                #     dims=(32, 64, 128, 256),
+                #     stem_stride=1,
+
+                #     drop_path_rate=0.1,
+                #     layer_scale_init_value=1e-6,
+
+                #     transformer_depth=1,
+                #     transformer_heads=8,
+                #     transformer_mlp_ratio=4.0,
+                #     transformer_dropout=0.0,
+
+                #     refinement_depth=2,
+
+                #     # zero_init_output=True,
+                # ),
+
+                # Loss
+                # loss_name="MSELoss",
+                # loss_kwargs={},
+
+                # loss_name="MaskedMSELoss",
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="GeoMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
+                loss_kwargs=dict(
+                    eps=1e-8,
+                ),
+
+                # loss_name="HuberLoss",
+                # loss_kwargs=dict(
+                #     delta=2.0,
+                # ),
+
+                # loss_name="VarNormMaskMSELoss",
+                # loss_kwargs=dict(
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="GeoMaskedMSEMultiScaleLoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     scales_degrees=(30.0, 60.0, 120.0), # scales_degrees are converted automatically to pool_kernel_sizes
+                #     scale_weights=(0.1, 0.4, 0.5),
+                #     lambda_multiscale=0.5,
+                #     lambda_batch_mean=1.0,
+                #     lambda_identity=0.5,
+                #     pool_stride=3,
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="SpatialCVaRMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
+                #     cvar_fraction=0.2,
+                #     lambda_cvar=0.2,
+                #     eps=1e-8,
+                # ),
+
+                # loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
+                # loss_kwargs=dict(
+                #     # Geographic size of each spatial patch used to compare
+                #     # corrected-model MSE against the zero-residual baseline MSE.
+                #     # Automatically converted to a grid-cell patch_size.
+                #     spatial_patch_size_degrees=10.0,
+                #     # Strength of the spatial degradation penalty relative to the
+                #     # global GeoMaskedMSE term. Larger values more strongly discourage
+                #     # local regions from becoming worse than the baseline forecast.
+                #     lambda_degradation=0.2,
+                #     # Fraction of spatial patches used for the degradation penalty.
+                #     # 0.2 means the loss focuses on the worst 20% of patches according
+                #     # to relative degradation.
+                #     degradation_fraction=0.2,
+                #     # Stabilizes relative degradation where baseline patch MSE is very
+                #     # small. The denominator is floored at 2% of the mean baseline
+                #     # patch MSE, avoiding excessively large relative penalties.
+                #     relative_floor_fraction=0.02,
+                #     # Numerical stability constant used in divisions and clamping.
+                #     eps=1e-8,
+                # ),
+
+                # init_learning_rate=1e-4,
+                init_learning_rate=1e-3,
+                # weight_decay=1e-3,
+                weight_decay=1e-4,
+                # weight_decay=0,
+                batch_size=16,
+                target_realization_avg=False,
+                fill_nan_value=0.0,
+                torch_mask="target",
+                training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
+                # training_norm="GroupNorm",
+                # training_norm="LayerNorm", # unsupported for SmaAt UNet
+                train_fraction=0.90,
+                accumulate_grad_batches=2,
+                max_epochs=50,
+                early_stopping_patience=20,
+
+                torch_workers=4,
+                trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
+            )
+
+            base_settings = {
+                "seasonal": seasonal_settings,
+                "weather": weather_settings,
+            }[EXPERIMENT_TYPE]
+
+            # --------------------------------------------------
+            # Generate ablation configurations
+            # --------------------------------------------------
+
+            ablation_settings = list(
+                generate_ablation_settings(
+                    base_settings,
+                    ABLATIONS,
+                    mode=ABLATION_MODE,
+                )
+            )
+
+            total_configs = len(ablation_settings)
+
+            if ABLATIONS:
+                # Check for collisions
+                paths = [
+                    replace(
+                        s,
+                        extra_suffix_folder=name,
+                    ).exp_dir
+                    for name, s in ablation_settings
+                ]
+
+                if len(paths) != len(set(paths)):
+                    raise ValueError("Ablation configurations produce duplicate output paths")
+
+                print("=" * 80)
+                print(
+                    f"Generated {total_configs} configurations "
+                    f"for variable={var}, region={region_name}"
+                )
+                print(f"Ablation mode: {ABLATION_MODE}")
+                print("=" * 80)
+
+            # --------------------------------------------------
+            # Run configurations
+            # --------------------------------------------------
+
+            for index, (ablation_name, s) in enumerate(
+                ablation_settings,
+                start=1,
+            ):
+                s = replace(
+                    s,
+                    extra_suffix_folder=(
+                        ablation_name if ABLATIONS else s.extra_suffix_folder
+                    ),
+                )
+
+                print("=" * 80)
+                print(f"Variable: {s.var_fc}")
+                print(f"Region: {s.region_name}")
+                if ABLATIONS:
+                    print(f"Ablation: {ablation_name}")
+                print(f" Configuration {index}/{total_configs}")
+                print(f" Output: {s.exp_dir}")
+                print("=" * 80)
+
+                train(
+                    s,
+                    dry_run=False,
+                    force_retrain=False,
+                    force_test=False,
+                )
+
+# ==========================================================
+# Train
+# ==========================================================
 
 def train(
-    var: str,
-    region_name: str,
-    region_location: dict[str, tuple[int | float, int | float]] | None,
+    s: Settings,
+    *,
+    dry_run: bool = False,
+    force_retrain: bool = False,
+    force_test: bool = False,
+    interpolate_analysis: bool = False,
+    log_monthly: bool = False,
+    debug_month_sampler: bool = False,
 ) -> None:
     logger = configure_logging()
 
-    logger.print(f"Starting training for variable={var}, region={region_name}")
-
-    if var in {"mlotst", "ssh", "sss", "t20d"}:
-        var_type_fc = "ocean"
-        reanalysis_model = "oras5"
-    else:
-        var_type_fc = "atmo"
-        reanalysis_model = "era5"
-
-    # Script flow logic flags
-    dry_run = False
-    force_retrain = False
-    force_test = False
-
-    interpolate_analysis = True # seasonal
-    # interpolate_analysis = False # weather
-
-    # Extra logging options
-    log_monthly = False # trigger analysis on how model performance varies by month
-    debug_month_sampler = False # debug info for SplitDataModule to analyze how training batches are constructued; makes sense if using group_batches_by_month=True
+    logger.print("=" * 80)
+    logger.print(
+        f"Starting training for "
+        f"variable={s.var_fc}, "
+        f"region={s.region_name}"
+    )
+    logger.print(
+        f"Experiment: {s.output_name}"
+    )
+    logger.print(
+        f"Lead times: {s.leadtimes} {s.leadtime_unit.value}"
+    )
+    logger.print(
+        f"Training subsamples: {s.train_subsamples}"
+    )
+    logger.print("=" * 80)
 
     accelerator, device = resolve_accelerator_and_device()
 
     if accelerator == "gpu":
         torch.set_float32_matmul_precision("high")
-
-    exp_name = "weather_atmo"
-    # exp_name = "weather_atmo_ablation_fixed_val"
-    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
-
-    s = Settings(
-        root_dir=Path("/Users/jacopodallaglio/ML/training/seasonal"),
-        data_root_dir=None,
-        exp_root_dir=None,
-        plot_root_dir=None,
-        # root_dir=None,
-        # data_root_dir=Path("/work/cmcc/jd19424/ML/MLBC/data/weather_atmo"),
-        # exp_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}"),
-        # plot_root_dir=Path(f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}"),
-
-        extra_suffix_folder="",
-
-        lead_period_offset=-1,
-        # lead_period_offset=0,
-
-        var_file_fc=var,
-        var_file_an=var,
-        var_fc=var,
-        var_an=var,
-
-        model_fc=f"sps4_{var_type_fc}",
-        model_an=reanalysis_model,
-        # model_fc="forecast",
-        # model_an="analysis",
-
-        leadtime_unit=LeadtimeUnit.MONTHS,
-        # leadtimes=[4, 5, 6],
-        leadtimes=[1, 2, 3, 4, 5, 6],
-        # leadtime_unit=LeadtimeUnit.HOURS,
-        # leadtimes=[12, 24, 36, 48, 60, 72],
-        # # leadtimes=[72,],
-        # seasonal_window_size=1,
-
-        # separate_training_by_init_period=ClimPeriod.MONTH,
-        separate_training_by_init_period=None,
-
-        regional_training=False,
-        regional_training_lat_size=60.0,
-        regional_training_lon_size=30.0,
-        region_name=region_name,
-        region=region_location,
-
-        # short ECMWF experiment
-        # train_start="2023-01-01",
-        # train_end="2023-05-12", # 132nd day of the year (264 train samples)
-        # val_start="2024-01-01",
-        # val_end="2024-02-05", # 36th day of the year (72 val samples)
-        # test_start="2025-01-01",
-        # # test_end="2025-10-01",
-        # test_end="2025-05-12", # same season of short exp train period
-        # train_subsamples=None,
-        # val_subsamples=None,
-
-        # long ECMWF experiment
-        # train_start="2019-10-14", # some data removed
-        # train_end="2023-12-31", # ignored if split strategy is time/random
-        # val_start="2024-01-01", # ignored if split strategy is time/random
-        # val_end="2024-12-31",
-        # test_start="2025-01-01",
-        # test_end="2025-09-30",
-        # # test_end="2025-05-12", # same season of short exp train period
-        # train_subsamples=None,
-        # val_subsamples=None,
-        # # Ablation
-        # # train_subsamples=264,
-        # # val_subsamples=72,
-
-        # one year of test ECMWF experiment
-        # train_start="2019-10-14", # some data removed
-        # train_end="2023-10-13", # ignored if split strategy is time/random
-        # val_start="2023-10-14", # ignored if split strategy is time/random
-        # val_end="2024-10-13",
-        # test_start="2024-10-14",
-        # test_end="2025-09-30",
-        # # test_end="2025-05-12", # same season of short exp train period
-        train_subsamples=None,
-        val_subsamples=None,
-
-        # SPS4 experiment
-        train_start="1993-01-01",
-        # train_end="2020-12-01",
-        train_end="2014-12-01",
-        val_start="2015-01-01",
-        val_end="2020-12-01",
-        test_start="2021-01-01",
-        test_end="2024-12-01",
-        train_subsamples=None,
-        val_subsamples=None,
-
-        target_mode="analysis",
-
-        # clim_period=ClimPeriod.DAYOFYEAR_HOUR,
-        clim_period=ClimPeriod.MONTH,
-
-        seed=42,
-
-        channel_representation="variable",
-        # output_realizations="ensemble",
-        output_realizations="deterministic",
-
-        split_strategy="explicit",
-        shuffle_train_batch=True,
-
-        normalization="full",
-        normalization_mode="channel",
-
-        seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
-        ensemble_encoding=False,
-        spatial_encoding=False,
-        orography_encoding=True,
-        orography_path=Path(
-            # "/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"
-            "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
-        ),
-        input_realization_avg=False, # pass esemble mean for input
-
-        # NN
-        net_name="SmaAt_UNet",
-        smaatunet_kwargs=dict(
-            reduction_ratio=16,
-            depth=5,
-            kernels_per_layer=2,
-            base_channels=64,
-            bilinear=True,
-            longitude_padding = "circular", # global (seasonal)
-            # longitude_padding="zero", # creates artifacts near the border
-            # longitude_padding = "replicate", # regional (weather)
-        ),
-
-        # net_name="ConvNeXtTransformerUNet",
-        # convnext_kwargs=dict(
-        #     encoder_depths=(1, 1, 1),
-        #     decoder_depths=(1, 1),
-        #     dims=(8, 16, 32),
-        #     drop_path_rate=0.0,
-        #     layer_scale_init_value=1e-6,
-        #     stem_stride=1,
-
-        #     transformer_depth=0, # disable transform block
-        #     # transformer_depth=1, # enable depth 1 transform block
-        #     transformer_heads=8,
-        #     transformer_mlp_ratio=4.0,
-        #     transformer_dropout=0.0,
-
-        #     refinement_depth=2,
-
-        #     # zero_init_output=True,
-        #     longitude_padding="circular", # global (seasonal)
-        #     # longitude_padding="zero", # creates artifacts near the border
-        #     # longitude_padding = "replicate", # regional (weather)
-        # ),
-
-        # convnext_kwargs = dict(
-        #     encoder_depths=(2, 2, 3, 3),
-        #     decoder_depths=(2, 2, 2),
-        #     dims=(32, 64, 128, 256),
-        #     stem_stride=1,
-
-        #     drop_path_rate=0.1,
-        #     layer_scale_init_value=1e-6,
-
-        #     transformer_depth=1,
-        #     transformer_heads=8,
-        #     transformer_mlp_ratio=4.0,
-        #     transformer_dropout=0.0,
-
-        #     refinement_depth=2,
-
-        #     # zero_init_output=True,
-        #     longitude_padding="circular", # global (seasonal)
-        #     # longitude_padding="zero", # creates artifacts near the border
-        #     # longitude_padding = "replicate", # regional (weather)
-        # ),
-
-        # Loss
-        # loss_name="MSELoss",
-        # loss_kwargs={},
-
-        # loss_name="MaskedMSELoss",
-        # loss_kwargs=dict(
-        #     eps=1e-8,
-        # ),
-
-        # loss_name="GeoMSELoss", # latitudes are injected automatically
-        # loss_kwargs=dict(
-        #     eps=1e-8,
-        # ),
-
-        loss_name="GeoMaskedMSELoss", # latitudes are injected automatically
-        loss_kwargs=dict(
-            eps=1e-8,
-        ),
-
-        # loss_name="HuberLoss",
-        # loss_kwargs=dict(
-        #     delta=2.0,
-        # ),
-
-        # loss_name="VarNormMaskMSELoss",
-        # loss_kwargs=dict(
-        #     eps=1e-8,
-        # ),
-
-        # loss_name="GeoMaskedMSEMultiScaleLoss", # latitudes are injected automatically
-        # loss_kwargs=dict(
-        #     scales_degrees=(30.0, 60.0, 120.0), # scales_degrees are converted automatically to pool_kernel_sizes
-        #     scale_weights=(0.1, 0.4, 0.5),
-        #     lambda_multiscale=0.5,
-        #     lambda_batch_mean=1.0,
-        #     lambda_identity=0.5,
-        #     pool_stride=3,
-        #     eps=1e-8,
-        # ),
-
-        # loss_name="SpatialCVaRMSELoss", # latitudes are injected automatically
-        # loss_kwargs=dict(
-        #     spatial_patch_size_degrees=10.0, # spatial_patch_size_degrees is converted automatically to patch_size
-        #     cvar_fraction=0.2,
-        #     lambda_cvar=0.2,
-        #     eps=1e-8,
-        # ),
-        
-        # loss_name="SpatialDegradationMSELoss", # latitudes are injected automatically
-        # loss_kwargs=dict(
-        #     # Geographic size of each spatial patch used to compare
-        #     # corrected-model MSE against the zero-residual baseline MSE.
-        #     # Automatically converted to a grid-cell patch_size.
-        #     spatial_patch_size_degrees=10.0,
-        #     # Strength of the spatial degradation penalty relative to the
-        #     # global GeoMaskedMSE term. Larger values more strongly discourage
-        #     # local regions from becoming worse than the baseline forecast.
-        #     lambda_degradation=0.2,
-        #     # Fraction of spatial patches used for the degradation penalty.
-        #     # 0.2 means the loss focuses on the worst 20% of patches according
-        #     # to relative degradation.
-        #     degradation_fraction=0.2,
-        #     # Stabilizes relative degradation where baseline patch MSE is very
-        #     # small. The denominator is floored at 2% of the mean baseline
-        #     # patch MSE, avoiding excessively large relative penalties.
-        #     relative_floor_fraction=0.02,
-        #     # Numerical stability constant used in divisions and clamping.
-        #     eps=1e-8,
-        # ),
-
-        init_learning_rate=1e-4,
-        # init_learning_rate=1e-3,
-        # weight_decay=1e-3,
-        weight_decay=1e-4,
-        # weight_decay=0,
-        batch_size=16,
-        max_epochs=50,
-        # max_epochs=100,
-        target_realization_avg=False,
-        fill_nan_value=0.0,
-        torch_mask="target",
-        training_norm="BatchNorm2d", # ignored for convnext (uses only LayerNorm)
-        # training_norm="GroupNorm",
-        # training_norm="LayerNorm", # unsupported for SmaAt UNet
-        train_fraction=0.90,
-        accumulate_grad_batches=2,
-        # early_stopping_patience=20,
-        early_stopping_patience=30,
-
-        torch_workers=4,
-        trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
-    )
 
     dataset_kwargs = {
         "target_realization_avg": s.target_realization_avg,
@@ -3468,6 +3768,144 @@ def experiment_is_complete(
         and weights_file.exists()
         and predictions_complete
     )
+
+# ============================================================================
+# Orchestration
+# ============================================================================
+
+def replace_setting(
+    s: Settings,
+    parameter: str,
+    value: Any,
+) -> Settings:
+    keys = parameter.split(".")
+
+    if not keys or any(not key for key in keys):
+        raise ValueError(
+            f"Invalid parameter path: {parameter!r}"
+        )
+
+    # Top-level Settings field
+    if len(keys) == 1:
+        if parameter not in Settings.field_names():
+            raise KeyError(
+                f"Unknown Settings field: {parameter!r}"
+            )
+
+        return replace(
+            s,
+            **{parameter: deepcopy(value)},
+        )
+
+    # Nested dictionary field
+    parent = keys[0]
+
+    if parent not in Settings.field_names():
+        raise KeyError(
+            f"Unknown Settings field: {parent!r}"
+        )
+
+    nested = deepcopy(getattr(s, parent))
+    target = nested
+
+    for key in keys[1:-1]:
+        if not isinstance(target, dict) or key not in target:
+            raise KeyError(
+                f"Unknown nested parameter: {parameter!r}"
+            )
+
+        target = target[key]
+
+    final_key = keys[-1]
+
+    if not isinstance(target, dict) or final_key not in target:
+        raise KeyError(
+            f"Unknown nested parameter: {parameter!r}"
+        )
+
+    target[final_key] = deepcopy(value)
+
+    return replace(
+        s,
+        **{parent: nested},
+    )
+
+
+def format_ablation_value(value: Any) -> str:
+    if value is None:
+        return "none"
+
+    if isinstance(value, bool):
+        return str(value).lower()
+
+    return (
+        str(value)
+        .replace("/", "_")
+        .replace(" ", "_")
+        .replace(".", "p")
+    )
+
+
+def generate_ablation_settings(
+    base: Settings,
+    ablations: Mapping[str, Sequence[Any]],
+    mode: Literal["ofat", "grid"] = "ofat",
+) -> Iterator[tuple[str, Settings]]:
+
+    if mode == "ofat":
+        yield "baseline", base
+
+        for parameter, values in ablations.items():
+            for value in values:
+                s = replace_setting(
+                    base,
+                    parameter,
+                    value,
+                )
+
+                # Avoid duplicating the baseline
+                if s.equals(base):
+                    continue
+
+                name = (
+                    f"{parameter.replace('.', '_')}_"
+                    f"{format_ablation_value(value)}"
+                )
+
+                yield name, s
+
+    elif mode == "grid":
+        parameters = list(ablations)
+
+        for values in product(
+            *(ablations[p] for p in parameters)
+        ):
+            s = base
+            name_parts = []
+
+            for parameter, value in zip(
+                parameters,
+                values,
+            ):
+                s = replace_setting(
+                    s,
+                    parameter,
+                    value,
+                )
+
+                name_parts.append(
+                    f"{parameter.replace('.', '_')}_"
+                    f"{format_ablation_value(value)}"
+                )
+
+            name = "__".join(name_parts) or "baseline"
+
+            yield name, s
+
+    else:
+        raise ValueError(
+            f"Unsupported ablation mode: {mode!r}"
+        )
 
 
 if __name__ == "__main__":
