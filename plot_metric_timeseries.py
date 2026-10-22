@@ -47,12 +47,15 @@ def main() -> None:
     # ==========================================================
 
     exp_name = "weather_atmo"
+    # exp_name = "weather_atmo_variables"
+    # exp_name = "weather_atmo_normalization_ablation"
+    # exp_name = "weather_atmo_sample_independent"
     # exp_name = "weather_atmo_one_year_test"
     # exp_name = "weather_atmo_ablation_fixed_val"
     # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
 
     experiments_root = Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}")
-
+    output_root = Path(f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}")
     orography_path = Path("/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr")
 
     # ==========================================================
@@ -76,6 +79,14 @@ def main() -> None:
         "fc",
         "mlfc",
     )
+
+    metric_limits = None
+    metric_improvement_limits = {
+        # "Δ": (-0.75, 1.25),
+        "Δ": None,
+        "%": None,
+        "normalized": None,
+    }
 
     # ==========================================================
     # Model comparisons
@@ -111,6 +122,15 @@ def main() -> None:
 
     extrema_annotate = True
     extrema_print = True
+
+    # ==========================================================
+    # Timeseries annotations
+    # ==========================================================
+
+    annotate_times: tuple[str, ...] = (
+        # "2025-08-17 12:00", # W4 mslp 72h
+        # "2025-08-18 12:00", # B1 mslp 72h
+    )
 
     # ==========================================================
     # Data processing
@@ -766,7 +786,7 @@ def main() -> None:
                         f"_lead_{label}{rolling_filename}.png"
                     )
 
-                    out_file = s.plot_dir / common_path / filename
+                    out_file = output_root / s.output_name / common_path / filename
                     if out_file.exists() and not regenerate_plots:
                         continue
 
@@ -781,9 +801,9 @@ def main() -> None:
                         out_file=out_file,
                         time_range=valid_time_range,
                         leadtime_dim=leadtime_agg_coord,
+                        ylim=metric_limits,
 
                         train_start=s.train_start,
-
                         train_end=s.train_end,
                         val_end=s.val_end,
                         test_end=s.test_end,
@@ -793,6 +813,8 @@ def main() -> None:
                         extrema_n_max=extrema_n_max,
                         extrema_annotate=extrema_annotate,
                         extrema_print=extrema_print,
+
+                        annotate_times=annotate_times,
 
                         plot_title=plot_title,
                         plot_labels=plot_labels,
@@ -875,7 +897,7 @@ def main() -> None:
                                 f"lead_{label}{rolling_filename}.png"
                             )
 
-                            out_file = s.plot_dir / common_path / filename
+                            out_file = output_root / s.output_name / common_path / filename
 
                             if out_file.exists() and not regenerate_plots:
                                 continue
@@ -893,6 +915,7 @@ def main() -> None:
                                 out_file=out_file,
                                 time_range=valid_time_range,
                                 leadtime_dim=leadtime_agg_coord,
+                                ylim=metric_improvement_limits[improvement_unit],
 
                                 train_start=s.train_start,
 
@@ -905,6 +928,8 @@ def main() -> None:
                                 extrema_n_max=extrema_n_max,
                                 extrema_annotate=extrema_annotate,
                                 extrema_print=extrema_print,
+
+                                annotate_times=annotate_times,
 
                                 plot_title=plot_title,
                                 plot_labels=plot_labels,
@@ -955,6 +980,7 @@ def apply_rolling_mean(
         center=center,
         min_periods=min_periods,
     ).mean(skipna=True)
+
 
 def subset_timeseries_region(
     obj: xr.DataArray | xr.Dataset | None,
