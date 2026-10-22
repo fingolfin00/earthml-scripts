@@ -82,6 +82,8 @@ EXPERIMENT_TYPE: Literal["weather", "seasonal"] = "seasonal"
 
 # Only for weather
 EXPERIMENT_NAME = "weather_atmo"
+# EXPERIMENT_NAME = "weather_atmo_variables"
+# EXPERIMENT_NAME = "weather_atmo_normalization_ablation"
 # EXPERIMENT_NAME = "weather_atmo_one_year_test"
 # EXPERIMENT_NAME = "weather_atmo_orography"
 # EXPERIMENT_NAME = "weather_atmo_ablation_fixed_val"
@@ -142,8 +144,11 @@ ABLATIONS = {
     #     None,
     # ],
     # "normalization_mode": [
+    #     "none",
     #     "channel",
-    #     "sample",
+    # ],
+    # "sample_target_std": [
+    #     "target",
     # ],
     # "init_learning_rate": [
     #     1e-4,
@@ -227,8 +232,10 @@ def main() -> None:
                 test_end="2025-09-30",
                 # test_end="2025-05-12", # same season of short exp train period
                 train_subsamples=None,
-                # val_subsamples=None,
-                val_subsamples=72, # ablation
+                val_subsamples=None,
+                # train_subsamples=1300,
+                # val_subsamples=500,
+                # val_subsamples=72, # ablation
 
                 # separate_training_by_init_period=ClimPeriod.MONTH,
                 separate_training_by_init_period=None,
@@ -253,7 +260,14 @@ def main() -> None:
                 shuffle_train_batch=True,
 
                 normalization="full",
-                normalization_mode="channel",
+
+                normalization_input_mean="sample",
+                normalization_input_std="channel",
+                normalization_target_mean="sample",
+                normalization_target_std="channel",
+
+                sample_target_mean="input", # only for sample modes
+                sample_target_std="input", # only for sample modes
 
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
@@ -462,7 +476,14 @@ def main() -> None:
                 shuffle_train_batch=True,
 
                 normalization="full",
-                normalization_mode="channel",
+
+                normalization_input_mean="channel",
+                normalization_input_std="channel",
+                normalization_target_mean="channel",
+                normalization_target_std="channel",
+
+                sample_target_mean="input", # only for sample modes
+                sample_target_std="input", # only for sample modes
 
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
@@ -632,6 +653,28 @@ def main() -> None:
                 )
             )
 
+            # Extra experiments
+            # if EXPERIMENT_TYPE == "weather":
+            #     fixed_experiments = {
+            #         "fixed_centered": (273.15, 1.0),
+            #         "fixed_standardized": (273.15, 20.0),
+            #     }
+
+            #     for name, (mean, std) in fixed_experiments.items():
+            #         ablation_settings.append(
+            #             (
+            #                 name,
+            #                 replace(
+            #                     base_settings,
+            #                     normalization_mode="fixed",
+            #                     fixed_input_mean=mean,
+            #                     fixed_input_std=std,
+            #                     fixed_target_mean=mean,
+            #                     fixed_target_std=std,
+            #                 ),
+            #             )
+            #         )
+
             total_configs = len(ablation_settings)
 
             if ABLATIONS:
@@ -684,6 +727,7 @@ def main() -> None:
                     dry_run=False,
                     force_retrain=False,
                     force_test=False,
+                    interpolate_analysis=False if EXPERIMENT_TYPE=="weather" else True,
                 )
 
 # ==========================================================
@@ -1253,9 +1297,9 @@ def _core_train(
     val_subsamples: int | None = None,
     debug_month_sampler: bool = False,
 ):
-    # ==========================================================
+    # ----------------------------------------------------------
     # Startup
-    # ==========================================================
+    # ----------------------------------------------------------
 
     # Create exp dirs
     exp_dir = s.exp_dir / exp_name
@@ -1315,7 +1359,12 @@ def _core_train(
                 s.batch_size * s.accumulate_grad_batches
             ),
             "normalization": s.normalization,
-            "normalization_mode": s.normalization_mode,
+            "normalization_input_mean": s.normalization_input_mean,
+            "normalization_input_std": s.normalization_input_std,
+            "normalization_target_mean": s.normalization_target_mean,
+            "normalization_target_std": s.normalization_target_std,
+            "sample_target_mean": s.sample_target_mean,
+            "sample_target_std": s.sample_target_std,
             "seasonal_encoding": s.seasonal_encoding,
             "target_mode": s.target_mode,
         }
@@ -1330,7 +1379,7 @@ def _core_train(
         weights_file = weights_dir / "weights.ckpt"
         last_checkpoint = checkpoints_dir / "last.ckpt"
 
-        # Set zarr file names
+        # Set Zarr file names
         train_store, val_store, test_store = experiment_stores(
             s,
             exp_name,
@@ -1368,9 +1417,9 @@ def _core_train(
             dtype=torch.float32,
         )
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Loss
-        # ==========================================================
+        # ----------------------------------------------------------
 
         # Grid-dependent loss configuration
         grid_spacing = abs(
@@ -1438,9 +1487,9 @@ def _core_train(
             "net": {},
         }
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Torch model init
-        # ==========================================================
+        # ----------------------------------------------------------
 
         # Set input channels
         n_channels = train_dataset.x.shape[1]
@@ -1478,9 +1527,9 @@ def _core_train(
             **net_kwargs,
         ).to(device)
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Datamodule init
-        # ==========================================================
+        # ----------------------------------------------------------
 
         # Create train datamodule including train and validation dataset split logic
         train_datamodule = SplitDataModule(
@@ -1504,35 +1553,16 @@ def _core_train(
         # Triger setup(stage="fit") in SplitDataModule to get indices (normally L.Trainer calls it internally later)
         train_datamodule.setup("fit")
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Normalization
-        # ==========================================================
+        # ----------------------------------------------------------
 
-        if (
-            s.normalization_mode == "sample"
-            and s.normalization != "full"
-        ):
-            raise ValueError(
-                "normalization_mode='sample' requires "
-                "normalization='full'."
-            )
-
-        if (
-            s.normalization_mode == "sample"
-            and s.target_mode != "analysis"
-        ):
+        if s.normalization != "full":
             raise NotImplementedError(
-                "Sample normalization currently supports "
-                "target_mode='analysis' only."
+                "Monthly normalization has not yet been migrated."
             )
 
-        if s.normalization == "monthly":
-            NormClass = MonthlyNormalize
-        elif s.normalization == "full":
-            NormClass = Normalize
-        else:
-            raise ValueError(f"normalization={s.normalization} not supported.")
-
+        # Determine input channels excluded from normalization
         n_excluded_channels = 0
 
         if s.seasonal_encoding and s.channel_representation != "init_period":
@@ -1547,25 +1577,32 @@ def _core_train(
             else None
         )
 
-        normalize_input = NormClass(
-            mode=s.normalization_mode,
+        normalize_input = Normalize(
+            mean=s.normalization_input_mean,
+            std=s.normalization_input_std,
             exclude_channels=input_excluded_channels,
         ).fit(
             train_datamodule.train_dataset,
             dim="x",
         )
 
-        # import copy
-        # normalize_target = copy.deepcopy(normalize_input) # NOAA behavior, target and input normalizers are the same
-
-        normalize_target = NormClass(
-            mode=s.normalization_mode,
-            exclude_channels=None,
+        normalize_target = Normalize(
+            mean=s.normalization_target_mean,
+            std=s.normalization_target_std,
         ).fit(
             train_datamodule.train_dataset,
             dim="y",
         )
 
+        # Source of dynamic target normalization statistics
+        train_dataset.sample_target_mean = s.sample_target_mean
+        train_dataset.sample_target_std = s.sample_target_std
+
+        if val_dataset is not None:
+            val_dataset.sample_target_mean = s.sample_target_mean
+            val_dataset.sample_target_std = s.sample_target_std
+
+        # Attach transformations
         train_datamodule.train_dataset.transform_x = normalize_input
         train_datamodule.train_dataset.transform_y = normalize_target
 
@@ -1573,9 +1610,9 @@ def _core_train(
             train_datamodule.val_dataset.transform_x = normalize_input
             train_datamodule.val_dataset.transform_y = normalize_target
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Debug info
-        # ==========================================================
+        # ----------------------------------------------------------
 
         # Get indices for print info
         train_idx = train_datamodule.train_indices
@@ -1635,9 +1672,9 @@ def _core_train(
                 if batch_index >= 20:
                     break
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Test setup
-        # ==========================================================
+        # ----------------------------------------------------------
 
         # Normalize (use train-fitted normalizers)
         test_dataset.transform_x = normalize_input
@@ -1647,11 +1684,17 @@ def _core_train(
         # test_dataset.transform_x = test_normalize_input
         # test_dataset.transform_y = test_normalize_target
 
+        # In test always use input stats (for sample normalization only).
+        # The reasoning is that we should not have target stats available during testing
+        test_dataset.sample_target_mean = "input"
+        test_dataset.sample_target_std = "input"
+
         test_dataloader = DataLoader(
             test_dataset,
-            # batch_size=s.batch_size,
-            batch_size=1,
-            num_workers=0,
+            # batch_size=1,
+            # num_workers=0,
+            batch_size=s.batch_size,
+            num_workers=s.torch_workers,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
             persistent_workers=False,
@@ -1661,9 +1704,10 @@ def _core_train(
         if val_dataset is not None:
             val_test_dataloader = DataLoader(
                 val_dataset, # use the full validation period, even for subsampled exp
-                # batch_size=s.batch_size,
-                batch_size=1,
-                num_workers=0,
+                # batch_size=1,
+                # num_workers=0,
+                batch_size=s.batch_size,
+                num_workers=s.torch_workers,
                 shuffle=False,
                 pin_memory=(accelerator == "gpu"),
                 persistent_workers=False,
@@ -1671,17 +1715,18 @@ def _core_train(
 
         train_test_dataloader = DataLoader(
             train_dataset, # use the full training period, even for subsampled exp
-            # batch_size=s.batch_size,
-            batch_size=1,
-            num_workers=0,
+            # batch_size=1,
+            # num_workers=0,
+            batch_size=s.batch_size,
+            num_workers=s.torch_workers,
             shuffle=False,
             pin_memory=(accelerator == "gpu"),
             persistent_workers=False,
         )
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Print recap
-        # ==========================================================
+        # ----------------------------------------------------------
 
         print_training_recap(
             s=s,
@@ -1703,9 +1748,9 @@ def _core_train(
             checkpoints_dir=checkpoints_dir,
         )
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Train
-        # ==========================================================
+        # ----------------------------------------------------------
 
         train_trainer = L.Trainer(
             max_epochs=s.max_epochs,
@@ -1776,9 +1821,9 @@ def _core_train(
         elif accelerator == "gpu":
             torch.cuda.empty_cache()
 
-        # ==========================================================
+        # ----------------------------------------------------------
         # Test
-        # ==========================================================
+        # ----------------------------------------------------------
 
         model = build_net(
             name=s.net_name,
@@ -1807,6 +1852,15 @@ def _core_train(
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
             # deterministic=True
         )
+
+        # Use input normalization statistics in testing
+        if normalize_target.uses_sample_stats:
+            train_dataset.sample_target_mean = "input"
+            train_dataset.sample_target_std = "input"
+
+            if val_dataset is not None:
+                val_dataset.sample_target_mean = "input"
+                val_dataset.sample_target_std = "input"
 
         # Predict
         if should_test:
@@ -3196,12 +3250,20 @@ def print_training_recap(
         "model.norm_layer": s.training_norm,
 
         "training.torch_workers": s.torch_workers,
+
         "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
-        "training.normalization_mode": s.normalization_mode,
+        "training.normalization_input_mean": s.normalization_input_mean,
+        "training.normalization_input_std": s.normalization_input_std,
+        "training.normalization_target_mean": s.normalization_target_mean,
+        "training.normalization_target_std": s.normalization_target_std,
         "training.normalization_fit_initializations": train_dataset.n_init_times,
         "training.normalization_fit_samples": len(train_dataset),
+
         "training.seasonal_encoding": s.seasonal_encoding and s.channel_representation != "init_period",
+        "training.ensemble_encoding": s.ensemble_encoding,
         "training.spatial_encoding": s.spatial_encoding,
+        "training.orography_encoding": s.orography_encoding,
+
         "training.learning_rate": s.init_learning_rate,
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
@@ -3464,9 +3526,24 @@ def _test(
             f"{preds_norm.shape} != {targets_norm.shape}"
         )
 
-    # ==========================================================
+    # Calculate target kwargs for sample normalization mode passed to normalized_target
+    target_sample_kwargs = {}
+
+    if normalize_target.uses_sample_stats:
+        sample_mean, sample_std = normalize_input.sample_params(
+            dataset.x.detach().float().cpu(),
+            mask=dataset.x_mask.detach().cpu(),
+        )
+
+        if normalize_target.mean_spec == "sample":
+            target_sample_kwargs["mean"] = sample_mean
+
+        if normalize_target.std_spec == "sample":
+            target_sample_kwargs["std"] = sample_std
+
+    # ----------------------------------------------------------
     # Diagnostics
-    # ==========================================================
+    # ----------------------------------------------------------
 
     baseline_norm: torch.Tensor | None
 
@@ -3480,32 +3557,10 @@ def _test(
             : targets_norm.shape[1],
         ]
 
-        if s.normalization_mode == "sample":
-            baseline_mean, baseline_std = (
-                normalize_input.sample_params(
-                    dataset.x.detach().float().cpu()
-                )
-            )
-
-            baseline_norm = normalize_target(
-                baseline,
-                mean=baseline_mean,
-                std=baseline_std,
-            )
-
-        elif isinstance(
-            normalize_target,
-            MonthlyNormalize,
-        ):
-            baseline_norm = normalize_target(
-                baseline,
-                months=test_months,
-            )
-
-        else:
-            baseline_norm = normalize_target(
-                baseline,
-            )
+        baseline_norm = normalize_target(
+            baseline,
+            **target_sample_kwargs,
+        )
 
     elif s.target_mode in {
         "residual",
@@ -3581,33 +3636,10 @@ def _test(
 
     months = test_months[:preds_norm.shape[0]]
 
-    # Handle sample normalization mode seprately
-    if s.normalization_mode == "sample":
-        raw_input = dataset.x.detach().float().cpu()
-
-        sample_mean, sample_std = normalize_input.sample_params(
-            raw_input
-        )
-
-        if sample_mean.shape[0] != preds_norm.shape[0]:
-            raise ValueError(
-                "Sample normalization parameter count "
-                "does not match prediction count: "
-                f"{sample_mean.shape[0]} != "
-                f"{preds_norm.shape[0]}"
-            )
-
-        preds = normalize_target.inverse_tensor(
-            preds_norm,
-            mean=sample_mean,
-            std=sample_std,
-        )
-
-    else:
-        preds = normalize_target.inverse_tensor(
-            preds_norm,
-            months=months,
-        )
+    preds = normalize_target.inverse_tensor(
+        preds_norm,
+        **target_sample_kwargs,
+    )
 
     preds_ds = convert_to_xarray(preds, dataset, [s.var_an])
 
