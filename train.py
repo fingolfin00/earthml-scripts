@@ -80,6 +80,10 @@ TestWeights = Literal["best", "last", "current"]
 
 EXPERIMENT_TYPE: Literal["weather", "seasonal"] = "seasonal"
 
+FORCE_RETRAIN = False
+FORCE_TEST = False
+DRY_RUN = False
+
 # Only for weather
 EXPERIMENT_NAME = "weather_atmo"
 # EXPERIMENT_NAME = "weather_atmo_variables"
@@ -720,9 +724,9 @@ def main() -> None:
 
                 train(
                     s,
-                    dry_run=False,
-                    force_retrain=False,
-                    force_test=False,
+                    dry_run=DRY_RUN,
+                    force_retrain=FORCE_RETRAIN,
+                    force_test=FORCE_TEST,
                     interpolate_analysis=False if EXPERIMENT_TYPE=="weather" else True,
                 )
 
