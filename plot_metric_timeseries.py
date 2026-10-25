@@ -68,7 +68,10 @@ def main() -> None:
 
     plot_title = True
     plot_labels = True
-    plot_legend = True
+    plot_legend = False
+
+    timeseries_zero_line = False
+    timeseries_mean_line = True
 
     title_size = None
     label_size = None
@@ -423,9 +426,8 @@ def main() -> None:
             else "leadtime_seasonal"
         )
 
-        period_dim = (
-            f"{period_reference}_{clim_period.value}"
-        )
+        period_dim = f"{period_reference}_{clim_period.value}"
+        period_label = period_dim.replace("_", " ").capitalize()
 
         # Select and validate leadtimes
         selected_leadtimes = (
@@ -816,10 +818,14 @@ def main() -> None:
 
                         annotate_times=annotate_times,
 
+                        timeseries_zero_line=timeseries_zero_line,
+                        timeseries_mean_line=timeseries_mean_line,
+
                         plot_title=plot_title,
                         plot_labels=plot_labels,
                         title_suffix=title_suffix,
                         plot_legend=plot_legend,
+                        x_label=period_label,
                         title_size=title_size,
                         label_size=label_size,
                         tick_size=tick_size,
@@ -931,12 +937,15 @@ def main() -> None:
 
                                 annotate_times=annotate_times,
 
+                                timeseries_zero_line=timeseries_zero_line,
+                                timeseries_mean_line=timeseries_mean_line,
+
                                 plot_title=plot_title,
                                 plot_labels=plot_labels,
+                                x_label=period_label,
                                 title_suffix=title_suffix,
                                 plot_legend=plot_legend,
                                 improvement_unit=improvement_unit,
-                                timeseries_zero_line=True,
                                 title_size=title_size,
                                 label_size=label_size,
                                 tick_size=tick_size,
