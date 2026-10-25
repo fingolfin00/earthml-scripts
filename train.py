@@ -143,10 +143,6 @@ ABLATIONS = {
     #     2000,
     #     None,
     # ],
-    # "normalization_mode": [
-    #     "none",
-    #     "channel",
-    # ],
     # "sample_target_std": [
     #     "target",
     # ],
@@ -3530,10 +3526,19 @@ def _test(
     target_sample_kwargs = {}
 
     if normalize_target.uses_sample_stats:
-        sample_mean, sample_std = normalize_input.sample_params(
+        sample_mean, sample_std = normalize_input.resolve_sample_mean_or_std(
             dataset.x.detach().float().cpu(),
             mask=dataset.x_mask.detach().cpu(),
         )
+
+        n_target_channels = len(normalize_target.included_channels)
+
+        if sample_mean.shape[1] != n_target_channels:
+            raise ValueError(
+                "Input-derived sample statistics are incompatible with "
+                f"target normalization: input has {sample_mean.shape[1]} "
+                f"channels, target expects {n_target_channels}"
+            )
 
         if normalize_target.mean_spec == "sample":
             target_sample_kwargs["mean"] = sample_mean
@@ -3566,8 +3571,9 @@ def _test(
         "residual",
         "residual_realization",
     }:
-        baseline_norm = torch.zeros_like(
-            targets_norm
+        baseline_norm = normalize_target(
+            torch.zeros_like(targets_norm),
+            **target_sample_kwargs,
         )
 
     else:
