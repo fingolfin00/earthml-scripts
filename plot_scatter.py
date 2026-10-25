@@ -1,6 +1,6 @@
 from pathlib import Path
 from collections import defaultdict
-from typing import Literal, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import xarray as xr
@@ -13,10 +13,14 @@ from earthml import (
     ClimPeriod,
     Settings,
     get_experiment_configs,
+    get_and_subset_datasets,
 )
 from earthml.metrics import (
     get_scalar_metrics,
-    build_metric_improvement,
+    ImprovementAgg,
+    get_aggregated_metric_improvements,
+    get_required_improvement_metrics,
+    calculate_save_and_subset_climatologies,
     LeadtimeAgg,
     MetricAgg,
     ImprovementUnit,
@@ -67,28 +71,58 @@ def main() -> None:
 
     fit_lines = False
 
-
     # ==========================================================
     # Scatter configuration
     # ==========================================================
 
     # Y axis:
     # quality of the original forecast.
-    forecast_metric = "r2_anom"
+    forecast_metric = "r2"
 
     # X axis:
     # improvement of MLFC relative to FC.
-    diff_metric = "nrmse_anom"
+    diff_metric = "rmse"
 
-    improvement_unit: ImprovementUnit = "%"
+    improvement_unit: ImprovementUnit = "Δ"
     # "%"
     # "Δ"
     # "normalized"
 
-    color_by = "variable"
+    color_by = "experiment"
+    # color_by = "variable"
     marker_by = "leadtime"
     shade_by = "total_months"
 
+    # ==========================================================
+    # Category custom labels
+    # ==========================================================
+
+    def experiment_label(s: Settings) -> str:
+        return (
+            f"IM={s.normalization_input_mean}, "
+            f"IS={s.normalization_input_std}, "
+            f"TM={s.normalization_target_mean}, "
+            f"TS={s.normalization_target_std}"
+            + (
+                f", SM={s.sample_target_mean}, SS={s.sample_target_std}"
+                if s.normalization_input_mean == "sample"
+                or s.normalization_input_std == "sample"
+                or s.normalization_target_mean == "sample"
+                or s.normalization_target_std == "sample"
+                else ""
+            )
+        )
+
+    category_labels = {
+        "leadtime": {
+            12: "12h",
+            24: "24h",
+            36: "36h",
+            48: "48h",
+            60: "60h",
+            72: "72h",
+        },
+    }
 
     # ==========================================================
     # Data processing
@@ -144,6 +178,7 @@ def main() -> None:
     # leadtime_units = LeadtimeUnit.HOURS # weather
 
     leadtime_agg_mode: LeadtimeAgg = "aggregated"
+    # leadtime_agg_mode: LeadtimeAgg = "single"
     # "single" for weather
     # "aggregated" for seasonal
     # "seasonal_window"
@@ -152,10 +187,14 @@ def main() -> None:
     # Metric aggregation
     # ==========================================================
 
-    metric_agg_mode: MetricAgg = "spatial_avg"
+    metric_agg_mode: MetricAgg = "timeseries_avg"
     # "global"
     # "spatial_avg"
-    # "spatial_rmse"
+    # "timeseries_avg"
+
+    improvement_agg_mode: ImprovementAgg = "before"
+    # "after": aggregate intermediate metric fields first, then calculate improvements
+    # "before": calculate improvements from intermediate metric fields, then aggregate each improvement
 
     # ==========================================================
     # Variables and regions
@@ -235,6 +274,17 @@ def main() -> None:
     )
 
     # ==========================================================
+    # Experiment labels
+    # ==========================================================
+
+    experiment_labels = {
+        s.output_name: experiment_label(s)
+        for s in settings
+    }
+
+    category_labels["experiment"] = experiment_labels
+
+    # ==========================================================
     # Group comparable experiments
     # ==========================================================
 
@@ -268,7 +318,8 @@ def main() -> None:
         else "leadtime_seasonal"
     )
 
-    period_dim = f"start_{clim_period}"
+    period_reference = "init"
+    period_dim = f"{period_reference}_{clim_period.value}"
 
     # ==========================================================
     # Collect scatter points
@@ -311,6 +362,7 @@ def main() -> None:
         clim_time_range = (
             common_s.train_start,
             common_s.train_end,
+            # common_s.val_end,
         )
 
         points = iter_scalar_points(
@@ -318,6 +370,7 @@ def main() -> None:
             forecast_metric=forecast_metric,
             diff_metric=diff_metric,
             improvement_unit=improvement_unit,
+            improvement_agg_mode=improvement_agg_mode,
             metric_agg_mode=metric_agg_mode,
             leadtime_agg=leadtime_agg_mode,
             realization_agg=realization_agg,
@@ -335,6 +388,7 @@ def main() -> None:
                 clim_rolling_window
             ),
             period_dim=period_dim,
+            period_reference=period_reference,
             wanted_start_periods=(
                 wanted_start_periods
             ),
@@ -351,7 +405,7 @@ def main() -> None:
     improvement_suffix = {
         "%": "percentage",
         "Δ": "difference",
-        "": "normalized",
+        "normalized": "normalized",
     }[improvement_unit]
 
     if len(used_time_ranges) == 1:
@@ -369,6 +423,7 @@ def main() -> None:
             f"_lon_{safe_label(lon_range)}"
         )
         / metric_agg_mode
+        / improvement_agg_mode
     )
 
     filename = (
@@ -456,6 +511,8 @@ def main() -> None:
         marker_by=marker_by,
         shade_by=shade_by,
 
+        category_labels=category_labels,
+
         title=title,
         xlabel=improvement_label,
         ylabel=f"FC {forecast_metric_name}",
@@ -488,86 +545,6 @@ def main() -> None:
     )
 
 
-def spatial_mean(
-    da: xr.DataArray,
-    *,
-    lat_dim: str,
-    lon_dim: str,
-) -> xr.DataArray:
-    """
-    Area-weighted spatial mean.
-    """
-    weights = np.cos(
-        np.deg2rad(da[lat_dim])
-    )
-
-    return da.weighted(weights).mean(
-        dim=(lat_dim, lon_dim),
-        skipna=True,
-    )
-
-
-def spatial_rms(
-    da: xr.DataArray,
-    *,
-    lat_dim: str,
-    lon_dim: str,
-) -> xr.DataArray:
-    """
-    Area-weighted spatial root-mean-square.
-    """
-    weights = np.cos(
-        np.deg2rad(da[lat_dim])
-    )
-
-    return np.sqrt(
-        (da**2)
-        .weighted(weights)
-        .mean(
-            dim=(lat_dim, lon_dim),
-            skipna=True,
-        )
-    )
-
-
-def aggregate_metric(
-    da: xr.DataArray,
-    *,
-    metric_agg_mode: MetricAgg,
-    lat_dim: str | None,
-    lon_dim: str | None,
-) -> xr.DataArray:
-    """
-    Apply the requested spatial aggregation to a metric field.
-    """
-    if metric_agg_mode == "global":
-        return da
-
-    if lat_dim is None or lon_dim is None:
-        raise ValueError(
-            f"Spatial aggregation {metric_agg_mode!r} "
-            "requires latitude and longitude dimensions."
-        )
-
-    if metric_agg_mode == "spatial_avg":
-        return spatial_mean(
-            da,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-    if metric_agg_mode == "spatial_rmse":
-        return spatial_rms(
-            da,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
-
-    raise ValueError(
-        f"Unsupported metric_agg_mode="
-        f"{metric_agg_mode!r}."
-    )
-
 
 def iter_scalar_points(
     settings: Sequence[Settings],
@@ -575,6 +552,7 @@ def iter_scalar_points(
     forecast_metric: str,
     diff_metric: str,
     improvement_unit: ImprovementUnit,
+    improvement_agg_mode: ImprovementAgg,
     metric_agg_mode: MetricAgg,
     leadtime_agg: LeadtimeAgg,
     realization_agg: bool,
@@ -587,7 +565,8 @@ def iter_scalar_points(
     leadtime_units: LeadtimeUnit = LeadtimeUnit.MONTHS,
     leadtime_agg_coord: str = "leadtime",
     recalculate_climatology: bool = False,
-    period_dim: str = "start_month",
+    period_dim: str = "init_month",
+    period_reference: str = "init",
     wanted_start_periods: Sequence[str] | None = None,
     interpolate: bool = False,
     build_analysis: bool = True,
@@ -598,106 +577,110 @@ def iter_scalar_points(
     for s in settings:
 
         # ======================================================
-        # Metrics
+        # Data and climatologies (loaded once per experiment)
         # ======================================================
 
-        metrics_fc_ds, metrics_mlfc_ds = (
-            get_scalar_metrics(
-                s=s,
-                fc_metrics=[
-                    forecast_metric,
-                    diff_metric,
-                ],
-                mlfc_metrics=[
-                    diff_metric,
-                ],
-                metric_agg_mode=metric_agg_mode,
-                leadtime_agg=leadtime_agg,
-                realization_agg=realization_agg,
+        fc, an, mlfc = get_and_subset_datasets(
+            s,
+            leadtime_units=leadtime_units,
+            lat_range=lat_range,
+            lon_range=lon_range,
+            time_range=time_range,
+            interpolate=interpolate,
+        )
+
+        if mlfc is None:
+            raise ValueError(
+                f"ML-corrected forecast is not available for {s.output_name}."
+            )
+
+        fc_clim, an_clim, mlfc_clim = (
+            calculate_save_and_subset_climatologies(
+                s,
+                leadtime_units=leadtime_units,
+                force=recalculate_climatology,
+                clim_period=clim_period,
+                rolling_window=clim_rolling_window,
+                rolling_center=True,
+                rolling_min_periods=1,
                 lat_range=lat_range,
                 lon_range=lon_range,
-                time_range=time_range,
-                clim_period=clim_period,
-                clim_rolling_window=clim_rolling_window,
-                clim_time_range=clim_time_range,
-                leadtime_units=leadtime_units,
-                force_clim_recalc=(
-                    recalculate_climatology
-                ),
-                period_dim=period_dim,
-                wanted_start_periods=(
-                    wanted_start_periods
-                ),
+                time_range=clim_time_range,
+                time_start=None,
                 interpolate=interpolate,
+                engine="zarr",
                 build_analysis=build_analysis,
+                coord_rename_fc=None,
+                coord_rename_an=None,
             )
         )
 
-
         # ======================================================
-        # Spatial dimensions
-        # ======================================================
-
-        lat_dim = (
-            metrics_fc_ds
-            .earthml
-            .guessed_dims
-            .latitude
-        )
-
-        lon_dim = (
-            metrics_fc_ds
-            .earthml
-            .guessed_dims
-            .longitude
-        )
-
-
-        # ======================================================
-        # Y axis:
-        # forecast metric
+        # Metric profiles and intermediate fields
         # ======================================================
 
-        y_da = aggregate_metric(
-            metrics_fc_ds[forecast_metric],
+        common_kwargs = dict(
+            an=an,
+            var=s.var_fc,
+            realization_agg=realization_agg,
             metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
+            leadtime_agg_mode=leadtime_agg,
+            leadtime_agg_coord=leadtime_agg_coord,
+            clim_period=clim_period,
+            period_reference=period_reference,
+            period_dim=period_dim,
+            periods_requested=wanted_start_periods,
+            leadtime_unit=leadtime_units,
+            leadtime_windows=s.seasonal_leadtime_windows,
         )
 
+        metrics_fc_ds, metrics_fc_fields = get_scalar_metrics(
+            fc=fc,
+            fc_clim=fc_clim,
+            an_clim=an_clim,
+            metrics=get_required_improvement_metrics(
+                list(dict.fromkeys((forecast_metric, diff_metric))),
+                improvement_units=(improvement_unit,),
+            ),
+            **common_kwargs,
+        )
+
+        metrics_mlfc_ds, metrics_mlfc_fields = get_scalar_metrics(
+            fc=mlfc,
+            fc_clim=mlfc_clim,
+            an_clim=an_clim,
+            metrics=[diff_metric],
+            **common_kwargs,
+        )
 
         # ======================================================
-        # X axis:
-        # target vs baseline improvement
+        # Y axis: aggregated FC metric
         # ======================================================
 
-        baseline_da = aggregate_metric(
-            metrics_fc_ds[diff_metric],
-            metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
+        y_da = metrics_fc_ds[forecast_metric]
 
-        target_da = aggregate_metric(
-            metrics_mlfc_ds[diff_metric],
-            metric_agg_mode=metric_agg_mode,
-            lat_dim=lat_dim,
-            lon_dim=lon_dim,
-        )
+        # ======================================================
+        # X axis: selected order of improvement and aggregation
+        # ======================================================
 
-        baseline_da, target_da = xr.align(
-            baseline_da,
-            target_da,
-            join="exact",
-        )
-
-        x_da = build_metric_improvement(
-            baseline_da,
-            target_da,
+        improvements = get_aggregated_metric_improvements(
+            baseline_fields=metrics_fc_fields,
+            target_fields=metrics_mlfc_fields,
+            an=an,
             metric=diff_metric,
-            improvement_unit=improvement_unit,
+            baseline_model="fc",
+            target_model="mlfc",
+            metric_agg_mode=metric_agg_mode,
+            improvement_agg_mode=improvement_agg_mode,
+            improvement_units=(improvement_unit,),
         )
 
+        improvement_suffix = {
+            "%": "percentage",
+            "Δ": "difference",
+            "normalized": "normalized",
+        }[improvement_unit]
+        x_da = improvements[f"mlfc_vs_fc_{improvement_suffix}"]
 
         # ======================================================
         # Align X and Y
