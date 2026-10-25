@@ -29,11 +29,12 @@ from earthml.metrics import (
     MetricAgg,
     is_deterministic,
     is_probabilistic,
-    get_metrics,
+    get_scalar_metrics,
+    ImprovementAgg,
+    get_aggregated_metric_improvements,
     calculate_save_and_subset_climatologies,
     stack_hour_clim,
     groupby_period,
-    build_metric_improvements,
     get_required_improvement_metrics,
 )
 from earthml.plots import (
@@ -87,7 +88,7 @@ def main() -> None:
     model_labels = {
         "fc": "FC",
         "mlfc": "MLFC",
-        "clim-fc": "Clim-FC",
+        "clim-fc": "Clim-corrected FC",
     }
 
     comparison_labels_map = {
@@ -110,20 +111,21 @@ def main() -> None:
             # "corr": (0.5, 1.0),
 
             # Weather: monthly climatology
-            "bias": (-0.5, 0.5),
-            "rmse": (0.8, 1.8), # only fc
+            # "bias": (-0.5, 0.5),
+            # "rmse": (0.8, 1.8),   # only FC
             # "rmse": (0.5, 1.8),
-            "corr": (0.8, 1.0), # only fc
+
+            # "corr": (0.8, 1.0),   # only FC
             # "corr": (0.5, 1.0),
         },
 
         "percentage": {
-            # "rmse": (-50, 50),
+            # "rmse": (-10, 10),
         },
 
         "difference": {
             # Weather: only FC
-            "rmse": (0, 0.4),
+            # "rmse": (0, 0.4),
         },
 
         "normalized": {
@@ -166,7 +168,7 @@ def main() -> None:
     # How lead times are distinguished when combined:
     #   "shades" -> shades of each model color
     #   "colors" -> one distinct color per lead time
-    climatological_leadtime_colors = "colors"
+    climatological_leadtime_colors = "shades"
 
     # None -> use every available lead time.
     # wanted_climatological_profile_leadtimes = [24, 48, 72]
@@ -257,48 +259,79 @@ def main() -> None:
 
     combined_plot_folder = "profile_comparison"
 
-    comparison_name = "ablation_fixed_val_samples"
+    # comparison_name = "ablation_fixed_val_samples"
 
+    # comparison_labels = [
+    #     "1000",
+    #     "1200",
+    #     "1250",
+    #     "1300",
+    #     "1500",
+    #     "2000",
+    #     "264",
+    #     "500",
+    #     "2474",  # base experiment
+    # ]
+
+    # comparison_colors = {
+    #     "fc": "tab:blue",
+    #     # "clim-fc": "tab:orange",
+
+    #     "2474": "purple",
+    #     "1000": "darkgoldenrod",
+    #     "1200": "turquoise",
+    #     "1250": "coral",
+    #     "1300": "peru",
+    #     "1500": "darkorange",
+    #     "2000": "crimson",
+    #     "264": "black",
+    #     "500": "navy",
+    # }
+
+    # comparison_linestyles = {
+    #     "fc": "--",
+    #     # "clim-fc": "-",
+
+    #     "2474": "-",
+    #     "1000": "-",
+    #     "1200": "-",
+    #     "1250": "-",
+    #     "1300": "-",
+    #     "1500": "-",
+    #     "2000": "-",
+    #     "264": "-",
+    #     "500": "-",
+    # }
+
+    comparison_name = "normalization_modes"
     comparison_labels = [
-        "1000",
-        "1200",
-        "1250",
-        "1300",
-        "1500",
-        "2000",
-        "264",
-        "500",
-        "2474",  # base experiment
+        "channel_mean",
+        "channel_mean_std",
+        "sample_mean_channel_std",
+        "sample_mean_std_input_stats_for_target",
+        "sample_mean_std_target_stats_for_target",
     ]
 
     comparison_colors = {
         "fc": "tab:blue",
         # "clim-fc": "tab:orange",
 
-        "2474": "purple",
-        "1000": "darkgoldenrod",
-        "1200": "turquoise",
-        "1250": "coral",
-        "1300": "peru",
-        "1500": "darkorange",
-        "2000": "crimson",
-        "264": "black",
-        "500": "navy",
+        "channel_mean": "purple",
+        "channel_mean_std": "darkgoldenrod",
+        "sample_mean_channel_std": "turquoise",
+        "sample_mean_std_input_stats_for_target": "coral",
+        "sample_mean_std_target_stats_for_target": "peru",
     }
 
     comparison_linestyles = {
         "fc": "--",
         # "clim-fc": "-",
 
-        "2474": "-",
-        "1000": "-",
-        "1200": "-",
-        "1250": "-",
-        "1300": "-",
-        "1500": "-",
-        "2000": "-",
-        "264": "-",
-        "500": "-",
+        "channel_mean": "-",
+        "channel_mean_std": "-",
+        "sample_mean_channel_std": "-",
+        "sample_mean_std_input_stats_for_target": "-",
+        "sample_mean_std_target_stats_for_target": "-",
     }
 
     # ----------------------------------------------------------
@@ -343,7 +376,8 @@ def main() -> None:
     combined_experiment_axis_connect = True
 
     # None -> use comparison_name with underscores replaced by spaces.
-    combined_experiment_axis_label = "Training samples"
+    # combined_experiment_axis_label = "Training samples"
+    combined_experiment_axis_label = "Normalization modes"
     combined_experiment_axis_tick_rotation = 0
 
     # ==========================================================
@@ -352,12 +386,12 @@ def main() -> None:
 
     plot_models = (
         "fc",
-        # "mlfc",
-        # "clim-fc",
+        "mlfc",
+        "clim-fc",
     )
 
     model_comparisons = (
-        # ("fc", "mlfc"),
+        ("fc", "mlfc"),
         # ("clim-fc", "mlfc"),
         # ("fc", "clim-fc"),
     )
@@ -421,19 +455,20 @@ def main() -> None:
     inference_period = None
     # inference_period = ("2025-01-01", "2025-10-31")
 
+    # Activate all periods for climatology profiles
     periods_requested = [
-        "01",
-        "02",
-        "03",
-        "04",
-        "05",
-        "06",
-        "07",
-        "08",
-        "09",
-        "10",
-        "11",
-        "12",
+        # "01",
+        # "02",
+        # "03",
+        # "04",
+        # "05",
+        # "06",
+        # "07",
+        # "08",
+        # "09",
+        # "10",
+        # "11",
+        # "12",
         "all",
     ]
 
@@ -441,9 +476,14 @@ def main() -> None:
     # Metric aggregation
     # ==========================================================
 
-    metric_agg_mode: MetricAgg = "spatial_avg"
+    metric_agg_mode: MetricAgg = "timeseries_avg"
+    # "timeseries_avg"
     # "spatial_avg"
     # "global"
+
+    improvement_agg_mode: ImprovementAgg = "before"
+    # "after": aggregate model metrics, then calculate improvement
+    # "before": calculate local improvement, then aggregate
 
     leadtime_agg_mode: LeadtimeAgg = "single"
     # "single" for weather
@@ -619,9 +659,18 @@ def main() -> None:
         # input_realization_avg=True,
         # channel_representation="variable",
 
+        # normalization_input_mean="sample",
+        # normalization_input_std="sample",
+        # normalization_target_mean="sample",
+        # normalization_target_std="sample",
+        # sample_target_mean="input",
+        # sample_target_std="input",
+
         loss_name="GeoMaskedMSELoss",
         # loss_name="GeoMaskedMSEMultiScaleLoss",
         # loss_name="SpatialDegradationMSELoss",
+
+        # train_start="2019-10-14",
 
         # separate_training_by_init_period=None,
         # separate_training_by_init_period=ClimPeriod.MONTH,
@@ -629,7 +678,7 @@ def main() -> None:
 
         # extra_suffix_folder="264samples_consecutive",
         # extra_suffix_folder="NOAA_copy",
-        extra_suffix_folder="",
+        # extra_suffix_folder="",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
@@ -980,10 +1029,11 @@ def main() -> None:
             # --------------------------------------------------
 
             if deterministic_metrics:
-                profile_part, field_part = get_profile_metrics(
-                    s=s,
+                profile_part, field_part = get_scalar_metrics(
                     an=an,
                     fc=ds,
+                    var=s.var_fc,
+                    leadtime_windows=s.seasonal_leadtime_windows,
                     an_clim=an_clim,
                     fc_clim=ds_clim,
                     metrics=deterministic_metrics,
@@ -1006,10 +1056,11 @@ def main() -> None:
             # --------------------------------------------------
 
             if probabilistic_metrics:
-                profile_part, field_part = get_profile_metrics(
-                    s=s,
+                profile_part, field_part = get_scalar_metrics(
                     an=an,
                     fc=ds,
+                    var=s.var_fc,
+                    leadtime_windows=s.seasonal_leadtime_windows,
                     an_clim=an_clim,
                     fc_clim=ds_clim,
                     metrics=probabilistic_metrics,
@@ -1044,10 +1095,11 @@ def main() -> None:
                 plot_members
                 and deterministic_metrics
             ):
-                member_profiles, _ = get_profile_metrics(
-                    s=s,
+                member_profiles, _ = get_scalar_metrics(
                     an=an,
                     fc=ds,
+                    var=s.var_fc,
+                    leadtime_windows=s.seasonal_leadtime_windows,
                     an_clim=an_clim,
                     fc_clim=ds_clim,
                     metrics=deterministic_metrics,
@@ -1095,6 +1147,8 @@ def main() -> None:
                     for model, ds
                     in members_by_model.items()
                 }
+
+        comparison_source_by_model = metric_fields_by_model
 
         # ======================================================
         # Available periods
@@ -1218,6 +1272,7 @@ def main() -> None:
                         )
                         / metric
                         / metric_agg_mode
+                        / improvement_agg_mode
                     )
 
                     filename = (
@@ -1336,6 +1391,7 @@ def main() -> None:
                             )
                             / metric
                             / metric_agg_mode
+                            / improvement_agg_mode
                         )
 
                         filename = (
@@ -1454,8 +1510,8 @@ def main() -> None:
                 ):
                     continue
 
-                baseline_ds = metric_fields_by_model[baseline_model]
-                target_ds = metric_fields_by_model[target_model]
+                baseline_ds = comparison_source_by_model[baseline_model]
+                target_ds = comparison_source_by_model[target_model]
 
                 comparison_metrics = [
                     metric
@@ -1469,21 +1525,18 @@ def main() -> None:
 
                 for metric in comparison_metrics:
 
-                    improvements = build_metric_improvements(
+                    improvements = get_aggregated_metric_improvements(
                         baseline_ds,
                         target_ds,
                         metric=metric,
                         baseline_model=baseline_model,
                         target_model=target_model,
+                        an=an,
+                        metric_agg_mode=metric_agg_mode,
+                        improvement_agg_mode=improvement_agg_mode,
                     )
 
                     for comparison_model, comparison_da in improvements.items():
-
-                        comparison_da = spatial_average_metric_fields(
-                            comparison_da,
-                            an=an,
-                            metric_agg_mode=metric_agg_mode,
-                        )
 
                         (
                             variant,
@@ -1518,6 +1571,7 @@ def main() -> None:
                                 )
                                 / metric
                                 / metric_agg_mode
+                                / improvement_agg_mode
                             )
 
                             filename = (
@@ -1632,6 +1686,7 @@ def main() -> None:
                                     )
                                     / metric
                                     / metric_agg_mode
+                                    / improvement_agg_mode
                                 )
 
                                 filename = (
@@ -1758,23 +1813,26 @@ def main() -> None:
                         f"variant {requested_variant!r}."
                     )
 
-                if {"fc", "mlfc"} <= metric_fields_by_model.keys():
+                if {"fc", "mlfc"} <= comparison_source_by_model.keys():
                     combined_variable_parts = {}
 
                     for metric in metrics:
                         if (
                             metric == "rank_histogram"
-                            or metric not in metric_fields_by_model["fc"]
-                            or metric not in metric_fields_by_model["mlfc"]
+                            or metric not in comparison_source_by_model["fc"]
+                            or metric not in comparison_source_by_model["mlfc"]
                         ):
                             continue
 
-                        improvements = build_metric_improvements(
-                            metric_fields_by_model["fc"],
-                            metric_fields_by_model["mlfc"],
+                        improvements = get_aggregated_metric_improvements(
+                            comparison_source_by_model["fc"],
+                            comparison_source_by_model["mlfc"],
                             metric=metric,
                             baseline_model="fc",
                             target_model="mlfc",
+                            an=an,
+                            metric_agg_mode=metric_agg_mode,
+                            improvement_agg_mode=improvement_agg_mode,
                         )
 
                         matching = [
@@ -1785,11 +1843,7 @@ def main() -> None:
 
                         if matching:
                             combined_variable_parts[metric] = (
-                                spatial_average_metric_fields(
-                                    matching[0],
-                                    an=an,
-                                    metric_agg_mode=metric_agg_mode,
-                                )
+                                matching[0]
                             )
 
                     if combined_variable_parts:
@@ -2081,6 +2135,7 @@ def main() -> None:
                             )
                             / metric
                             / metric_agg_mode
+                            / improvement_agg_mode
                         )
 
                         filename = (
@@ -2244,6 +2299,7 @@ def main() -> None:
                             )
                             / metric
                             / metric_agg_mode
+                            / improvement_agg_mode
                         )
 
                         filename = (
@@ -2472,6 +2528,8 @@ def main() -> None:
                         experiment_label
                     ] = mlfc_members
 
+            comparison_source_by_model = fields_by_model
+
             # ==================================================
             # Available periods
             # ==================================================
@@ -2634,6 +2692,7 @@ def main() -> None:
                                 )
                                 / metric
                                 / metric_agg_mode
+                                / improvement_agg_mode
                             )
 
                             filename = (
@@ -2721,6 +2780,7 @@ def main() -> None:
                         )
                         / metric
                         / metric_agg_mode
+                        / improvement_agg_mode
                     )
 
                     filename = (
@@ -2843,6 +2903,7 @@ def main() -> None:
                             )
                             / metric
                             / metric_agg_mode
+                            / improvement_agg_mode
                         )
 
                         filename = (
@@ -2970,7 +3031,7 @@ def main() -> None:
                         continue
 
                     baseline_ds = (
-                        fields_by_model[
+                        comparison_source_by_model[
                             baseline_model
                         ]
                     )
@@ -3008,7 +3069,7 @@ def main() -> None:
                                 continue
 
                             target_ds = (
-                                fields_by_model[
+                                comparison_source_by_model[
                                     experiment_label
                                 ]
                             )
@@ -3020,7 +3081,7 @@ def main() -> None:
                                 continue
 
                             improvements = (
-                                build_metric_improvements(
+                                get_aggregated_metric_improvements(
                                     baseline_ds,
                                     target_ds,
                                     metric=metric,
@@ -3030,6 +3091,9 @@ def main() -> None:
                                     target_model=(
                                         experiment_label
                                     ),
+                                    an=group["spatial_reference"],
+                                    metric_agg_mode=metric_agg_mode,
+                                    improvement_agg_mode=improvement_agg_mode,
                                 )
                             )
 
@@ -3041,14 +3105,6 @@ def main() -> None:
                                 variant = (
                                     get_improvement_variant(
                                         generated_name
-                                    )
-                                )
-
-                                comparison_da = (
-                                    spatial_average_metric_fields(
-                                        comparison_da,
-                                        an=group["spatial_reference"],
-                                        metric_agg_mode=metric_agg_mode,
                                     )
                                 )
 
@@ -3132,6 +3188,7 @@ def main() -> None:
                                             )
                                             / metric
                                             / metric_agg_mode
+                                            / improvement_agg_mode
                                         )
 
                                         filename = (
@@ -3224,6 +3281,7 @@ def main() -> None:
                                     )
                                     / metric
                                     / metric_agg_mode
+                                    / improvement_agg_mode
                                 )
 
                                 filename = (
@@ -3344,6 +3402,7 @@ def main() -> None:
                                         )
                                         / metric
                                         / metric_agg_mode
+                                        / improvement_agg_mode
                                     )
 
                                     filename = (
@@ -3463,13 +3522,13 @@ def main() -> None:
                         continue
 
                     baseline_ds = (
-                        fields_by_model[
+                        comparison_source_by_model[
                             baseline_model
                         ]
                     )
 
                     target_ds = (
-                        fields_by_model[
+                        comparison_source_by_model[
                             target_model
                         ]
                     )
@@ -3490,12 +3549,15 @@ def main() -> None:
                     for metric in comparison_metrics:
 
                         improvements = (
-                            build_metric_improvements(
+                            get_aggregated_metric_improvements(
                                 baseline_ds,
                                 target_ds,
                                 metric=metric,
                                 baseline_model=baseline_model,
                                 target_model=target_model,
+                                an=group["spatial_reference"],
+                                metric_agg_mode=metric_agg_mode,
+                                improvement_agg_mode=improvement_agg_mode,
                             )
                         )
 
@@ -3503,14 +3565,6 @@ def main() -> None:
                             comparison_model,
                             comparison_da,
                         ) in improvements.items():
-
-                            comparison_da = (
-                                spatial_average_metric_fields(
-                                    comparison_da,
-                                    an=group["spatial_reference"],
-                                    metric_agg_mode=metric_agg_mode,
-                                )
-                            )
 
                             (
                                 variant,
@@ -3549,6 +3603,7 @@ def main() -> None:
                                     )
                                     / metric
                                     / metric_agg_mode
+                                    / improvement_agg_mode
                                 )
 
                                 filename = (
@@ -3666,6 +3721,7 @@ def main() -> None:
                                         )
                                         / metric
                                         / metric_agg_mode
+                                        / improvement_agg_mode
                                     )
 
                                     filename = (
@@ -3800,101 +3856,13 @@ def get_period_profile_label(
     return f"{reference_label} {period_label}"
 
 
-def get_profile_metrics(
-    *,
-    s,
-    an,
-    fc,
-    an_clim,
-    fc_clim,
-    metrics,
-    realization_agg,
-    metric_agg_mode,
-    leadtime_agg_mode,
-    leadtime_agg_coord,
-    clim_period,
-    period_reference,
-    period_dim,
-    periods_requested,
-    leadtime_unit,
-):
-    metric_kind = (
-        "scalar"
-        if metric_agg_mode == "global"
-        else "maps"
-    )
-
-    fields = get_metrics(
-        an=an,
-        fc=fc,
-        var=s.var_fc,
-        metric_kind=metric_kind,
-        leadtime_agg=leadtime_agg_mode,
-        realization_agg=realization_agg,
-        an_clim=an_clim,
-        fc_clim=fc_clim,
-        metrics=metrics,
-        leadtime_windows=s.seasonal_leadtime_windows,
-        leadtime_agg_coord=leadtime_agg_coord,
-        clim_period=clim_period,
-        period_reference=period_reference,
-        period_dim=period_dim,
-        periods_requested=periods_requested,
-        leadtime_unit=leadtime_unit,
-    )
-
-    if metric_agg_mode == "global":
-        return fields, fields
-
-    if metric_agg_mode == "spatial_avg":
-        lat_dim = an.earthml.guessed_dims.latitude
-        lon_dim = an.earthml.guessed_dims.longitude
-
-        weights = np.cos(np.deg2rad(an[lat_dim]))
-
-        profiles = fields.weighted(weights).mean(
-            dim=(lat_dim, lon_dim)
-        )
-
-        return profiles, fields
-
-    raise ValueError(
-        f"Unsupported metric_agg_mode={metric_agg_mode!r}"
-    )
-
-
-def spatial_average_metric_fields(
-    da: xr.DataArray | xr.Dataset,
-    *,
-    an,
-    metric_agg_mode,
-) -> xr.DataArray | xr.Dataset:
-    """Spatially average metric/improvement fields for profile plotting."""
-
-    if metric_agg_mode == "global":
-        return da
-
-    if metric_agg_mode == "spatial_avg":
-        lat_dim = an.earthml.guessed_dims.latitude
-        lon_dim = an.earthml.guessed_dims.longitude
-
-        weights = np.cos(np.deg2rad(an[lat_dim]))
-
-        return da.weighted(weights).mean(
-            dim=(lat_dim, lon_dim)
-        )
-
-    raise ValueError(
-        f"Unsupported metric_agg_mode={metric_agg_mode!r}"
-    )
-
 
 def get_improvement_variant(
     comparison_name: str,
 ) -> str:
     """
     Extract the improvement representation from a model-comparison
-    name generated by build_metric_improvements().
+    name generated by get_aggregated_metric_improvements().
     """
     if comparison_name.endswith("_percentage"):
         return "percentage"
