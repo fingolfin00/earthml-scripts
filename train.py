@@ -16,6 +16,9 @@ import xarray as xr
 
 from dask.diagnostics.progress import ProgressBar
 
+import os
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 from torch.utils.data import DataLoader
 import lightning as L
@@ -64,6 +67,7 @@ class LeadtimeDatasets(TypedDict):
     test: XarrayDataset | XarrayPair
     x_clim: xr.Dataset | None
     y_clim: xr.Dataset | None
+    source_initialization_times: dict[str, np.ndarray]
 
 PredictionRecord = tuple[
     int,          # leadtime
@@ -84,12 +88,16 @@ FORCE_RETRAIN = False
 FORCE_TEST = False
 DRY_RUN = False
 
+DETERMINISTIC = False
+
 # Only for weather
 EXPERIMENT_NAME = "weather_atmo"
+# EXPERIMENT_NAME = "weather_atmo_seed"
+# EXPERIMENT_NAME = "weather_atmo_normalization"
 # EXPERIMENT_NAME = "weather_atmo_variables"
 # EXPERIMENT_NAME = "weather_atmo_normalization_ablation"
 # EXPERIMENT_NAME = "weather_atmo_one_year_test"
-# EXPERIMENT_NAME = "weather_atmo_orography"
+# EXPERIMENT_NAME = "weather_atmo_encoding"
 # EXPERIMENT_NAME = "weather_atmo_ablation_fixed_val"
 # EXPERIMENT_NAME = "weather_atmo_short_zero_vs_replicate_padding"
 
@@ -160,6 +168,12 @@ ABLATIONS = {
     #     64,
     #     128,
     # ],
+    # "seed": [
+    #     41,
+    #     42,
+    #     43,
+    #     44,
+    # ],
 }
 
 # ==========================================================
@@ -167,6 +181,16 @@ ABLATIONS = {
 # ==========================================================
 
 def main() -> None:
+    # Reproducibility
+    if DETERMINISTIC:
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
+    else:
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = False
+        torch.use_deterministic_algorithms(False)
+
     for region_name, region_location in REGIONS.items():
         for var in VARIABLES:
             if var in {"mlotst", "ssh", "sss", "t20d"}:
@@ -262,13 +286,15 @@ def main() -> None:
                 normalization="full",
 
                 normalization_input_mean="sample",
-                normalization_input_std="channel",
+                normalization_input_std="sample",
                 normalization_target_mean="sample",
-                normalization_target_std="channel",
+                normalization_target_std="sample",
 
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
 
+                temporal_evolution_encoding=(),
+                # temporal_evolution_encoding=(-4, -3, -2, -1),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
                 spatial_encoding=False,
@@ -485,6 +511,7 @@ def main() -> None:
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
 
+                temporal_evolution_encoding=(),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
                 spatial_encoding=False,
@@ -775,6 +802,8 @@ def train(
         "output_realizations": s.output_realizations,
         "torch_mask": s.torch_mask,
         "fill_nan_value": s.fill_nan_value,
+        "sample_target_mean": s.sample_target_mean,
+        "sample_target_std": s.sample_target_std,
     }
 
     s.make_dirs()
@@ -810,7 +839,7 @@ def train(
     if dry_run:
         return
 
-    L.seed_everything(s.seed)
+    L.seed_everything(s.seed, workers=True)
 
     train_pred_paths: list[PredictionRecord] = []
     val_pred_paths: list[PredictionRecord] = []
@@ -833,6 +862,12 @@ def train(
         raise NotImplementedError(
             "Currently only monthly separate training is supported."
         )
+
+    if (
+        s.temporal_evolution_encoding
+        and s.split_strategy != "explicit"
+    ):
+        raise NotImplementedError("Temporal evolution encoding currently requires split_strategy='explicit'")
 
     current_exp = 0
 
@@ -962,12 +997,8 @@ def train(
             )
 
             dataset_d = make_train_test_datasets_for_leadtime(
-                forecast_ds_path=(
-                    s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr"
-                ),
-                analysis_ds_path=(
-                    s.input_dir / f"{s.model_an}_{s.var_an}.zarr"
-                ),
+                forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
+                analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
                 leadtime=lt,
                 leadtime_unit=LeadtimeUnit(s.leadtime_unit),
                 train_start=s.train_start,
@@ -984,6 +1015,7 @@ def train(
                 # regional boxes are selected below as cheap xarray views.
                 region=s.region,
                 dataset_kwargs=dataset_kwargs,
+                temporal_evolution_encoding=s.temporal_evolution_encoding,
                 seasonal_encoding=(
                     s.seasonal_encoding
                     and s.channel_representation != "init_period"
@@ -1187,6 +1219,7 @@ def train(
                     test_dataset=test_dataset,
                     x_clim=x_clim,
                     y_clim=y_clim,
+                    source_initialization_times=dataset_d["source_initialization_times"],
                     force_retrain=force_retrain,
                     force_test=force_test,
                     dry_run=dry_run,
@@ -1284,6 +1317,7 @@ def _core_train(
     test_dataset: XarrayDataset,
     x_clim: xr.Dataset | None,
     y_clim: xr.Dataset | None,
+    source_initialization_times: Mapping[str, Sequence],
     force_retrain: bool,
     force_test: bool,
     dry_run: bool,
@@ -1365,6 +1399,7 @@ def _core_train(
             "normalization_target_std": s.normalization_target_std,
             "sample_target_mean": s.sample_target_mean,
             "sample_target_std": s.sample_target_std,
+            "temporal_evolution_encoding": str(s.temporal_evolution_encoding),
             "seasonal_encoding": s.seasonal_encoding,
             "target_mode": s.target_mode,
         }
@@ -1562,25 +1597,10 @@ def _core_train(
                 "Monthly normalization has not yet been migrated."
             )
 
-        # Determine input channels excluded from normalization
-        n_excluded_channels = 0
-
-        if s.seasonal_encoding and s.channel_representation != "init_period":
-            n_excluded_channels += 4
-
-        if s.spatial_encoding:
-            n_excluded_channels += 4
-
-        input_excluded_channels = (
-            tuple(range(-n_excluded_channels, 0))
-            if n_excluded_channels > 0
-            else None
-        )
-
+        # Normalize
         normalize_input = Normalize(
             mean=s.normalization_input_mean,
             std=s.normalization_input_std,
-            exclude_channels=input_excluded_channels,
         ).fit(
             train_datamodule.train_dataset,
             dim="x",
@@ -1739,6 +1759,7 @@ def _core_train(
             device=device,
             leadtime=leadtime,
             normalization_name=type(normalize_input).__name__,
+            normalize_input=normalize_input,
             dry_run=dry_run,
             force_retrain=force_retrain,
             force_test=force_test,
@@ -1746,6 +1767,7 @@ def _core_train(
             exp_name=exp_name,
             weights_dir=weights_dir,
             checkpoints_dir=checkpoints_dir,
+            source_initialization_times=source_initialization_times,
         )
 
         # ----------------------------------------------------------
@@ -1769,7 +1791,8 @@ def _core_train(
                 ckpt_folder_path=checkpoints_dir,
                 patience=s.early_stopping_patience,
             ),
-            # deterministic=True
+            deterministic=DETERMINISTIC,
+            benchmark=False,
             # num_sanity_val_steps=0,
         )
 
@@ -1850,7 +1873,8 @@ def _core_train(
             precision=s.trainer_precision,
             # gradient_clip_val=1.0,  # Recommended starting value (e.g., 0.5, 1.0, 5.0)
             # gradient_clip_algorithm="norm",  # "norm" for clipping by norm, "value" for clipping by value
-            # deterministic=True
+            deterministic=DETERMINISTIC,
+            benchmark=False,
         )
 
         # Use input normalization statistics in testing
@@ -2037,6 +2061,154 @@ def add_or_set_leadtime(ds: xr.Dataset, lt: int) -> xr.Dataset:
     return ds.expand_dims(leadtime=[lt])
 
 
+def set_channel_metadata(
+    ds: xr.Dataset,
+    *,
+    normalize: bool,
+    temporal_offset: int | None = None,
+) -> xr.Dataset:
+    ds = ds.copy(deep=False)
+
+    for name in ds.data_vars:
+        ds[name].attrs = {
+            **ds[name].attrs,
+            "channel_normalize": normalize,
+            "channel_variable": name,
+            "channel_temporal_offset": temporal_offset,
+        }
+
+    return ds
+
+
+def infer_initialization_frequency_from_times(
+    values: Sequence,
+) -> pd.DateOffset | pd.Timedelta | None:
+    """Infer nominal cadence from source initialization timestamps."""
+    times = pd.DatetimeIndex(values).sort_values().unique()
+    if len(times) < 2:
+        return None
+
+    # Only consider monthly cadence when no month contains two runs.
+    months = times.year * 12 + times.month
+    month_steps = np.diff(months)
+    same_clock = (times.hour == times.hour[0]).all() and (
+        times.minute == times.minute[0]
+    ).all()
+    if np.all(month_steps > 0) and same_clock:
+        step = int(pd.Series(month_steps).mode().iloc[0])
+        if times.is_month_start.all():
+            return pd.offsets.MonthBegin(step)
+        if times.is_month_end.all():
+            return pd.offsets.MonthEnd(step)
+        if (times.day == times.day[0]).all():
+            return pd.DateOffset(months=step)
+
+    intervals = pd.Series(times[1:] - times[:-1])
+    intervals = intervals[intervals > pd.Timedelta(0)]
+    return intervals.mode().iloc[0] if not intervals.empty else None
+
+
+def infer_initialization_frequency(
+    ds: xr.Dataset,
+) -> pd.DateOffset | pd.Timedelta | None:
+    time_dim = ds.earthml.guessed_dims.time
+    return infer_initialization_frequency_from_times(ds[time_dim].values)
+
+
+# ==========================================================
+# Encoders
+# ==========================================================
+
+def temporal_evolution_encoder(
+    x_ds: xr.Dataset,
+    y_ds: xr.Dataset,
+    offsets: tuple[int, ...],
+) -> tuple[xr.Dataset, xr.Dataset]:
+    """Attach neighboring initialization forecasts, retaining only complete windows.
+
+    Offsets are in initialization steps, not lead-time hours. Each neighbor
+    belongs to the same already-selected train/val/test partition.
+    """
+    if not offsets:
+        return x_ds, y_ds
+
+    time_dim = x_ds.earthml.guessed_dims.time
+    target_time_dim = y_ds.earthml.guessed_dims.time
+    if time_dim != target_time_dim:
+        raise ValueError("Input and target initialization time dimensions differ")
+
+    times = pd.DatetimeIndex(x_ds[time_dim].values)
+    target_times = pd.DatetimeIndex(y_ds[target_time_dim].values)
+
+    if not times.equals(target_times):
+        raise ValueError("Input and target initialization times must be aligned")
+
+    if len(times) < 3 or not times.is_monotonic_increasing or not times.is_unique:
+        raise ValueError("Temporal encoding requires at least 3 sorted, unique initialization times")
+
+    # Infer the forecast initialization cadence, allowing missing timestamps
+    freq = pd.infer_freq(times)
+    if freq is not None:
+        cadence = pd.tseries.frequencies.to_offset(freq)
+        expected_neighbor = lambda timestamp, offset: timestamp + offset * cadence
+    else:
+        diffs = np.diff(times.asi8)
+        unique_diffs, counts = np.unique(diffs, return_counts=True)
+        cadence_ns = int(unique_diffs[counts.argmax()])
+        if cadence_ns <= 0 or counts.max() < len(diffs) / 2:
+            raise ValueError("Could not infer initialization cadence reliably; supply a regular time axis")
+        cadence = pd.Timedelta(cadence_ns, unit="ns")
+        expected_neighbor = lambda timestamp, offset: timestamp + offset * cadence
+
+    forecast_names = [
+        name for name in x_ds.data_vars
+        if x_ds[name].attrs.get("channel_temporal_offset") == 0
+        and x_ds[name].attrs.get("channel_normalize", True)
+    ]
+    if not forecast_names:
+        raise ValueError("No central forecast channels identified for temporal encoding")
+
+    lookup = {timestamp: index for index, timestamp in enumerate(times)}
+
+    keep = []
+    neighbor_indices = {offset: [] for offset in offsets}
+    for index, timestamp in enumerate(times):
+        neighbors = {offset: lookup.get(expected_neighbor(timestamp, offset)) for offset in offsets}
+        if any(neighbor is None for neighbor in neighbors.values()):
+            continue
+        keep.append(index)
+        for offset, neighbor in neighbors.items():
+            neighbor_indices[offset].append(neighbor)
+
+    if not keep:
+        raise ValueError(f"No complete temporal windows for offsets={offsets}")
+
+    x_center = x_ds.isel({time_dim: keep})
+    y_center = y_ds.isel({target_time_dim: keep})
+    center_times = x_center[time_dim]
+
+    extra = {}
+    for offset in sorted(offsets):
+        for name in forecast_names:
+            channel_name = f"{name}_n{offset:+d}"
+            if channel_name in x_ds.data_vars or channel_name in extra:
+                raise ValueError(f"Temporal channel name collision: {channel_name}")
+
+            neighbor = x_ds[name].isel({time_dim: neighbor_indices[offset]})
+            neighbor = neighbor.assign_coords({time_dim: center_times})
+            neighbor.attrs = {
+                **neighbor.attrs,
+                "channel_variable": x_ds[name].attrs.get("channel_variable", name),
+                "channel_temporal_offset": offset,
+                "channel_normalize": True,
+            }
+            extra[channel_name] = neighbor
+
+    x_center = xr.merge([x_center, xr.Dataset(extra)], compat="no_conflicts")
+
+    return x_center, y_center
+
+
 def spatial_position_encoder(
     ds: xr.Dataset,
     *,
@@ -2100,6 +2272,11 @@ def spatial_position_encoder(
         },
     )
 
+    spatial = set_channel_metadata(
+        spatial,
+        normalize=False,
+    )
+
     return xr.merge(
         [ds, spatial],
         compat="equals",
@@ -2126,6 +2303,11 @@ def orography_encoder(
         latitude=ds["latitude"],
         longitude=ds["longitude"],
     )
+
+    oro_ds = set_channel_metadata(
+        oro_ds,
+        normalize=True,
+)
 
     if bool(oro_ds.to_array().isnull().any()):
         raise ValueError(
@@ -2178,6 +2360,11 @@ def seasonal_cycle_encoder(
         coords={
             time_dim: ds[time_dim],
         },
+    )
+
+    seasonal = set_channel_metadata(
+        seasonal,
+        normalize=False,
     )
 
     return xr.merge(
@@ -2234,6 +2421,9 @@ def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
         join="exact",
     )
 
+# ==========================================================
+# Dataset makers
+# ==========================================================
 
 def compute_valid_times(
     init_times,
@@ -2245,7 +2435,6 @@ def compute_valid_times(
     leadtime = compute_leadtimes(leadtime_value, leadtime_unit)
 
     return init_times + leadtime
-
 
 def extract_period_from_ds(
     fc_ds: xr.Dataset,
@@ -2344,6 +2533,9 @@ def make_leadtime_pair(
     an_clim: xr.Dataset | None,
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
+    temporal_evolution_encoding: tuple[int, ...] = (),
+    source_times_out: dict[str, np.ndarray] | None = None,
+    source_split: str | None = None,
     seasonal_encoding: bool = False,
     spatial_encoding: bool = False,
     orography_encoding: bool = False,
@@ -2369,7 +2561,16 @@ def make_leadtime_pair(
             f"target_mode={target_mode!r}. Use the deterministic target variant."
         )
 
+    def _finish(x: xr.Dataset, y: xr.Dataset) -> tuple[xr.Dataset, xr.Dataset]:
+        return temporal_evolution_encoder(x, y, temporal_evolution_encoding)
+
     def _encode_input(ds: xr.Dataset) -> xr.Dataset:
+        ds = set_channel_metadata(
+            ds,
+            normalize=True,
+            temporal_offset=0,
+        )
+
         if input_realization_avg:
             ds = average_input_realizations(ds)
         elif ensemble_encoding:
@@ -2378,9 +2579,7 @@ def make_leadtime_pair(
         # Physical predictor: should be normalized
         if orography_encoding:
             if orography_ds is None:
-                raise ValueError(
-                    "orography_ds is required when orography_encoding=True."
-                )
+                raise ValueError("orography_ds is required when orography_encoding=True")
             ds = orography_encoder(ds, orography_ds)
 
         # Fixed encodings: deliberately left unnormalized
@@ -2407,6 +2606,10 @@ def make_leadtime_pair(
         materialize=materialize,
     )
 
+    if source_times_out is not None and source_split is not None:
+        time_dim = fc_period_ds.earthml.guessed_dims.time
+        source_times_out[source_split] = fc_period_ds[time_dim].values.copy()
+
     if fc_period_ds.sizes.get(fc_ds.earthml.guessed_dims.time, 0) == 0:
         raise ValueError(
             f"No forecast samples found for period {start} -> {end}, "
@@ -2420,7 +2623,7 @@ def make_leadtime_pair(
         )
 
     if target_mode == "analysis":
-        return _encode_input(fc_period_ds), an_period_ds
+        return _finish(_encode_input(fc_period_ds), an_period_ds)
 
     if target_mode == "residual":
         fc_base = (
@@ -2429,11 +2632,11 @@ def make_leadtime_pair(
             else fc_period_ds
         )
         target_ds = an_period_ds - fc_base
-        return _encode_input(fc_period_ds), target_ds
+        return _finish(_encode_input(fc_period_ds), target_ds)
 
     if target_mode == "residual_realization":
         target_ds = an_period_ds - fc_period_ds
-        return _encode_input(fc_period_ds), target_ds
+        return _finish(_encode_input(fc_period_ds), target_ds)
 
     if fc_clim is None or an_clim is None:
         raise ValueError(
@@ -2474,7 +2677,7 @@ def make_leadtime_pair(
     an_anom = (an_period_ds - an_clim_for_period).unify_chunks()
 
     if target_mode == "anomaly":
-        return _encode_input(fc_anom), an_anom
+        return _finish(_encode_input(fc_anom), an_anom)
 
     if target_mode == "anomaly_residual":
         fc_anom_base = (
@@ -2483,11 +2686,11 @@ def make_leadtime_pair(
             else fc_anom
         )
         target_anom_ds = an_anom - fc_anom_base
-        return _encode_input(fc_anom), target_anom_ds
+        return _finish(_encode_input(fc_anom), target_anom_ds)
 
     if target_mode == "anomaly_residual_realization":
         target_anom_ds = an_anom - fc_anom
-        return _encode_input(fc_anom), target_anom_ds
+        return _finish(_encode_input(fc_anom), target_anom_ds)
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
 
@@ -2607,6 +2810,7 @@ def make_train_test_datasets_for_leadtime(
     analysis_vars: Sequence[str] | None = None,
     region: dict | None = None,
     dataset_kwargs: dict | None = None,
+    temporal_evolution_encoding: tuple[int, ...] = (),
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
     spatial_encoding: bool = False,
@@ -2619,6 +2823,7 @@ def make_train_test_datasets_for_leadtime(
     defer_dataset_creation: bool = False,
 ) -> LeadtimeDatasets:
     logger = get_logger()
+    source_initialization_times: dict[str, np.ndarray] = {}
 
     dataset_kwargs = dataset_kwargs or {}
 
@@ -2674,6 +2879,9 @@ def make_train_test_datasets_for_leadtime(
         an_clim=an_clim,
         target_mode=target_mode,
         clim_period=clim_period,
+        temporal_evolution_encoding=temporal_evolution_encoding,
+        source_times_out=source_initialization_times,
+        source_split="train",
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
         spatial_encoding=spatial_encoding,
@@ -2703,6 +2911,9 @@ def make_train_test_datasets_for_leadtime(
             an_clim=an_clim,
             target_mode=target_mode,
             clim_period=clim_period,
+            temporal_evolution_encoding=temporal_evolution_encoding,
+            source_times_out=source_initialization_times,
+            source_split="val",
             seasonal_encoding=seasonal_encoding,
             ensemble_encoding=ensemble_encoding,
             spatial_encoding=spatial_encoding,
@@ -2742,6 +2953,9 @@ def make_train_test_datasets_for_leadtime(
         an_clim=an_clim,
         target_mode=target_mode,
         clim_period=clim_period,
+        temporal_evolution_encoding=temporal_evolution_encoding,
+        source_times_out=source_initialization_times,
+        source_split="test",
         seasonal_encoding=seasonal_encoding,
         ensemble_encoding=ensemble_encoding,
         spatial_encoding=spatial_encoding,
@@ -2787,6 +3001,7 @@ def make_train_test_datasets_for_leadtime(
         "test": test_ds,
         "x_clim": fc_clim,
         "y_clim": an_clim,
+        "source_initialization_times": source_initialization_times,
     }
 
 
@@ -3159,6 +3374,7 @@ def print_training_recap(
     device: torch.device,
     leadtime: int | float | str,
     normalization_name: str,
+    normalize_input: Normalize,
     dry_run: bool,
     force_retrain: bool,
     force_test: bool,
@@ -3166,6 +3382,7 @@ def print_training_recap(
     exp_name: str | None = None,
     weights_dir: Path | None = None,
     checkpoints_dir: Path | None = None,
+    source_initialization_times: Mapping[str, Sequence] | None = None,
 ) -> None:
     train_dataset = datamodule.train_dataset
     val_dataset = datamodule.val_dataset
@@ -3182,6 +3399,108 @@ def print_training_recap(
     )
 
     logger = get_logger()
+
+    # ----------------------------------------------------------
+    # Initialization-time diagnostics
+    # ----------------------------------------------------------
+
+    def get_initialization_times(
+        dataset: XarrayDataset | None,
+    ) -> pd.DatetimeIndex:
+        if dataset is None:
+            return pd.DatetimeIndex([])
+
+        time_dim = dataset.input_ds.earthml.guessed_dims.time
+
+        return pd.DatetimeIndex(
+            dataset.input_ds[time_dim].values
+        ).sort_values().unique()
+
+    def get_initialization_summary(
+        dataset: XarrayDataset | None,
+        original_times: Sequence | None,
+    ) -> dict:
+        if dataset is None:
+            return {}
+
+        retained = get_initialization_times(dataset)
+
+        summary = {
+            "retained": len(retained),
+            "first": str(retained[0]) if len(retained) else None,
+            "last": str(retained[-1]) if len(retained) else None,
+            "frequency": None,
+            "source_count": None,
+            "source_missing_count": None,
+            "source_missing_times": None,
+            "excluded_count": None,
+            "excluded_times": None,
+        }
+
+        if original_times is None:
+            return summary
+
+        original = pd.DatetimeIndex(
+            original_times
+        ).sort_values().unique()
+
+        if original.empty:
+            return summary
+
+        # Infer from pre-encoding timestamps, not retained samples.
+        frequency = infer_initialization_frequency_from_times(original)
+
+        # Original timestamps that were dropped by temporal encoding
+        # and/or subsequent preprocessing.
+        excluded = original.difference(retained)
+
+        summary.update({
+            "frequency": str(frequency) if frequency is not None else None,
+            "source_count": len(original),
+            "excluded_count": len(excluded),
+            "excluded_times": tuple(str(t) for t in excluded),
+        })
+
+        if frequency is not None:
+            expected = pd.date_range(
+                start=original[0],
+                end=original[-1],
+                freq=frequency,
+            )
+
+            source_missing = expected.difference(original)
+
+            summary.update({
+                "source_missing_count": len(source_missing),
+                "source_missing_times": tuple(
+                    str(t) for t in source_missing
+                ),
+            })
+
+        return summary
+
+    # Use the full source datasets for the retained timeline,
+    # rather than potentially subsampled training/validation views.
+    original = source_initialization_times or {}
+
+    train_init = get_initialization_summary(
+        source_train_dataset,
+        original.get("train"),
+    )
+
+    val_init = get_initialization_summary(
+        source_val_dataset,
+        original.get("val"),
+    )
+
+    test_init = get_initialization_summary(
+        test_dataset,
+        original.get("test"),
+    )
+
+    # ----------------------------------------------------------
+    # Training recap
+    # ----------------------------------------------------------
 
     flat_recap = {
         "experiment.number": f"{exp_ratio[0]} / {exp_ratio[1]}",
@@ -3201,21 +3520,75 @@ def print_training_recap(
 
         "domain.reqested_region": f"{s.region_name} {s.region}",
         "domain.regional_training": s.regional_training,
-        "domain.regional_size": f"{region_name}: lat={s.regional_training_lat_size} x lon={s.regional_training_lon_size}" if s.regional_training else None,
+        "domain.regional_size": (
+            f"{region_name}: "
+            f"lat={s.regional_training_lat_size} "
+            f"x lon={s.regional_training_lon_size}"
+            if s.regional_training else None
+        ),
         "domain.grid_shape": tuple(train_dataset.x.shape[-2:]),
 
-        "period.train": f"{s.train_start} → {s.train_end} ({source_train_dataset.n_init_times} available initializations)",
-        "period.val": f"{s.val_start} → {s.val_end} ({source_val_dataset.n_init_times} available initializations)" if source_val_dataset is not None else None,
-        "period.test": f"{s.test_start} → {s.test_end} ({test_dataset.n_init_times} available initializations)",
+        "period.train": (
+            f"{s.train_start} → {s.train_end} "
+            f"({source_train_dataset.n_init_times} retained initializations)"
+        ),
+        "period.val": (
+            f"{s.val_start} → {s.val_end} "
+            f"({source_val_dataset.n_init_times} retained initializations)"
+            if source_val_dataset is not None else None
+        ),
+        "period.test": (
+            f"{s.test_start} → {s.test_end} "
+            f"({test_dataset.n_init_times} retained initializations)"
+        ),
+
+        "period.train_frequency": train_init.get("frequency"),
+        "period.train_source_initializations": train_init.get("source_count"),
+        "period.train_retained_initializations": train_init.get("retained"),
+        "period.train_source_missing_count": train_init.get("source_missing_count"),
+        "period.train_source_missing_times": train_init.get("source_missing_times"),
+        "period.train_excluded_count": train_init.get("excluded_count"),
+        "period.train_excluded_times": train_init.get("excluded_times"),
+        "period.train_first_initialization": train_init.get("first"),
+        "period.train_last_initialization": train_init.get("last"),
+
+        "period.val_frequency": val_init.get("frequency"),
+        "period.val_source_initializations": val_init.get("source_count"),
+        "period.val_retained_initializations": val_init.get("retained"),
+        "period.val_source_missing_count": val_init.get("source_missing_count"),
+        "period.val_source_missing_times": val_init.get("source_missing_times"),
+        "period.val_excluded_count": val_init.get("excluded_count"),
+        "period.val_excluded_times": val_init.get("excluded_times"),
+        "period.val_first_initialization": val_init.get("first"),
+        "period.val_last_initialization": val_init.get("last"),
+
+        "period.test_frequency": test_init.get("frequency"),
+        "period.test_source_initializations": test_init.get("source_count"),
+        "period.test_retained_initializations": test_init.get("retained"),
+        "period.test_source_missing_count": test_init.get("source_missing_count"),
+        "period.test_source_missing_times": test_init.get("source_missing_times"),
+        "period.test_excluded_count": test_init.get("excluded_count"),
+        "period.test_excluded_times": test_init.get("excluded_times"),
+        "period.test_first_initialization": test_init.get("first"),
+        "period.test_last_initialization": test_init.get("last"),
 
         "dataset.train_available_samples": len(source_train_dataset),
-        "dataset.val_available_samples": len(source_val_dataset) if source_val_dataset is not None else None,
+        "dataset.val_available_samples": (
+            len(source_val_dataset)
+            if source_val_dataset is not None else None
+        ),
         "dataset.test_available_samples": len(test_dataset),
         "dataset.samples_per_init": train_dataset.samples_per_init,
         "dataset.train_x": tuple(train_dataset.x.shape),
         "dataset.train_y": tuple(train_dataset.y.shape),
-        "dataset.val_x": tuple(val_dataset.x.shape),
-        "dataset.val_y": tuple(val_dataset.y.shape),
+        "dataset.val_x": (
+            tuple(val_dataset.x.shape)
+            if val_dataset is not None else None
+        ),
+        "dataset.val_y": (
+            tuple(val_dataset.y.shape)
+            if val_dataset is not None else None
+        ),
         "dataset.test_x": tuple(test_dataset.x.shape),
         "dataset.test_y": tuple(test_dataset.y.shape),
 
@@ -3230,13 +3603,26 @@ def print_training_recap(
         "ensemble.output_realizations": s.output_realizations,
 
         "split.strategy": s.split_strategy,
-        "split.train_fraction": s.train_fraction if s.split_strategy != "explicit" else None,
+        "split.train_fraction": (
+            s.train_fraction
+            if s.split_strategy != "explicit" else None
+        ),
         "split.train_initializations_requested": s.train_subsamples,
         "split.val_initializations_requested": s.val_subsamples,
         "split.train_samples": len(train_dataset),
-        "split.val_samples": len(val_dataset),
-        "split.train_sample_idx_span": f"{train_idx[0]} → {train_idx[-1]}" if train_idx else None,
-        "split.val_sample_idx_span": f"{val_idx[0]} → {val_idx[-1]}" if val_idx else None,
+        "split.val_samples": (
+            len(val_dataset) if val_dataset is not None else None
+        ),
+        "split.train_sample_idx_span": (
+            f"{train_idx[0]} → {train_idx[-1]}"
+            if train_idx is not None and len(train_idx) > 0
+            else None
+        ),
+        "split.val_sample_idx_span": (
+            f"{val_idx[0]} → {val_idx[-1]}"
+            if val_idx is not None and len(val_idx) > 0
+            else None
+        ),
         "split.shuffle_train_batch": datamodule.shuffle_train,
         "split.group_batches_by_month": datamodule.group_batches_by_month,
         "split.drop_last_train": datamodule.drop_last_train,
@@ -3246,20 +3632,50 @@ def print_training_recap(
         "model.loss": s.loss_name,
         "model.loss_kwargs": s.loss_kwargs,
         "model.channel_representation": s.channel_representation,
-        "model.init_period_dim": s.init_period_dim if s.channel_representation == "init_period" else None,
+        "model.init_period_dim": (
+            s.init_period_dim
+            if s.channel_representation == "init_period" else None
+        ),
         "model.norm_layer": s.training_norm,
+        "model.input_channels": tuple(
+            (
+                channel.name,
+                channel.variable,
+                channel.temporal_offset,
+                channel.normalize,
+            )
+            for channel in train_dataset.tensor_input_channels
+        ),
+        "model.target_channels": tuple(
+            channel.name
+            for channel in train_dataset.target_channels
+        ),
+        "model.target_to_input_indices": (
+            train_dataset.target_to_input_channel_indices()
+        ),
 
         "training.torch_workers": s.torch_workers,
-
-        "training.normalization": f"{normalization_name}(x), {normalization_name}(y)",
+        "training.normalization": (
+            f"{normalization_name}(x), {normalization_name}(y)"
+        ),
         "training.normalization_input_mean": s.normalization_input_mean,
         "training.normalization_input_std": s.normalization_input_std,
         "training.normalization_target_mean": s.normalization_target_mean,
         "training.normalization_target_std": s.normalization_target_std,
         "training.normalization_fit_initializations": train_dataset.n_init_times,
         "training.normalization_fit_samples": len(train_dataset),
+        "training.normalize_input_channels": tuple(
+            train_dataset.tensor_input_channels[i].name
+            for i in normalize_input.included_channels
+        ),
 
-        "training.seasonal_encoding": s.seasonal_encoding and s.channel_representation != "init_period",
+        "training.sample_target_mean": s.sample_target_mean,
+        "training.sample_target_std": s.sample_target_std,
+        "training.temporal_evolution_encoding": s.temporal_evolution_encoding,
+        "training.seasonal_encoding": (
+            s.seasonal_encoding
+            and s.channel_representation != "init_period"
+        ),
         "training.ensemble_encoding": s.ensemble_encoding,
         "training.spatial_encoding": s.spatial_encoding,
         "training.orography_encoding": s.orography_encoding,
@@ -3268,7 +3684,9 @@ def print_training_recap(
         "training.weight_decay": s.weight_decay,
         "training.batch_size": s.batch_size,
         "training.accumulate_grad_batches": s.accumulate_grad_batches,
-        "training.effective_batch_size": s.batch_size * s.accumulate_grad_batches,
+        "training.effective_batch_size": (
+            s.batch_size * s.accumulate_grad_batches
+        ),
         "training.train_batches_per_epoch": n_train_batches,
         "training.optimizer_steps_per_epoch": optimizer_steps_per_epoch,
         "training.max_epochs": s.max_epochs,
@@ -3535,13 +3953,33 @@ def _test(
             mask=dataset.x_mask.detach().cpu(),
         )
 
-        n_target_channels = len(normalize_target.included_channels)
+        # Select input statistics corresponding to central target variables
+        central_indices = dataset.target_to_input_channel_indices()
 
-        if sample_mean.shape[1] != n_target_channels:
+        included = normalize_input.included_channels
+        if included is None:
+            raise ValueError("Input normalizer has no channel configuration")
+
+        positions = {
+            channel: position
+            for position, channel in enumerate(included)
+        }
+
+        try:
+            selected = [positions[index] for index in central_indices]
+        except KeyError as exc:
             raise ValueError(
-                "Input-derived sample statistics are incompatible with "
-                f"target normalization: input has {sample_mean.shape[1]} "
-                f"channels, target expects {n_target_channels}"
+                "Central forecast channel is excluded from input normalization"
+            ) from exc
+
+        sample_mean = sample_mean[:, selected]
+        sample_std = sample_std[:, selected]
+
+        target_included = normalize_target.included_channels
+
+        if target_included is None or len(selected) != len(target_included):
+            raise ValueError(
+                "Target/input sample-statistics channel mapping mismatch"
             )
 
         if normalize_target.mean_spec == "sample":
@@ -3563,7 +4001,7 @@ def _test(
         # the forecast channels corresponding to the target
         baseline = baseline[
             :,
-            : targets_norm.shape[1],
+            list(dataset.target_to_input_channel_indices()),
         ]
 
         baseline_norm = normalize_target(
