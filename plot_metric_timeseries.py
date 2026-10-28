@@ -24,7 +24,6 @@ from earthml import (
 )
 from earthml.metrics import (
     LeadtimeAgg,
-    MetricKind,
     is_deterministic,
     is_probabilistic,
     get_metrics,
@@ -41,340 +40,477 @@ from earthml.plots import (
 from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
 
+# ==========================================================
+# Paths
+# ==========================================================
+
+EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo_encoding"
+# EXP_NAME = "weather_atmo_seed"
+# EXP_NAME = "weather_atmo_normalization"
+# EXP_NAME = "weather_atmo_variables"
+# EXP_NAME = "weather_atmo_normalization_ablation"
+# EXP_NAME = "weather_atmo_sample_independent"
+# EXP_NAME = "weather_atmo_one_year_test"
+# EXP_NAME = "weather_atmo_ablation_fixed_val"
+# EXP_NAME = "weather_atmo_short_zero_vs_replicate_padding"
+
+EXPERIMENTS_ROOT = Path(
+    "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+    # f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
+)
+
+OUTPUT_ROOT = Path(
+    "/Users/jacopodallaglio/ML/training/seasonal/plots"
+    # f"/work/cmcc/jd19424/ML/MLBC/plots/{EXP_NAME}"
+)
+
+OROGRAPHY_PATH = Path(
+    "/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"
+    # "/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr"
+)
+
+# ==========================================================
+# Plot generation
+# ==========================================================
+
+PLOT_ABSOLUTE_TIMESERIES = True
+PLOT_IMPROVEMENT_TIMESERIES = True
+
+# ==========================================================
+# Global flag
+# ==========================================================
+
+INTERPOLATE = True # seasonal
+# INTERPOLATE = False # weather
+
+BUILD_ANALYSIS = True
+
+RECALCULATE_CLIMATOLOGY = False
+REGENERATE_PLOTS = True
+
+# ==========================================================
+# Plot settings
+# ==========================================================
+
+PLOT_TITLE = True
+PLOT_LABELS = True
+PLOT_LEGEND = True
+
+TIMESERIES_ZERO_LINE = True
+TIMESERIES_MEAN_LINE = True
+
+TITLE_SIZE = None
+LABEL_SIZE = None
+TICK_SIZE = None
+DPI = 300
+
+# ==========================================================
+# Absolute timeseries configuration
+# ==========================================================
+
+PLOT_MODELS = (
+    "fc",
+    "mlfc",
+)
+
+METRIC_LIMITS = None
+
+# ==========================================================
+# Improvement timeseries configuration
+# ==========================================================
+
+METRIC_IMPROVEMENT_LIMITS = {
+    "Δ": (-0.5, 1.2),
+    # "Δ": None,
+    "%": None,
+    "normalized": None,
+}
+
+MODEL_COMPARISONS = (
+    ("fc", "mlfc"),
+)
+IMPROVEMENT_UNITS = ("%", "Δ")
+TIMESERIES_IMPROVED_PERCENTAGE = True
+
+# ==========================================================
+# Rolling mean
+# ==========================================================
+
+# Number of metric samples, not number of days.
+ROLLING_MEAN_WINDOW = None
+# rolling_mean_window = 30
+ROLLING_MEAN_CENTER = True
+ROLLING_MEAN_MIN_PERIODS = 1
+
+# ==========================================================
+# Timeseries extrema
+# ==========================================================
+
+EXTREMA_PERIODS: tuple[
+    Literal["train", "val", "test", "full"],
+    ...
+] = (
+    "test",
+)
+
+EXTREMA_N_MIN = 20
+EXTREMA_N_MAX = 20
+
+EXTREMA_ANNOTATE = False
+EXTREMA_PRINT = True
+
+# ==========================================================
+# Timeseries annotations
+# ==========================================================
+
+ANNOTATE_TIMES: tuple[str, ...] = (
+    # "2025-08-17 12:00", # W4 mslp 72h
+    # "2025-08-18 12:00", # B1 mslp 72h
+)
+
+# ==========================================================
+# Climatology
+# ==========================================================
+
+CLIM_PERIOD: ClimPeriod = ClimPeriod.MONTH
+CLIM_ROLLING_WINDOW = None
+
+PERIOD_REFERENCE: Literal["init", "valid"] = "init"
+
+# ==========================================================
+# Time selection
+# ==========================================================
+
+TIME_RANGE: tuple[str, str] | Literal[
+    "train", "val", "test", "train_val", "full"
+] = (
+    "test"
+    # ("2025-02-01", "2025-02-28")
+)
+
+CLIM_TIME_RANGE: tuple[str, str] | Literal[
+    "train", "val", "test", "train_val", "full"
+] = (
+    "train" # seasonal
+    # "train_val" # weather
+)
+
+INFERENCE_PERIOD: tuple[str, str] | None = None
+
+PERIODS_REQUESTED = ["all"]
+
+# ==========================================================
+# Lead-time aggregation and selection
+# ==========================================================
+
+LEADTIME_UNITS = LeadtimeUnit.MONTHS
+# LEADTIME_UNITS = LeadtimeUnit.HOURS
+
+LEADTIME_AGG_MODE: LeadtimeAgg = "single"
+
+LEADTIMES = None # use all experiment leadtimes
+# LEADTIMES = [72]
+# LEADTIMES = [24, 48, 72]
+
+# ==========================================================
+# Metrics
+# ==========================================================
+
+METRICS = [
+    # ------------------------------------------------------
+    # Deterministic absolute fields
+    # ------------------------------------------------------
+    "bias",
+    "rmse",
+    "scc",
+    # "mae",
+    # "mse",
+    # "nrmse",
+    # "r2",
+
+    # ------------------------------------------------------
+    # Gradients
+    # ------------------------------------------------------
+    # "fc_grad_mag",
+    # "an_grad_mag",
+    # "grad_rmse",
+
+    # ------------------------------------------------------
+    # Deterministic anomaly fields
+    # ------------------------------------------------------
+    # "bias_anom",
+    # "rmse_anom",
+    # "scc_anom",
+    # "mae_anom",
+    # "mse_anom",
+    # "nrmse_anom",
+    # "r2_anom",
+
+    # ------------------------------------------------------
+    # Anomaly gradients
+    # ------------------------------------------------------
+    # "fc_anom_grad_mag",
+    # "an_anom_grad_mag",
+    # "grad_rmse_anom",
+
+    # ------------------------------------------------------
+    # Skill vs climatology
+    # ------------------------------------------------------
+    # "mse_skill_clim",
+    # "rmse_skill_clim",
+    # "mae_skill_clim",
+
+    # "mse_anom_skill_clim",
+    # "rmse_anom_skill_clim",
+    # "mae_anom_skill_clim",
+
+    # ------------------------------------------------------
+    # Ensemble / probabilistic
+    # ------------------------------------------------------
+    # "ens_member_rmse",
+    # "mean_member_rmse",
+    # "spread",
+    # "spread_skill_ratio",
+    # "crps",
+
+    # ------------------------------------------------------
+    # Brier terciles
+    # ------------------------------------------------------
+    # "brier_lower",
+    # "brier_middle",
+    # "brier_upper",
+
+    # ------------------------------------------------------
+    # Ensemble / probabilistic anomalies
+    # ------------------------------------------------------
+    # "ens_member_rmse_anom",
+    # "mean_member_rmse_anom",
+    # "spread_anom",
+    # "spread_anom_skill_ratio",
+    # "crps_anom",
+
+    # ------------------------------------------------------
+    # Anomaly Brier terciles
+    # ------------------------------------------------------
+    # "brier_anom_lower",
+    # "brier_anom_middle",
+    # "brier_anom_upper",
+
+    # ------------------------------------------------------
+    # Ensemble skill vs climatology
+    # ------------------------------------------------------
+    # "ens_member_mse_skill_clim",
+    # "mean_member_mse_skill_clim",
+    # "ens_member_mse_anom_skill_clim",
+    # "mean_member_mse_anom_skill_clim",
+]
+
+# ==========================================================
+# Variables and regions
+# ==========================================================
+
+VARIABLES = [
+    # Atmosphere
+    # "mslp",
+    "t2m",
+    # "d2m",
+    # "u10",
+    # "v10",
+    # "sst",
+    # "tprate",
+    # "tcc",
+    # Ocean
+    # "mlotst",
+    # "ssh",
+    # "sss",
+    # "t20d",
+]
+
+REGIONS = [
+    "ConUS",
+    # "Europe",
+    # "Pacific",
+    # "World",
+    # None,
+]
+
+# ==========================================================
+# Spatial subset
+# ==========================================================
+
+# LOCATIONS = SEA_LOCATIONS
+# LOCATIONS = CITY_LOCATIONS
+LOCATIONS = {"all": None}
+
+# LOCATIONS = {
+#     "Central ConUS": {
+#         "type": "rectangle",
+#         "lat_range": (30, 45),
+#         "lon_range": (-108, -90),
+#     },
+# }
+
+
 def main() -> None:
-    # ==========================================================
-    # Paths
-    # ==========================================================
+    if not (PLOT_ABSOLUTE_TIMESERIES or PLOT_IMPROVEMENT_TIMESERIES):
+        raise ValueError("No timeseries plot types enabled")
 
-    exp_name = "weather_atmo"
-    # exp_name = "weather_atmo_variables"
-    # exp_name = "weather_atmo_normalization_ablation"
-    # exp_name = "weather_atmo_sample_independent"
-    # exp_name = "weather_atmo_one_year_test"
-    # exp_name = "weather_atmo_ablation_fixed_val"
-    # exp_name = "weather_atmo_short_zero_vs_replicate_padding"
-
-    experiments_root = Path(f"/work/cmcc/jd19424/ML/MLBC/experiments/{exp_name}")
-    output_root = Path(f"/work/cmcc/jd19424/ML/MLBC/plots/{exp_name}")
-    orography_path = Path("/work/cmcc/jd19424/ML/MLBC/data/orography/era5_orography.zarr")
-
-    # ==========================================================
-    # Plot settings
-    # ==========================================================
-
-    metric_kind: MetricKind = "timeseries"
-
-    regenerate_plots = False
-
-    plot_title = True
-    plot_labels = True
-    plot_legend = False
-
-    timeseries_zero_line = False
-    timeseries_mean_line = True
-
-    title_size = None
-    label_size = None
-    tick_size = None
-    dpi = 300
-
-    plot_models = (
-        "fc",
-        "mlfc",
-    )
-
-    metric_limits = None
-    metric_improvement_limits = {
-        # "Δ": (-0.75, 1.25),
-        "Δ": None,
-        "%": None,
-        "normalized": None,
-    }
-
-    # ==========================================================
-    # Model comparisons
-    # ==========================================================
-
-    model_comparisons = (
-        ("fc", "mlfc"),
-    )
-
-    # ==========================================================
-    # Rolling mean
-    # ==========================================================
-
-    # Number of metric samples, not number of days.
-    rolling_mean_window = None
-    # rolling_mean_window = 30
-    rolling_mean_center = True
-    rolling_mean_min_periods = 1
-
-    # ==========================================================
-    # Timeseries extrema
-    # ==========================================================
-
-    extrema_periods: tuple[
-        Literal["train", "val", "test", "full"],
-        ...
-    ] = (
-        "test",
-    )
-
-    extrema_n_min = 3
-    extrema_n_max = 3
-
-    extrema_annotate = True
-    extrema_print = True
-
-    # ==========================================================
-    # Timeseries annotations
-    # ==========================================================
-
-    annotate_times: tuple[str, ...] = (
-        # "2025-08-17 12:00", # W4 mslp 72h
-        # "2025-08-18 12:00", # B1 mslp 72h
-    )
-
-    # ==========================================================
-    # Data processing
-    # ==========================================================
-
-    interpolate = False
-    build_analysis = True
-
-    recalculate_climatology = False
-
-    # ==========================================================
-    # Climatology
-    # ==========================================================
-
-    clim_period: ClimPeriod = ClimPeriod.MONTH
-    clim_rolling_window = None
-
-    period_reference: Literal["init", "valid"] = "init"
-
-    # ==========================================================
-    # Time selection
-    # ==========================================================
-
-    time_range: tuple[str, str] | Literal[
-        "train", "val", "test", "train_val", "full"
-    ] = (
-        "test"
-        # ("2025-02-01", "2025-02-28")
-    )
-
-    clim_time_range: tuple[str, str] | Literal[
-        "train", "val", "test", "train_val", "full"
-    ] = (
-        "train" # seasonal
-        # "train_val" # weather
-    )
-
-    inference_period: tuple[str, str] | None = None
-
-    periods_requested = ["all"]
-
-    # ==========================================================
-    # Lead-time aggregation and selection
-    # ==========================================================
-
-    leadtime_units = LeadtimeUnit.HOURS
-
-    leadtime_agg_mode: LeadtimeAgg = "single"
-
-    # leadtimes = None # use all experiment leadtimes
-    leadtimes = [72]
-    # leadtimes = [24, 48, 72]
-
-    # ==========================================================
-    # Metrics
-    # ==========================================================
-
-    metrics = [
-        # ------------------------------------------------------
-        # Deterministic absolute fields
-        # ------------------------------------------------------
-        # "bias",
-        "rmse",
-        # "scc",
-        # "mae",
-        # "mse",
-        # "nrmse",
-        # "r2",
-
-        # ------------------------------------------------------
-        # Gradients
-        # ------------------------------------------------------
-        # "fc_grad_mag",
-        # "an_grad_mag",
-        # "grad_rmse",
-
-        # ------------------------------------------------------
-        # Deterministic anomaly fields
-        # ------------------------------------------------------
-        # "bias_anom",
-        # "rmse_anom",
-        # "scc_anom",
-        # "mae_anom",
-        # "mse_anom",
-        # "nrmse_anom",
-        # "r2_anom",
-
-        # ------------------------------------------------------
-        # Anomaly gradients
-        # ------------------------------------------------------
-        # "fc_anom_grad_mag",
-        # "an_anom_grad_mag",
-        # "grad_rmse_anom",
-
-        # ------------------------------------------------------
-        # Skill vs climatology
-        # ------------------------------------------------------
-        # "mse_skill_clim",
-        # "rmse_skill_clim",
-        # "mae_skill_clim",
-
-        # "mse_anom_skill_clim",
-        # "rmse_anom_skill_clim",
-        # "mae_anom_skill_clim",
-
-        # ------------------------------------------------------
-        # Ensemble / probabilistic
-        # ------------------------------------------------------
-        # "ens_member_rmse",
-        # "mean_member_rmse",
-        # "spread",
-        # "spread_skill_ratio",
-        # "crps",
-
-        # ------------------------------------------------------
-        # Brier terciles
-        # ------------------------------------------------------
-        # "brier_lower",
-        # "brier_middle",
-        # "brier_upper",
-
-        # ------------------------------------------------------
-        # Ensemble / probabilistic anomalies
-        # ------------------------------------------------------
-        # "ens_member_rmse_anom",
-        # "mean_member_rmse_anom",
-        # "spread_anom",
-        # "spread_anom_skill_ratio",
-        # "crps_anom",
-
-        # ------------------------------------------------------
-        # Anomaly Brier terciles
-        # ------------------------------------------------------
-        # "brier_anom_lower",
-        # "brier_anom_middle",
-        # "brier_anom_upper",
-
-        # ------------------------------------------------------
-        # Ensemble skill vs climatology
-        # ------------------------------------------------------
-        # "ens_member_mse_skill_clim",
-        # "mean_member_mse_skill_clim",
-        # "ens_member_mse_anom_skill_clim",
-        # "mean_member_mse_anom_skill_clim",
-    ]
-
-    metrics_to_compute = list(metrics)
-
-    # ==========================================================
-    # Variables and regions
-    # ==========================================================
-
-    variables = [
-        # Atmosphere
-        # "mslp",
-        "t2m",
-        # "d2m",
-        # "u10",
-        # "v10",
-        # "sst",
-        # "tprate",
-        # "tcc",
-        # Ocean
-        # "mlotst",
-        # "ssh",
-        # "sss",
-        # "t20d",
-    ]
-
-    regions = [
-        "ConUS",
-        # "Europe",
-        # "Pacific",
-        # "World",
-        # None,
-    ]
-
-    # ==========================================================
-    # Spatial subset
-    # ==========================================================
-
-    # locations = SEA_LOCATIONS
-    # locations = CITY_LOCATIONS
-    locations = {"all": None}
-
-    # locations = {
-    #     "Central ConUS": {
-    #         "type": "rectangle",
-    #         "lat_range": (30, 45),
-    #         "lon_range": (-108, -90),
-    #     },
-    # }
+    metrics_to_compute = list(METRICS)
 
     # ==========================================================
     # Experiment selection
     # ==========================================================
 
     settings = get_experiment_configs(
-        experiments_root,
-        var_fc=variables,
-        region_name=regions,
+        EXPERIMENTS_ROOT,
+        var_fc=VARIABLES,
+        region_name=REGIONS,
         net_name="SmaAt_UNet",
         target_mode="analysis",
         loss_name="GeoMaskedMSELoss",
-        train_start="2019-10-14",
+        # train_start="2019-10-14",
         # train_subsamples=1000,
-        train_subsamples=None,
-        extra_suffix_folder="",
+        # train_subsamples=None,
+        # normalization_input_mean="sample",
+        # normalization_input_std="sample",
+        # normalization_target_mean="sample",
+        # normalization_target_std="sample",
+        # sample_target_mean="input",
+        # sample_target_std="input",
+        # extra_suffix_folder="",
     )
 
     print(f"Found {len(settings)} matching experiment(s).")
+
+    # ==========================================================
+    # Evaluation timestamps for each experiment
+    # ==========================================================
+
+    # Temporal encoding can shorten MLFC outputs
+    if TIME_RANGE in ("train", "val", "test"):
+        output_splits = (TIME_RANGE,)
+    else:
+        # For composite or explicit date ranges, gather all available
+        # corrected-output splits, then filter by each experiment's range
+        output_splits = ("train", "val", "test")
+
+    available_settings = []
+    evaluation_times_by_experiment = {}
+
+    for s in settings:
+        if TIME_RANGE == "train":
+            requested_range = (s.train_start, s.train_end)
+        elif TIME_RANGE == "val":
+            requested_range = (s.val_start, s.val_end)
+        elif TIME_RANGE == "test":
+            requested_range = (s.test_start, s.test_end)
+        elif TIME_RANGE == "train_val":
+            requested_range = (s.train_start, s.val_end)
+        elif TIME_RANGE == "full":
+            requested_range = (s.train_start, s.test_end)
+        elif isinstance(TIME_RANGE, tuple):
+            requested_range = TIME_RANGE
+        else:
+            raise ValueError(f"Invalid TIME_RANGE={TIME_RANGE!r}")
+
+        if INFERENCE_PERIOD is not None:
+            start, end = INFERENCE_PERIOD
+
+            paths = [
+                s.exp_dir / "inference" / f"{start}_{end}" / "test_corrected.zarr"
+            ]
+
+            # Same requested-window behavior as the data-loading branch
+            requested_start, requested_end = map(pd.Timestamp, requested_range)
+            inference_start, inference_end = map(pd.Timestamp, INFERENCE_PERIOD)
+
+            if not (inference_start <= requested_start and requested_end <= inference_end):
+                requested_range = INFERENCE_PERIOD
+        else:
+            paths = [getattr(s, f"output_mlfc_{split}") for split in output_splits]
+
+        missing_paths = [path for path in paths if not path.exists()]
+        if missing_paths:
+            print(
+                f"Skipping incomplete experiment {s.exp_dir.name}: "
+                f"missing {', '.join(path.name for path in missing_paths)}"
+            )
+            continue
+
+        available_times = None
+        for path in paths:
+            with xr.open_zarr(path, consolidated=False) as ds:
+                split_times = pd.DatetimeIndex(ds["time"].values)
+
+            if not split_times.is_unique:
+                raise ValueError(f"Duplicate timestamps in {path}")
+
+            available_times = (
+                split_times
+                if available_times is None
+                else available_times.union(split_times)
+            )
+
+        requested_start = pd.Timestamp(requested_range[0])
+        requested_end = pd.Timestamp(requested_range[1])
+
+        if isinstance(requested_range[1], str) and len(requested_range[1]) == 10:
+            requested_end += pd.Timedelta(days=1)
+            in_range = (
+                (available_times >= requested_start)
+                & (available_times < requested_end)
+            )
+        else:
+            in_range = (
+                (available_times >= requested_start)
+                & (available_times <= requested_end)
+            )
+
+        available_times = available_times[in_range]
+
+        if len(available_times) == 0:
+            print(f"Skipping experiment {s.exp_dir.name}: no corrected timestamps in requested range")
+            continue
+
+        evaluation_times_by_experiment[s.exp_dir.name] = available_times.sort_values()
+        available_settings.append(s)
+
+    settings = available_settings
+    if not settings:
+        raise ValueError("No experiments with corrected-forecast timestamps in the requested range")
+
+    print(f"Processing {len(settings)} experiment(s) with per-experiment timestamps")
 
     n = 0
 
     for s in settings:
         # Time range
-        if time_range == "train":
+        if TIME_RANGE == "train":
             valid_time_range = (s.train_start, s.train_end)
-        elif time_range == "val":
+        elif TIME_RANGE == "val":
             valid_time_range = (s.val_start, s.val_end)
-        elif time_range == "test":
+        elif TIME_RANGE == "test":
             valid_time_range = (s.test_start, s.test_end)
-        elif time_range == "train_val":
+        elif TIME_RANGE == "train_val":
             valid_time_range = (s.train_start, s.val_end)
-        elif time_range == "full":
+        elif TIME_RANGE == "full":
             valid_time_range = (s.train_start, s.test_end)
-        elif isinstance(time_range, tuple):
-            valid_time_range = time_range
+        elif isinstance(TIME_RANGE, tuple):
+            valid_time_range = TIME_RANGE
         else:
-            raise ValueError(f"Invalid time_range={time_range}")
+            raise ValueError(f"Invalid time_range={TIME_RANGE}")
 
         mlfc_path = None
 
-        if inference_period is not None:
+        if INFERENCE_PERIOD is not None:
             valid_start, valid_end = map(
                 pd.Timestamp,
                 valid_time_range,
             )
             inference_start, inference_end = map(
                 pd.Timestamp,
-                inference_period,
+                INFERENCE_PERIOD,
             )
 
             if (
@@ -383,9 +519,9 @@ def main() -> None:
             ):
                 valid_time_range = valid_time_range
             else:
-                valid_time_range = inference_period
+                valid_time_range = INFERENCE_PERIOD
 
-            inference_start_str, inference_end_str = inference_period
+            inference_start_str, inference_end_str = INFERENCE_PERIOD
 
             mlfc_path = (
                 s.exp_dir
@@ -395,20 +531,20 @@ def main() -> None:
             )
 
         # Climatology time range
-        if clim_time_range == "train":
+        if CLIM_TIME_RANGE == "train":
             valid_clim_time_range = (s.train_start, s.train_end)
-        elif clim_time_range == "val":
+        elif CLIM_TIME_RANGE == "val":
             valid_clim_time_range = (s.val_start, s.val_end)
-        elif clim_time_range == "test":
+        elif CLIM_TIME_RANGE == "test":
             valid_clim_time_range = (s.test_start, s.test_end)
-        elif clim_time_range == "train_val":
+        elif CLIM_TIME_RANGE == "train_val":
             valid_clim_time_range = (s.train_start, s.val_end)
-        elif clim_time_range == "full":
+        elif CLIM_TIME_RANGE == "full":
             valid_clim_time_range = (s.train_start, s.test_end)
-        elif isinstance(clim_time_range, tuple):
-            valid_clim_time_range = clim_time_range
+        elif isinstance(CLIM_TIME_RANGE, tuple):
+            valid_clim_time_range = CLIM_TIME_RANGE
         else:
-            raise ValueError(f"Invalid time_range={time_range}")
+            raise ValueError(f"Invalid clim_time_range={CLIM_TIME_RANGE}")
 
         # Whole available region spatial coordinates
         whole_region_lat_lon = (
@@ -422,18 +558,18 @@ def main() -> None:
 
         leadtime_agg_coord = (
             "leadtime"
-            if leadtime_agg_mode == "single"
+            if LEADTIME_AGG_MODE == "single"
             else "leadtime_seasonal"
         )
 
-        period_dim = f"{period_reference}_{clim_period.value}"
+        period_dim = f"{PERIOD_REFERENCE}_{CLIM_PERIOD.value}"
         period_label = period_dim.replace("_", " ").capitalize()
 
         # Select and validate leadtimes
         selected_leadtimes = (
             s.leadtimes
-            if leadtimes is None
-            else leadtimes
+            if LEADTIMES is None
+            else LEADTIMES
         )
 
         missing_leadtimes = (
@@ -449,7 +585,7 @@ def main() -> None:
             )
 
         print(
-            f"Generate {leadtime_agg_mode} timeseries "
+            f"Generate {LEADTIME_AGG_MODE} timeseries "
             f"grouped by {period_dim} for "
             f"{s.var_an, s.var_fc} in {s.region_name} "
             f"(lon={valid_lon_range}, lat={valid_lat_range})"
@@ -464,18 +600,35 @@ def main() -> None:
 
         fc, an, mlfc = get_and_subset_datasets(
             s,
-            leadtime_units=leadtime_units,
+            leadtime_units=LEADTIME_UNITS,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
             time_range=valid_time_range,
-            interpolate=interpolate,
+            interpolate=INTERPOLATE,
             mlfc_path=mlfc_path,
         )
 
-        if mlfc is not None:
-            mlfc = mlfc.assign_coords(
-                leadtime=s.leadtimes
-            )
+        # Align FC, analysis, and MLFC within this experiment only.
+        # Separate experiment plots retain their own maximum sample coverage.
+        evaluation_times = evaluation_times_by_experiment[s.exp_dir.name]
+        print(f"Evaluation timestamps for {s.exp_dir.name}: {len(evaluation_times)}")
+        for name, ds in (("fc", fc), ("an", an), ("mlfc", mlfc)):
+            if ds is None:
+                raise ValueError(f"Missing {name} dataset for {s.exp_dir.name}")
+            missing_times = evaluation_times.difference(ds.indexes["time"])
+            if len(missing_times):
+                raise ValueError(
+                    f"{name} is missing {len(missing_times)} evaluation "
+                    f"timestamps in {s.exp_dir.name}; first: {missing_times[0]}"
+                )
+
+        fc = fc.sel(time=evaluation_times)
+        an = an.sel(time=evaluation_times)
+        mlfc = mlfc.sel(time=evaluation_times)
+
+        mlfc = mlfc.assign_coords(
+            leadtime=s.leadtimes
+        )
 
         (
             fc_clim,
@@ -483,19 +636,19 @@ def main() -> None:
             mlfc_clim,
         ) = calculate_save_and_subset_climatologies(
             s,
-            leadtime_units=leadtime_units,
-            force=recalculate_climatology,
-            clim_period=clim_period,
-            rolling_window=clim_rolling_window,
+            leadtime_units=LEADTIME_UNITS,
+            force=RECALCULATE_CLIMATOLOGY,
+            clim_period=CLIM_PERIOD,
+            rolling_window=CLIM_ROLLING_WINDOW,
             rolling_center=True,
             rolling_min_periods=1,
             lat_range=valid_lat_range,
             lon_range=valid_lon_range,
             time_range=valid_clim_time_range,
             time_start=None,
-            interpolate=interpolate,
+            interpolate=INTERPOLATE,
             engine="zarr",
-            build_analysis=build_analysis,
+            build_analysis=BUILD_ANALYSIS,
             coord_rename_fc=None,
             coord_rename_an=None,
         )
@@ -537,18 +690,18 @@ def main() -> None:
 
         fc_clim_da = stack_hour_clim(
             fc_clim[s.var_fc],
-            clim_period,
+            CLIM_PERIOD,
         )
         an_clim_da = stack_hour_clim(
             an_clim[s.var_an],
-            clim_period,
+            CLIM_PERIOD,
         )
 
         fc_anom_da = (
             groupby_period(
                 fc[s.var_fc],
                 an.earthml.guessed_dims.time,
-                clim_period,
+                CLIM_PERIOD,
             )
             - fc_clim_da
         )
@@ -557,7 +710,7 @@ def main() -> None:
             groupby_period(
                 fc_anom_da,
                 an.earthml.guessed_dims.time,
-                clim_period,
+                CLIM_PERIOD,
             )
             + an_clim_da
         ).to_dataset(name=s.var_fc)
@@ -596,7 +749,7 @@ def main() -> None:
         # Calculate + plot timeseries by spatial subregion
         # ======================================================
 
-        for location, location_config in locations.items():
+        for location, location_config in LOCATIONS.items():
             print(f"Spatial subregion: {location}")
             an_loc = subset_timeseries_region(
                 an,
@@ -610,10 +763,10 @@ def main() -> None:
             metric_ts_by_model: dict[str, xr.Dataset] = {}
             metric_models = tuple(dict.fromkeys(
                 [
-                    *plot_models,
+                    *(PLOT_MODELS if PLOT_ABSOLUTE_TIMESERIES else ()),
                     *(
                         model
-                        for comparison in model_comparisons
+                        for comparison in (MODEL_COMPARISONS if PLOT_IMPROVEMENT_TIMESERIES else ())
                         for model in comparison
                     ),
                 ]
@@ -657,20 +810,20 @@ def main() -> None:
                         an=an_loc,
                         fc=ds,
                         var=s.var_fc,
-                        metric_kind=metric_kind,
-                        leadtime_agg=leadtime_agg_mode,
+                        metric_kind="timeseries",
+                        leadtime_agg=LEADTIME_AGG_MODE,
                         realization_agg=True,
                         an_clim=an_clim_loc,
                         fc_clim=ds_clim,
-                        orography_path=orography_path,
+                        orography_path=OROGRAPHY_PATH,
                         metrics=deterministic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
-                        clim_period=clim_period,
-                        period_reference=period_reference,
+                        clim_period=CLIM_PERIOD,
+                        period_reference=PERIOD_REFERENCE,
                         period_dim=period_dim,
-                        periods_requested=periods_requested,
-                        leadtime_unit=leadtime_units,
+                        periods_requested=PERIODS_REQUESTED,
+                        leadtime_unit=LEADTIME_UNITS,
                         align=False,
                         fair_correction=False,
                     )
@@ -685,20 +838,20 @@ def main() -> None:
                         an=an_loc,
                         fc=ds,
                         var=s.var_fc,
-                        metric_kind=metric_kind,
-                        leadtime_agg=leadtime_agg_mode,
+                        metric_kind="timeseries",
+                        leadtime_agg=LEADTIME_AGG_MODE,
                         realization_agg=False,
                         an_clim=an_clim_loc,
                         fc_clim=ds_clim,
-                        orography_path=orography_path,
+                        orography_path=OROGRAPHY_PATH,
                         metrics=probabilistic_metrics,
                         leadtime_windows=s.seasonal_leadtime_windows,
                         leadtime_agg_coord=leadtime_agg_coord,
-                        clim_period=clim_period,
-                        period_reference=period_reference,
+                        clim_period=CLIM_PERIOD,
+                        period_reference=PERIOD_REFERENCE,
                         period_dim=period_dim,
-                        periods_requested=periods_requested,
-                        leadtime_unit=leadtime_units,
+                        periods_requested=PERIODS_REQUESTED,
+                        leadtime_unit=LEADTIME_UNITS,
                         align=False,
                         fair_correction=False,
                     )
@@ -709,15 +862,13 @@ def main() -> None:
 
             available_models = [
                 model
-                for model in plot_models
+                for model in PLOT_MODELS
                 if model in metric_ts_by_model
             ]
-            if not available_models:
-                continue
 
             available_metrics = [
                 m
-                for m in metrics
+                for m in METRICS
                 if all(
                     m in metric_ts_by_model[model]
                     for model in available_models
@@ -726,13 +877,13 @@ def main() -> None:
 
             # Construct common labels
             rolling_label = (
-                f"\nroll {rolling_mean_window}"
-                if rolling_mean_window is not None
+                f"\nroll {ROLLING_MEAN_WINDOW}"
+                if ROLLING_MEAN_WINDOW is not None
                 else ""
             )
             rolling_filename = (
-                f"_roll{rolling_mean_window}"
-                if rolling_mean_window is not None
+                f"_roll{ROLLING_MEAN_WINDOW}"
+                if ROLLING_MEAN_WINDOW is not None
                 else ""
             )
 
@@ -740,219 +891,201 @@ def main() -> None:
 
             title_suffix = rolling_label + location_label
 
-            print(
-                f"Plotting metrics {available_metrics} "
-                f"for models {available_models} in {location}"
+            if PLOT_ABSOLUTE_TIMESERIES:
+                print(
+                    f"Plotting metrics {available_metrics} "
+                    f"for models {available_models} in {location}"
+                )
+
+            common_plot_kwargs = dict(
+                var=s.var_fc,
+                time_range=valid_time_range,
+                leadtime_dim=leadtime_agg_coord,
+                train_start=s.train_start,
+                train_end=s.train_end,
+                val_end=s.val_end,
+                test_end=s.test_end,
+                extrema_periods=EXTREMA_PERIODS,
+                extrema_n_min=EXTREMA_N_MIN,
+                extrema_n_max=EXTREMA_N_MAX,
+                extrema_annotate=EXTREMA_ANNOTATE,
+                extrema_print=EXTREMA_PRINT,
+                annotate_times=ANNOTATE_TIMES,
+                timeseries_mean_line=TIMESERIES_MEAN_LINE,
+                plot_title=PLOT_TITLE,
+                plot_labels=PLOT_LABELS,
+                plot_legend=PLOT_LEGEND,
+                x_label=period_label,
+                title_suffix=title_suffix,
+                title_size=TITLE_SIZE,
+                label_size=LABEL_SIZE,
+                tick_size=TICK_SIZE,
+                dpi=DPI,
             )
 
             # ==================================================
             # Plot FC and MLFC
             # ==================================================
 
-            for m in available_metrics:
-                das = [
-                    apply_rolling_mean(
-                        metric_ts_by_model[model][m],
-                        window=rolling_mean_window,
-                        center=rolling_mean_center,
-                        min_periods=rolling_mean_min_periods,
-                    )
-                    for model in available_models
-                ]
-
-                for lead_value in das[0][leadtime_agg_coord].values:
-                    label = safe_label(
-                        lead_label(
-                            das[0],
-                            lead_value,
-                            leadtime_agg_coord,
+            if PLOT_ABSOLUTE_TIMESERIES:
+                for m in available_metrics:
+                    das = [
+                        apply_rolling_mean(
+                            metric_ts_by_model[model][m],
+                            window=ROLLING_MEAN_WINDOW,
+                            center=ROLLING_MEAN_CENTER,
+                            min_periods=ROLLING_MEAN_MIN_PERIODS,
                         )
-                    )
+                        for model in available_models
+                    ]
 
-                    common_path = (
-                        Path("timeseries")
-                        / "absolute"
-                        / safe_label(period_dim)
-                        / safe_label("all")
-                        / (
-                            f"time_{safe_label(valid_time_range)}"
-                            f"_loc_{safe_label(location)}"
+                    for lead_value in das[0][leadtime_agg_coord].values:
+                        label = safe_label(
+                            lead_label(
+                                das[0],
+                                lead_value,
+                                leadtime_agg_coord,
+                            )
                         )
-                        / m
-                        / leadtime_agg_mode
-                    )
 
-                    filename = (
-                        f"{s.var_fc}_{m}_"
-                        f"{'-'.join(available_models)}"
-                        f"_lead_{label}{rolling_filename}.png"
-                    )
+                        common_path = (
+                            Path("timeseries")
+                            / "absolute"
+                            / safe_label(period_dim)
+                            / safe_label("all")
+                            / (
+                                f"time_{safe_label(valid_time_range)}"
+                                f"_loc_{safe_label(location)}"
+                            )
+                            / m
+                            / LEADTIME_AGG_MODE
+                        )
 
-                    out_file = output_root / s.output_name / common_path / filename
-                    if out_file.exists() and not regenerate_plots:
-                        continue
+                        filename = (
+                            f"{s.var_fc}_{m}_"
+                            f"{'-'.join(available_models)}"
+                            f"_lead_{label}{rolling_filename}.png"
+                        )
 
-                    print(f"Saving timeseries {out_file}")
+                        out_file = OUTPUT_ROOT / s.output_name / common_path / filename
+                        if out_file.exists() and not REGENERATE_PLOTS:
+                            continue
 
-                    plot_timeseries(
-                        das,
-                        var=s.var_fc,
-                        metric=m,
-                        models=available_models,
-                        lead_value=lead_value,
-                        out_file=out_file,
-                        time_range=valid_time_range,
-                        leadtime_dim=leadtime_agg_coord,
-                        ylim=metric_limits,
+                        print(f"Saving timeseries {out_file}")
 
-                        train_start=s.train_start,
-                        train_end=s.train_end,
-                        val_end=s.val_end,
-                        test_end=s.test_end,
+                        plot_timeseries(
+                            das,
+                            metric=m,
+                            models=available_models,
+                            lead_value=lead_value,
+                            out_file=out_file,
+                            ylim=METRIC_LIMITS,
+                            timeseries_zero_line=TIMESERIES_ZERO_LINE and "bias" in m,
+                            **common_plot_kwargs,
+                        )
 
-                        extrema_periods=extrema_periods,
-                        extrema_n_min=extrema_n_min,
-                        extrema_n_max=extrema_n_max,
-                        extrema_annotate=extrema_annotate,
-                        extrema_print=extrema_print,
-
-                        annotate_times=annotate_times,
-
-                        timeseries_zero_line=timeseries_zero_line,
-                        timeseries_mean_line=timeseries_mean_line,
-
-                        plot_title=plot_title,
-                        plot_labels=plot_labels,
-                        title_suffix=title_suffix,
-                        plot_legend=plot_legend,
-                        x_label=period_label,
-                        title_size=title_size,
-                        label_size=label_size,
-                        tick_size=tick_size,
-                        dpi=dpi,
-                    )
-
-                    n += 1
+                        n += 1
 
             # ==================================================
             # Plot metric improvements
             # ==================================================
 
-            for baseline_model, target_model in model_comparisons:
-                if baseline_model not in metric_ts_by_model:
-                    continue
-                if target_model not in metric_ts_by_model:
-                    continue
+            if PLOT_IMPROVEMENT_TIMESERIES:
+                for baseline_model, target_model in MODEL_COMPARISONS:
+                    if baseline_model not in metric_ts_by_model:
+                        continue
+                    if target_model not in metric_ts_by_model:
+                        continue
 
-                baseline_ds = metric_ts_by_model[baseline_model]
-                target_ds = metric_ts_by_model[target_model]
+                    baseline_ds = metric_ts_by_model[baseline_model]
+                    target_ds = metric_ts_by_model[target_model]
 
-                comparison_metrics = [
-                    m
-                    for m in metrics
-                    if m in baseline_ds and m in target_ds
-                ]
+                    comparison_metrics = [
+                        m
+                        for m in METRICS
+                        if m in baseline_ds and m in target_ds
+                    ]
 
-                for m in comparison_metrics:
-                    improvements = build_metric_improvements(
-                        baseline_ds,
-                        target_ds,
-                        metric=m,
-                        baseline_model=baseline_model,
-                        target_model=target_model,
-                        improvement_units=("%", "Δ"),
-                    )
-
-                    for comparison_model, comparison_da in improvements.items():
-                        improvement_unit = get_improvement_unit(
-                            comparison_model
-                        )
-                        comparison_da = apply_rolling_mean(
-                            comparison_da,
-                            window=rolling_mean_window,
-                            center=rolling_mean_center,
-                            min_periods=rolling_mean_min_periods,
+                    for m in comparison_metrics:
+                        improvements = build_metric_improvements(
+                            baseline_ds,
+                            target_ds,
+                            metric=m,
+                            baseline_model=baseline_model,
+                            target_model=target_model,
+                            improvement_units=IMPROVEMENT_UNITS,
                         )
 
-                        for lead_value in comparison_da[leadtime_agg_coord].values:
-                            label = safe_label(
-                                lead_label(
-                                    comparison_da,
-                                    lead_value,
-                                    leadtime_agg_coord,
+                        for comparison_model, comparison_da in improvements.items():
+                            improvement_unit = get_improvement_unit(
+                                comparison_model
+                            )
+                            comparison_da = apply_rolling_mean(
+                                comparison_da,
+                                window=ROLLING_MEAN_WINDOW,
+                                center=ROLLING_MEAN_CENTER,
+                                min_periods=ROLLING_MEAN_MIN_PERIODS,
+                            )
+
+                            for lead_value in comparison_da[leadtime_agg_coord].values:
+                                label = safe_label(
+                                    lead_label(
+                                        comparison_da,
+                                        lead_value,
+                                        leadtime_agg_coord,
+                                    )
                                 )
-                            )
 
-                            common_path = (
-                                Path("timeseries")
-                                / "comparisons"
-                                / safe_label(comparison_model)
-                                / safe_label(period_dim)
-                                / safe_label("all")
-                                / (
-                                    f"time_{safe_label(valid_time_range)}"
-                                    f"_loc_{safe_label(location)}"
+                                common_path = (
+                                    Path("timeseries")
+                                    / "comparisons"
+                                    / safe_label(comparison_model)
+                                    / safe_label(period_dim)
+                                    / safe_label("all")
+                                    / (
+                                        f"time_{safe_label(valid_time_range)}"
+                                        f"_loc_{safe_label(location)}"
+                                    )
+                                    / m
+                                    / LEADTIME_AGG_MODE
                                 )
-                                / m
-                                / leadtime_agg_mode
-                            )
 
-                            filename = (
-                                f"{s.var_fc}_{m}_"
-                                f"{safe_label(comparison_model)}_"
-                                f"lead_{label}{rolling_filename}.png"
-                            )
+                                filename = (
+                                    f"{s.var_fc}_{m}_"
+                                    f"{safe_label(comparison_model)}_"
+                                    f"lead_{label}{rolling_filename}.png"
+                                )
 
-                            out_file = output_root / s.output_name / common_path / filename
+                                out_file = OUTPUT_ROOT / s.output_name / common_path / filename
 
-                            if out_file.exists() and not regenerate_plots:
-                                continue
+                                if out_file.exists() and not REGENERATE_PLOTS:
+                                    continue
 
-                            print(
-                                f"Saving improvement timeseries {out_file}"
-                            )
+                                print(
+                                    f"Saving improvement timeseries {out_file}"
+                                )
 
-                            plot_timeseries(
-                                [comparison_da],
-                                var=s.var_fc,
-                                metric=m,
-                                models=[comparison_model],
-                                lead_value=lead_value,
-                                out_file=out_file,
-                                time_range=valid_time_range,
-                                leadtime_dim=leadtime_agg_coord,
-                                ylim=metric_improvement_limits[improvement_unit],
+                                plot_timeseries(
+                                    [comparison_da],
+                                    metric=m,
+                                    models=[comparison_model],
+                                    lead_value=lead_value,
+                                    out_file=out_file,
+                                    ylim=METRIC_IMPROVEMENT_LIMITS[improvement_unit],
 
-                                train_start=s.train_start,
 
-                                train_end=s.train_end,
-                                val_end=s.val_end,
-                                test_end=s.test_end,
 
-                                extrema_periods=extrema_periods,
-                                extrema_n_min=extrema_n_min,
-                                extrema_n_max=extrema_n_max,
-                                extrema_annotate=extrema_annotate,
-                                extrema_print=extrema_print,
 
-                                annotate_times=annotate_times,
 
-                                timeseries_zero_line=timeseries_zero_line,
-                                timeseries_mean_line=timeseries_mean_line,
+                                    timeseries_zero_line=TIMESERIES_ZERO_LINE,
 
-                                plot_title=plot_title,
-                                plot_labels=plot_labels,
-                                x_label=period_label,
-                                title_suffix=title_suffix,
-                                plot_legend=plot_legend,
-                                improvement_unit=improvement_unit,
-                                title_size=title_size,
-                                label_size=label_size,
-                                tick_size=tick_size,
-                                dpi=dpi,
-                            )
+                                    timeseries_improved_percentage=TIMESERIES_IMPROVED_PERCENTAGE,
+                                    **common_plot_kwargs,
 
-                            n += 1
+                                    improvement_unit=improvement_unit,
+                                )
+
+                                n += 1
 
     print(f"Done. Saved {n} plots.")
 
