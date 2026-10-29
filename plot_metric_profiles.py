@@ -51,6 +51,7 @@ from earthml.plots import (
 # ==========================================================
 
 EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
 # EXP_NAME = "weather_atmo_seed"
 # EXP_NAME = "weather_atmo_normalization"
@@ -363,15 +364,18 @@ LON_RANGE = None
 
 PLOT_TITLE = True
 PLOT_LEGEND = True
+PLOT_LEGEND_SEPARATE = False # save each plot legend as a separate PNG
 
-FIGSIZE = (16, 12)
-TITLE_SIZE = None
+FIGSIZE = (16, 8)
+TITLE_SIZE = 20
 LABEL_SIZE = 20
+LEGEND_SIZE = 10
+LEGEND_NCOL = 1
 TICK_SIZE = 15
 DPI = 300
 
-# title_strftime = "%Y"     # seasonal
-TITLE_STRFTIME = "%m.%Y"    # weather
+TITLE_STRFTIME = "%Y" # seasonal
+# TITLE_STRFTIME = "%m.%Y" # weather
 
 MODEL_LABELS = {
     "fc": "FC",
@@ -520,25 +524,31 @@ VARIABLE_COLORS = {
 # ==========================================================
 
 COMBINED_PLOT_FOLDER = "profile_comparison"
-COMPARISON_NAME = "encoding"
+COMPARISON_NAME = "experiments"
 
 COMPARISON_LABELS = None
 COMPARISON_COLORS = None
+# Use numericla index for experiment curves and experiment-axis tick labels
+COMPARISON_LABEL_USE_INDEX = True
 
-COMPARISON_LABEL_FIELDS = [
-    "target_mode",
-    "net_name",
-    "climatology_encoding",
-    "climatology_error_encoding",
-    "temporal_evolution_encoding",
-    "seasonal_encoding",
-    "spatial_encoding",
-    "orography_encoding",
-    "normalization_input_mean",
-    "normalization_input_std",
-    "normalization_target_mean",
-    "normalization_target_std",
-]
+COMPARISON_LABEL_FIELDS = {
+    "seed": "seed",
+    "extra_suffix_folder": "extra",
+    "target_mode": "",
+    "net_name": "net",
+    "climatology_encoding": "clim",
+    "climatology_error_encoding": "clim-err",
+    "temporal_evolution_encoding": "temp",
+    "seasonal_encoding": "seasonal",
+    "spatial_encoding": "spatial",
+    "orography_encoding": "oro",
+    "normalization_input_mean": "im",
+    "normalization_input_std": "is",
+    "normalization_target_mean": "tm",
+    "normalization_target_std": "ts",
+}
+
+COMPARISON_LABEL_FIELDS_PER_LINE = 3
 
 # COMPARISON_NAME = "ablation_fixed_val_samples"
 
@@ -661,8 +671,9 @@ COMBINED_EXPERIMENT_AXIS_LEADTIME_COLORS = "colors"
 COMBINED_EXPERIMENT_AXIS_LEADTIME_SHADE_RANGE = (0.2, 1.0)
 
 # Optional horizontal reference lines in absolute experiment-axis profiles
-# combined_experiment_axis_reference_lines = ("fc", "clim-fc")
-COMBINED_EXPERIMENT_AXIS_REFERENCE_LINES = () # disable
+# COMBINED_EXPERIMENT_AXIS_REFERENCE_LINES = ("fc", "clim-fc")
+COMBINED_EXPERIMENT_AXIS_REFERENCE_LINES = ("fc",)
+# COMBINED_EXPERIMENT_AXIS_REFERENCE_LINES = () # disable
 
 # Sort labels numerically when they start with a number, e.g.
 # "264 samples", "500 samples", ..., "2474 samples"
@@ -688,9 +699,12 @@ def main() -> None:
     plot_kwargs = dict(
         plot_title=PLOT_TITLE,
         label_size=LABEL_SIZE,
+        legend_ncol=LEGEND_NCOL,
+        legend_size=LEGEND_SIZE,
         tick_size=TICK_SIZE,
         dpi=DPI,
         figsize=FIGSIZE,
+        legend_separate=PLOT_LEGEND_SEPARATE,
     )
 
     # Common arguments for leadtime and climatological curves
@@ -718,66 +732,6 @@ def main() -> None:
         EXPERIMENTS_ROOT,
         **FILTERS,
     )
-
-    print(f"Found {len(settings)} matching experiment(s)")
-
-    # ==========================================================
-    # Generate combined profile labels, colors and linestyles
-    # ==========================================================
-
-    plot_combined_experiments = (
-        PLOT_COMBINED_EXPERIMENT_LEADTIME_PROFILES
-        or PLOT_COMBINED_EXPERIMENT_CLIMATOLOGICAL_PROFILES
-        or PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES
-    )
-
-    if plot_combined_experiments:
-        if COMPARISON_LABELS is None:
-            fields = [
-                name
-                for name in COMPARISON_LABEL_FIELDS
-                if len({str(getattr(s, name)) for s in settings}) > 1
-            ]
-
-            comparison_labels = [
-                ", ".join(
-                    f"{name.removesuffix('_encoding').replace('_', ' ')}={getattr(s, name)}"
-                    for name in fields
-                ) or "Default"
-                for s in settings
-            ]
-        else:
-            comparison_labels = COMPARISON_LABELS
-
-        if len(settings) != len(comparison_labels):
-            raise ValueError("Number of experiments and labels differ")
-
-        if len(set(comparison_labels)) != len(comparison_labels):
-            raise ValueError("Comparison labels are not unique")
-
-        comparison_labels_by_experiment = {
-            s.exp_dir.name: label
-            for s, label in zip(settings, comparison_labels, strict=True)
-        }
-
-        colors = plt.get_cmap("tab20").resampled(len(comparison_labels))
-
-        comparison_colors = (
-            COMPARISON_COLORS
-            if COMPARISON_COLORS is not None
-            else {
-                **{"fc": "tab:blue", "clim-fc": "tab:orange"},
-                **{
-                    label: colors(i)
-                    for i, label in enumerate(comparison_labels)
-                },
-            }
-        )
-
-        comparison_linestyles = {
-            model: "--" if model in {"fc", "clim-fc"} else "-"
-            for model in comparison_colors
-        }
 
     # ==========================================================
     # Skip experiments without completed forecast outputs
@@ -815,6 +769,91 @@ def main() -> None:
         return
 
     print(f"Found {len(settings)} matching experiment(s)")
+
+    # ==========================================================
+    # Generate combined profile labels, colors and linestyles
+    # ==========================================================
+
+    plot_combined_experiments = (
+        PLOT_COMBINED_EXPERIMENT_LEADTIME_PROFILES
+        or PLOT_COMBINED_EXPERIMENT_CLIMATOLOGICAL_PROFILES
+        or PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES
+    )
+
+    if plot_combined_experiments:
+        if COMPARISON_LABELS is None:
+            fields = {
+                name: short
+                for name, short in COMPARISON_LABEL_FIELDS.items()
+                if len({str(getattr(s, name)) for s in settings}) > 1
+            }
+
+            comparison_labels = []
+
+            for s in settings:
+                parts = []
+
+                for name, short in fields.items():
+                    value = getattr(s, name)
+
+                    if value is False:
+                        continue
+
+                    if value is True:
+                        parts.append(short or name)
+                    else:
+                        parts.append(f"{short}={value}" if short else str(value))
+
+                n = COMPARISON_LABEL_FIELDS_PER_LINE
+                comparison_labels.append(
+                    "\n".join(
+                        ", ".join(parts[i:i+n])
+                        for i in range(0, len(parts), n)
+                    ) or "Default"
+                )
+        else:
+            comparison_labels = COMPARISON_LABELS
+
+        if len(settings) != len(comparison_labels):
+            raise ValueError("Number of experiments and labels differ")
+
+        if len(set(comparison_labels)) != len(comparison_labels):
+            raise ValueError("Comparison labels are not unique")
+
+        comparison_descriptions = list(comparison_labels)
+        if COMPARISON_LABEL_USE_INDEX:
+            comparison_labels = [str(i) for i in range(1, len(settings) + 1)]
+
+        comparison_descriptions_by_index = dict(
+            zip(comparison_labels, comparison_descriptions, strict=True)
+        ) if COMPARISON_LABEL_USE_INDEX else {}
+
+        comparison_labels_by_experiment = {
+            s.exp_dir.name: label
+            for s, label in zip(settings, comparison_labels, strict=True)
+        }
+
+        colors = plt.get_cmap("tab20").resampled(len(comparison_labels))
+
+        comparison_colors = (
+            COMPARISON_COLORS
+            if COMPARISON_COLORS is not None
+            else {
+                **{"fc": "tab:blue", "clim-fc": "tab:orange"},
+                **{
+                    label: colors(i)
+                    for i, label in enumerate(comparison_labels)
+                },
+            }
+        )
+
+        comparison_linestyles = {
+            model: "--" if model in {"fc", "clim-fc"} else "-"
+            for model in comparison_colors
+        }
+
+        combined_profile_kwargs["legend_descriptions"] = comparison_descriptions_by_index
+
 
     # ==========================================================
     # Common evaluation timestamps across experiments
@@ -2812,6 +2851,7 @@ def main() -> None:
                 # ----------------------------------------------
                 # Experiment-axis profile
                 # ----------------------------------------------
+
                 if PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES:
                     leadtime_groups = (
                         [experiment_axis_leadtimes]
@@ -2928,11 +2968,16 @@ def main() -> None:
                                 labels=plot_labels if combined or has_references else "MLFC",
                                 out_file=out_file,
                                 time_range=valid_time_range,
+                                title_suffix=(
+                                    f" · Lead time {lead_values[0]}{LEADTIME_UNITS.value}"
+                                    if not combined else ""
+                                ),
                                 profile_dim="experiment",
+                                legend_descriptions=comparison_descriptions_by_index,
                                 profile_label=(
                                     COMBINED_EXPERIMENT_AXIS_LABEL
                                     if COMBINED_EXPERIMENT_AXIS_LABEL is not None
-                                    else COMPARISON_NAME.replace("_", " ")
+                                    else COMPARISON_NAME.replace("_", " ").capitalize()
                                 ),
                                 select_dim=None,
                                 select_value="all",
@@ -2950,7 +2995,10 @@ def main() -> None:
                                 model_linestyles=plot_linestyles if has_references else None,
                                 profile_connect=COMBINED_EXPERIMENT_AXIS_CONNECT,
                                 profile_tick_rotation=COMBINED_EXPERIMENT_AXIS_TICK_ROTATION,
-                                plot_legend=combined or has_references,
+                                plot_legend=(
+                                    PLOT_LEGEND
+                                    and (combined or has_references or COMPARISON_LABEL_USE_INDEX)
+                                ),
                                 ylim=get_profile_ylim(
                                     PROFILE_YLIMS, metric, variant="absolute",
                                 ),
@@ -3402,11 +3450,16 @@ def main() -> None:
                                             labels=plot_labels if combined else "MLFC",
                                             out_file=out_file,
                                             time_range=valid_time_range,
+                                            title_suffix=(
+                                                f" · Lead time {lead_values[0]}{LEADTIME_UNITS.value}"
+                                                if not combined else ""
+                                            ),
                                             profile_dim="experiment",
+                                            legend_descriptions=comparison_descriptions_by_index,
                                             profile_label=(
                                                 COMBINED_EXPERIMENT_AXIS_LABEL
                                                 if COMBINED_EXPERIMENT_AXIS_LABEL is not None
-                                                else COMPARISON_NAME.replace("_", " ")
+                                                else COMPARISON_NAME.replace("_", " ").capitalize()
                                             ),
                                             select_dim=None,
                                             select_value="all",
@@ -3417,7 +3470,10 @@ def main() -> None:
                                             profile_tick_rotation=COMBINED_EXPERIMENT_AXIS_TICK_ROTATION,
                                             profile_zero_line=False,
                                             improvement_unit=improvement_unit,
-                                            plot_legend=combined,
+                                            plot_legend=(
+                                                PLOT_LEGEND
+                                                and (combined or COMPARISON_LABEL_USE_INDEX)
+                                            ),
                                             ylim=get_profile_ylim(
                                                 PROFILE_YLIMS, metric, variant=variant,
                                             ),
