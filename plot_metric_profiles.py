@@ -179,6 +179,11 @@ IMPROVEMENT_AGG_MODE: ImprovementAgg = "before"
 # "after": aggregate model metrics, then calculate improvement
 # "before": calculate local improvement, then aggregate
 
+IMPROVEMENT_STATISTICS = ("value", "improved_percentage")
+# IMPROVEMENT_STATISTICS = ("value",)
+# IMPROVEMENT_STATISTICS = ("improved_percentage",)
+# "improved_percentage": improved n. of samples for timeseries_avg, improved n. of gridpoints for spatial_avg
+
 LEADTIME_AGG_MODE: LeadtimeAgg = "single"
 # "single"
 # "aggregated" 
@@ -387,6 +392,7 @@ COMPARISON_LABELS_MAP = {
     ("fc", "mlfc", "percentage"): "MLFC vs FC [%]",
     ("fc", "mlfc", "difference"): "MLFC vs FC [Δ]",
     ("fc", "mlfc", "normalized"): "MLFC vs FC [norm.]",
+    ("fc", "mlfc", "improved_percentage"): "MLFC vs FC — Improved samples [%]",
 }
 
 # Custom profile bands (lower and upper offsets)
@@ -435,6 +441,11 @@ PROFILE_YLIMS = {
     "normalized": {
         # "rmse": (-1, 1),
     },
+
+    "improved_percentage": {
+        metric: (0, 100)
+        for metric in METRICS
+    },
 }
 
 # ==========================================================
@@ -471,6 +482,7 @@ WANTED_CLIMATOLOGICAL_PROFILE_LEADTIMES = None
 COMBINED_VARIABLE_SOURCE = "mlfc-fc-difference"
 # COMBINED_VARIABLE_SOURCE = "mlfc-fc-percentage"
 # COMBINED_VARIABLE_SOURCE = "mlfc-fc-normalized"
+# COMBINED_VARIABLE_SOURCE = "mlfc-fc-improved_percentage"
 
 COMBINED_VARIABLE_IS_IMPROVEMENT = COMBINED_VARIABLE_SOURCE.startswith("mlfc-fc-")
 
@@ -688,6 +700,16 @@ COMBINED_EXPERIMENT_AXIS_CONNECT = True
 COMBINED_EXPERIMENT_AXIS_LABEL = None
 COMBINED_EXPERIMENT_AXIS_TICK_ROTATION = 45
 
+# ==========================================================
+# Main
+# ==========================================================
+
+IMPROVEMENT_UNITS = {
+    "percentage": "%",
+    "difference": "Δ",
+    "normalized": "normalized",
+    "improved_percentage": "improved_percentage",
+}
 
 def main() -> None:
     period_profile_label = get_period_profile_label(
@@ -1781,6 +1803,7 @@ def main() -> None:
                         an=an,
                         metric_agg_mode=METRIC_AGG_MODE,
                         improvement_agg_mode=IMPROVEMENT_AGG_MODE,
+                        improvement_statistics=IMPROVEMENT_STATISTICS,
                     )
 
                     for comparison_model, comparison_da in improvements.items():
@@ -2059,6 +2082,7 @@ def main() -> None:
                             an=an,
                             metric_agg_mode=METRIC_AGG_MODE,
                             improvement_agg_mode=IMPROVEMENT_AGG_MODE,
+                            improvement_statistics=IMPROVEMENT_STATISTICS,
                         )
 
                         matching = [
@@ -2087,7 +2111,7 @@ def main() -> None:
                     f"{COMBINED_VARIABLE_SOURCE!r}. Expected a raw model "
                     '("fc", "mlfc", "clim-fc") or one of '
                     '"mlfc-fc-difference", "mlfc-fc-percentage", '
-                    '"mlfc-fc-normalized".'
+                    '"mlfc-fc-normalized",  "mlfc-fc-improved_percentage".'
                 )
 
             if combined_variable_metrics is not None:
@@ -3311,15 +3335,12 @@ def main() -> None:
                                     baseline_ds,
                                     target_ds,
                                     metric=metric,
-                                    baseline_model=(
-                                        baseline_model
-                                    ),
-                                    target_model=(
-                                        experiment_label
-                                    ),
+                                    baseline_model=baseline_model,
+                                    target_model=experiment_label,
                                     an=group["spatial_reference"],
                                     metric_agg_mode=METRIC_AGG_MODE,
                                     improvement_agg_mode=IMPROVEMENT_AGG_MODE,
+                                    improvement_statistics=IMPROVEMENT_STATISTICS,
                                 )
                             )
 
@@ -3372,11 +3393,7 @@ def main() -> None:
                                 f"{variant}"
                             )
 
-                            improvement_unit = {
-                                "percentage": "%",
-                                "difference": "Δ",
-                                "normalized": "normalized",
-                            }[variant]
+                            improvement_unit = IMPROVEMENT_UNITS[variant]
 
                             # ----------------------------------
                             # Experiment-axis comparison profile
@@ -3762,6 +3779,7 @@ def main() -> None:
                                 an=group["spatial_reference"],
                                 metric_agg_mode=METRIC_AGG_MODE,
                                 improvement_agg_mode=IMPROVEMENT_AGG_MODE,
+                                improvement_statistics=IMPROVEMENT_STATISTICS,
                             )
                         )
 
@@ -4042,10 +4060,10 @@ def get_period_profile_label(
 def get_improvement_variant(
     comparison_name: str,
 ) -> str:
-    """
-    Extract the improvement representation from a model-comparison
-    name generated by get_aggregated_metric_improvements().
-    """
+
+    if comparison_name.endswith("_improved_percentage"):
+        return "improved_percentage"
+
     if comparison_name.endswith("_percentage"):
         return "percentage"
 
@@ -4059,13 +4077,6 @@ def get_improvement_variant(
         f"Cannot determine improvement representation "
         f"from comparison name {comparison_name!r}."
     )
-
-
-IMPROVEMENT_UNITS = {
-    "percentage": "%",
-    "difference": "Δ",
-    "normalized": "normalized",
-}
 
 
 def get_comparison_plot_meta(
