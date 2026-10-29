@@ -69,11 +69,14 @@ class LeadtimeDatasets(TypedDict):
     y_clim: xr.Dataset | None
     source_initialization_times: dict[str, np.ndarray]
 
+NeuralMember = tuple[int, int]  # seed, repeat
+
 PredictionRecord = tuple[
-    int,          # leadtime
-    str | None,   # init period
-    str,          # regional name
-    Path,         # prediction store
+    int,                  # leadtime
+    str | None,           # initialization period
+    str,                  # regional name
+    NeuralMember | None,  # neural member
+    Path,                 # prediction store
 ]
 
 TestWeights = Literal["best", "last", "current"]
@@ -275,6 +278,7 @@ def main() -> None:
                 target_mode="analysis",
 
                 seed=42,
+                neural_repeats=1,
 
                 channel_representation="variable",
                 # output_realizations="ensemble",
@@ -841,7 +845,11 @@ def train(
     if dry_run:
         return
 
-    L.seed_everything(s.seed, workers=True)
+    neural_members: tuple[NeuralMember | None, ...] = (
+        s.neural_members
+        if s.neural_ensemble
+        else (None,)
+    )
 
     train_pred_paths: list[PredictionRecord] = []
     val_pred_paths: list[PredictionRecord] = []
@@ -923,13 +931,18 @@ def train(
                 current_exp += 1
                 exp_number = current_exp
 
+                # Check exp is complete
                 complete = (
                     not force_retrain
                     and not force_test
-                    and experiment_is_complete(
-                        s,
-                        exp_name,
-                        explicit_split=explicit_split,
+                    and all(
+                        experiment_is_complete(
+                            s,
+                            exp_name,
+                            explicit_split=explicit_split,
+                            member=member,
+                        )
+                        for member in neural_members
                     )
                 )
 
@@ -944,29 +957,31 @@ def train(
                     )
                     continue
 
-                train_store, val_store, test_store = experiment_stores(
-                    s,
-                    exp_name,
-                )
-
                 logger.print(
                     f"[green]Skipping experiment "
                     f"{exp_number}/{total_exps}: {exp_name} "
                     f"is already complete.[/green]"
                 )
 
-                train_pred_paths.append(
-                    (int(lt), init_period, regional_name, train_store)
-                )
-
-                if explicit_split:
-                    val_pred_paths.append(
-                        (int(lt), init_period, regional_name, val_store)
+                for member in neural_members:
+                    train_store, val_store, test_store = experiment_stores(
+                        s,
+                        exp_name,
+                        member=member,
                     )
 
-                test_pred_paths.append(
-                    (int(lt), init_period, regional_name, test_store)
-                )
+                    train_pred_paths.append(
+                        (int(lt), init_period, regional_name, member, train_store)
+                    )
+
+                    if explicit_split:
+                        val_pred_paths.append(
+                            (int(lt), init_period, regional_name, member, val_store)
+                        )
+
+                    test_pred_paths.append(
+                        (int(lt), init_period, regional_name, member, test_store)
+                    )
 
         if not pending_experiments:
             continue
@@ -991,6 +1006,7 @@ def train(
             ],
         ] = {}
 
+        orography_ds = None
         try:
             orography_ds = (
                 xr.open_zarr(s.orography_path)
@@ -1213,44 +1229,67 @@ def train(
                     x_clim = dataset_d["x_clim"]
                     y_clim = dataset_d["y_clim"]
 
-                train_store, val_store, test_store = _core_train(
-                    s=s,
-                    exp_name=exp_name,
-                    region_name=regional_name,
-                    exp_ratio=(exp_number, total_exps),
-                    train_dataset=train_dataset,
-                    val_dataset=val_dataset,
-                    test_dataset=test_dataset,
-                    x_clim=x_clim,
-                    y_clim=y_clim,
-                    source_initialization_times=dataset_d["source_initialization_times"],
-                    force_retrain=force_retrain,
-                    force_test=force_test,
-                    dry_run=dry_run,
-                    interpolate_analysis=interpolate_analysis,
-                    device=device,
-                    accelerator=accelerator,
-                    leadtime=lt,
-                    # Regional/monthly datasets are views on common base xarray
-                    # datasets; close the bases once after all experiments for
-                    # this leadtime have finished.
-                    close_datasets=not defer_dataset_creation,
-                    train_subsamples=s.train_subsamples,
-                    val_subsamples=s.val_subsamples,
-                    log_monthly=log_monthly,
-                    debug_month_sampler=debug_month_sampler,
-                )
+                for member in neural_members:
+                    if (
+                        not force_retrain
+                        and not force_test
+                        and experiment_is_complete(
+                            s,
+                            exp_name,
+                            explicit_split=explicit_split,
+                            member=member,
+                        )
+                    ):
+                        train_store, val_store, test_store = experiment_stores(
+                            s,
+                            exp_name,
+                            member=member,
+                        )
 
-                train_pred_paths.append(
-                    (int(lt), init_period, regional_name, train_store)
-                )
-                if val_dataset is not None:
-                    val_pred_paths.append(
-                        (int(lt), init_period, regional_name, val_store)
+                    else:
+                        train_store, val_store, test_store = _core_train(
+                            s=s,
+                            exp_name=exp_name,
+                            region_name=regional_name,
+                            exp_ratio=(exp_number, total_exps),
+                            train_dataset=train_dataset,
+                            val_dataset=val_dataset,
+                            test_dataset=test_dataset,
+                            x_clim=x_clim,
+                            y_clim=y_clim,
+                            source_initialization_times=dataset_d["source_initialization_times"],
+                            force_retrain=force_retrain,
+                            force_test=force_test,
+                            dry_run=dry_run,
+                            interpolate_analysis=interpolate_analysis,
+                            device=device,
+                            accelerator=accelerator,
+                            leadtime=lt,
+                            close_datasets=False,
+                            train_subsamples=s.train_subsamples,
+                            val_subsamples=s.val_subsamples,
+                            log_monthly=log_monthly,
+                            debug_month_sampler=debug_month_sampler,
+                            member=member,
+                        )
+
+                    train_pred_paths.append(
+                        (int(lt), init_period, regional_name, member, train_store)
                     )
-                test_pred_paths.append(
-                    (int(lt), init_period, regional_name, test_store)
-                )
+
+                    if val_dataset is not None:
+                        val_pred_paths.append(
+                            (int(lt), init_period, regional_name, member, val_store)
+                        )
+
+                    test_pred_paths.append(
+                        (int(lt), init_period, regional_name, member, test_store)
+                    )
+
+                for dataset in (train_dataset, val_dataset, test_dataset):
+                    if dataset is not None:
+                        dataset.transform_x = None
+                        dataset.transform_y = None
 
                 if defer_dataset_creation:
                     del train_dataset, val_dataset, test_dataset
@@ -1261,18 +1300,28 @@ def train(
             regional_views.clear()
 
             if dataset_d is not None:
-                # Deferred mode keeps raw x/y base datasets alive across all
-                # regional/monthly experiments. Close them exactly once here.
-                if defer_dataset_creation:
-                    for key in ("train", "val", "test"):
-                        pair = dataset_d[key]
-                        if pair is None or isinstance(pair, XarrayDataset):
-                            continue
-                        for ds in pair.values():
-                            try:
-                                ds.close()
-                            except Exception:
-                                pass
+                for key in ("train", "val", "test"):
+                    dataset = dataset_d[key]
+
+                    if dataset is None:
+                        continue
+
+                    if isinstance(dataset, XarrayDataset):
+                        datasets = (
+                            dataset.input_ds,
+                            dataset.target_ds,
+                        )
+                    else:
+                        datasets = (
+                            dataset["x"],
+                            dataset["y"],
+                        )
+
+                    for ds in datasets:
+                        try:
+                            ds.close()
+                        except Exception:
+                            pass
 
                 for clim_ds in (
                     dataset_d["x_clim"],
@@ -1285,9 +1334,16 @@ def train(
                             pass
 
                 del dataset_d
-                gc.collect()
 
-    # Combine leadtimes, regions and initialization periods.
+            if orography_ds is not None:
+                try:
+                    orography_ds.close()
+                except Exception:
+                    pass
+
+            gc.collect()
+
+    # Combine leadtimes, regions and initialization periods
     _combine_predictions(
         s=s,
         data_type="train",
@@ -1306,6 +1362,15 @@ def train(
         data_type="test",
         pred_records=test_pred_paths,
     )
+
+    # DEBUG
+    if s.neural_ensemble:
+        with xr.open_zarr(s.output_mlfc_test) as ds:
+            print(ds.sizes)
+            print(ds.neural_seed.values)
+            print(ds.neural_repeat.values)
+
+            assert ds.sizes["neural_member"] == len(s.neural_members)
 
 # ==========================================================
 # Core train functionality
@@ -1334,16 +1399,26 @@ def _core_train(
     train_subsamples: int | None = None,
     val_subsamples: int | None = None,
     debug_month_sampler: bool = False,
+    member: NeuralMember | None = None,
 ):
     # ----------------------------------------------------------
     # Startup
     # ----------------------------------------------------------
 
+    # Neural ensemble setup
+    suffix = neural_member_suffix(member)
+    member_seed = (
+        member[0]
+        if member is not None
+        else s.seed
+    )
+    L.seed_everything(member_seed, workers=True)
+
     # Create exp dirs
     exp_dir = s.exp_dir / exp_name
     weights_dir = exp_dir / "weights"
     checkpoints_dir = exp_dir / "checkpoints"
-    log_file = exp_dir / "logs" / "run.log"
+    log_file = exp_dir / "logs" / f"run{suffix}.log"
 
     for directory in (
         weights_dir,
@@ -1379,7 +1454,7 @@ def _core_train(
     # Tensorboard
     tb_logger = TensorBoardLogger(
         save_dir=s.exp_dir / "tensorboard",
-        name=exp_name,
+        name=f"{exp_name}{suffix}",
         version="",
         default_hp_metric=False,
         # log_graph=True,
@@ -1406,26 +1481,48 @@ def _core_train(
             "temporal_evolution_encoding": str(s.temporal_evolution_encoding),
             "seasonal_encoding": s.seasonal_encoding,
             "target_mode": s.target_mode,
+            "neural_seed": member_seed,
+            "neural_repeat": member[1] if member is not None else 0,
         }
     )
 
+    # Initialize
+    train_trainer = None
+    test_trainer = None
+    model = None
+    train_datamodule = None
+    success = False
+
     try:
         logger.print("=" * 80)
-        logger.print(f"Starting experiment {exp_name} ({exp_ratio[0]} / {exp_ratio[1]})")
+        logger.print(
+            f"Starting experiment {exp_name} "
+            f"({exp_ratio[0]} / {exp_ratio[1]})"
+        )
+
+        if member is not None:
+            member_index = s.neural_members.index(member) + 1
+
+            logger.print(
+                f"Neural member {member_index}/{len(s.neural_members)} "
+                f"(seed={member[0]}, repeat={member[1]})"
+            )
+
         logger.print("Lead time:", leadtime)
 
         # Set weight file names
-        weights_file = weights_dir / "weights.ckpt"
-        last_checkpoint = checkpoints_dir / "last.ckpt"
+        weights_file = weights_dir / f"weights{suffix}.ckpt"
+        last_checkpoint = checkpoints_dir / f"last{suffix}.ckpt"
 
         # Set Zarr file names
         train_store, val_store, test_store = experiment_stores(
             s,
             exp_name,
+            member=member,
         )
 
         # Logic flow
-        training_complete_file = exp_dir / "training_complete" # state file name
+        training_complete_file = exp_dir / f"training_complete{suffix}" # state file name
 
         should_train = (
             force_retrain
@@ -1576,7 +1673,7 @@ def _core_train(
             val_dataset=val_dataset,
             train_fraction=s.train_fraction,
             batch_size=s.batch_size,
-            seed=s.seed,
+            seed=member_seed,
             num_workers=s.torch_workers,
             split_strategy=s.split_strategy,
             shuffle_train=s.shuffle_train_batch,
@@ -1801,6 +1898,7 @@ def _core_train(
             weights_dir=weights_dir,
             checkpoints_dir=checkpoints_dir,
             source_initialization_times=source_initialization_times,
+            member=member,
         )
 
         # ----------------------------------------------------------
@@ -1823,6 +1921,7 @@ def _core_train(
                 weights_folder_path=weights_dir,
                 ckpt_folder_path=checkpoints_dir,
                 patience=s.early_stopping_patience,
+                suffix=suffix,
             ),
             deterministic=DETERMINISTIC,
             benchmark=False,
@@ -1866,9 +1965,9 @@ def _core_train(
         # Training is finished, clean up
         train_trainer.strategy.teardown()
 
-        del train_trainer
-        del train_datamodule
-        del model
+        train_trainer = None
+        train_datamodule = None
+        model = None
 
         gc.collect()
 
@@ -1969,9 +2068,6 @@ def _core_train(
                 f"saved preds already exist.[/green]"
             )
 
-        # Trainer clean-up
-        test_trainer.strategy.teardown()
-
         if close_datasets:
             for ds in (
                 train_dataset.input_ds,
@@ -1987,23 +2083,10 @@ def _core_train(
                     except Exception:
                         pass
 
-        try:
-            tb_logger.experiment.flush()
-            tb_logger.experiment.close()
-        except Exception:
-            pass
-
-        try:
-            tb_logger.finalize("success")
-        except Exception:
-            pass
-
-        del test_trainer, model
         del train_test_dataloader, val_test_dataloader, test_dataloader
         del train_dataset, val_dataset, test_dataset
         del normalize_input, normalize_target
         del latitudes, loss_kwargs, base_loss_params, net_kwargs
-        del tb_logger
 
         gc.collect()
 
@@ -2017,20 +2100,67 @@ def _core_train(
         ):
             torch.mps.empty_cache()
 
-        logger.print("Experiment completed successfully")
+        logger.print(
+            "Experiment completed successfully"
+            + (
+                f" (seed={member[0]}, repeat={member[1]})"
+                if member is not None
+                else ""
+            )
+        )
 
+        success = True
         return train_store, val_store, test_store
 
     except Exception:
-        logger.exception("Experiment failed: %s", exp_name)
+        logger.exception(
+            "Experiment failed: %s%s",
+            exp_name,
+            f" {member}" if member is not None else "",
+        )
         raise
 
     finally:
+        for trainer in (train_trainer, test_trainer):
+            if trainer is not None:
+                try:
+                    trainer.strategy.teardown()
+                except Exception:
+                    logger.exception("Trainer teardown failed")
+
+        train_trainer = None
+        test_trainer = None
+        train_datamodule = None
+        model = None
+
+        try:
+            tb_logger.finalize("success" if success else "failed")
+        except Exception:
+            logger.exception("TensorBoard finalization failed")
+
         remove_file_handler(logger, file_handler)
+
+        gc.collect()
+
+        if accelerator == "gpu" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        elif accelerator == "mps" and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
 
 # ==========================================================
 # Utils
 # ==========================================================
+
+def neural_member_suffix(
+    member: NeuralMember | None,
+) -> str:
+    if member is None:
+        return ""
+
+    seed, repeat = member
+    return f"_seed{seed}_repeat{repeat}"
+
 
 def resolve_test_checkpoint(
     *,
@@ -3199,6 +3329,7 @@ def init_callbacks(
     ckpt_folder_path: str | Path,
     weights_folder_path: str | Path,
     patience: int,
+    suffix: str = "",
 ):
     # Initialize trainer callbacks
     callbacks = []
@@ -3214,16 +3345,16 @@ def init_callbacks(
     )
 
     # Checkpointing every N epochs
-    callbacks.append(
-        ModelCheckpoint(
-            dirpath=ckpt_folder_path,
-            every_n_epochs=1,
-            save_last=True,
-            save_top_k=1,
-            filename="checkpoint",
-            enable_version_counter=False,
-        )
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=ckpt_folder_path,
+        every_n_epochs=1,
+        save_last=True,
+        save_top_k=1,
+        filename=f"checkpoint{suffix}",
+        enable_version_counter=False,
     )
+    checkpoint_callback.CHECKPOINT_NAME_LAST = f"last{suffix}"
+    callbacks.append(checkpoint_callback)
 
     # Model best weights, MUST be the last ModelCheckpoint. Can append from here since ModelCheckpoint will always be the last callbacks
     callbacks.append(
@@ -3232,7 +3363,7 @@ def init_callbacks(
             monitor="val_loss",
             save_top_k=1,
             mode="min",
-            filename="weights",
+            filename=f"weights{suffix}",
             enable_version_counter=False,
         )
     )
@@ -3473,6 +3604,7 @@ def print_training_recap(
     weights_dir: Path | None = None,
     checkpoints_dir: Path | None = None,
     source_initialization_times: Mapping[str, Sequence] | None = None,
+    member: NeuralMember | None = None,
 ) -> None:
     train_dataset = datamodule.train_dataset
     val_dataset = datamodule.val_dataset
@@ -3596,7 +3728,16 @@ def print_training_recap(
         "experiment.number": f"{exp_ratio[0]} / {exp_ratio[1]}",
         "experiment.name": exp_name or s.output_name,
         "experiment.leadtime": f"{leadtime} {s.leadtime_unit.value}",
-        "experiment.seed": s.seed,
+        "experiment.seed": member[0] if member is not None else s.seed,
+        "experiment.neural_repeat": member[1] if member is not None else None,
+        "experiment.neural_member": (
+            f"{s.neural_members.index(member) + 1} / {len(s.neural_members)}"
+            if member is not None
+            else None
+        ),
+        "experiment.neural_ensemble_size": (
+            len(s.neural_members) if s.neural_ensemble else None
+        ),
         "experiment.separate_training_by_init_period": s.separate_training_by_init_period,
 
         "run.dry_run": dry_run,
@@ -3805,9 +3946,7 @@ def print_training_recap(
 def _combine_predictions(
     s: Settings,
     data_type: Literal["train", "val", "test"],
-    pred_records: list[
-        tuple[int, str | None, str, Path]
-    ],
+    pred_records: list[PredictionRecord],
 ) -> None:
     if not pred_records:
         return
@@ -3816,40 +3955,32 @@ def _combine_predictions(
 
     records_by_leadtime: dict[
         int,
-        list[tuple[str | None, str, Path]],
+        list[tuple[str | None, str, NeuralMember | None, Path]],
     ] = {}
 
-    for leadtime, init_period, regional_name, path in pred_records:
+    for leadtime, init_period, regional_name, member, path in pred_records:
         records_by_leadtime.setdefault(
             leadtime,
             [],
         ).append(
-            (
-                init_period,
-                regional_name,
-                path,
-            )
+            (init_period, regional_name, member, path)
         )
 
     leadtime_datasets: list[xr.Dataset] = []
-
     for leadtime in sorted(records_by_leadtime):
         records_for_leadtime = records_by_leadtime[leadtime]
 
         records_by_init_period: dict[
             str | None,
-            list[tuple[str, Path]],
+            list[tuple[str, NeuralMember | None, Path]],
         ] = {}
 
-        for init_period, regional_name, path in records_for_leadtime:
+        for init_period, regional_name, member, path in records_for_leadtime:
             records_by_init_period.setdefault(
                 init_period,
                 [],
             ).append(
-                (
-                    regional_name,
-                    path,
-                )
+                (regional_name, member, path)
             )
 
         init_period_datasets: list[xr.Dataset] = []
@@ -3863,22 +3994,79 @@ def _combine_predictions(
             regional_records = records_by_init_period[init_period]
 
             regional_datasets: list[xr.Dataset] = []
+            records_by_region: dict[
+                str,
+                list[tuple[NeuralMember | None, Path]],
+            ] = {}
 
-            for regional_name, path in sorted(
-                regional_records,
-                key=lambda item: item[0],
-            ):
-                if not path.exists():
-                    raise FileNotFoundError(
-                        f"Missing {data_type} prediction store for "
-                        f"leadtime={leadtime}, "
-                        f"init_period={init_period}, "
-                        f"region={regional_name}: {path}"
+            for regional_name, member, path in regional_records:
+                records_by_region.setdefault(
+                    regional_name,
+                    [],
+                ).append((member, path))
+
+            for regional_name in sorted(records_by_region):
+
+                member_records = records_by_region[regional_name]
+
+                member_datasets = []
+                member_seeds = []
+                member_repeats = []
+
+                for member, path in sorted(
+                    member_records,
+                    key=lambda item: (
+                        item[0] if item[0] is not None else (-1, -1)
+                    ),
+                ):
+                    if not path.exists():
+                        raise FileNotFoundError(
+                            f"Missing {data_type} prediction store for "
+                            f"leadtime={leadtime}, "
+                            f"init_period={init_period}, "
+                            f"region={regional_name}, "
+                            f"member={member}: {path}"
+                        )
+
+                    member_datasets.append(open_zarr(path))
+
+                    if member is not None:
+                        member_seeds.append(member[0])
+                        member_repeats.append(member[1])
+
+                if s.neural_ensemble:
+                    combined_members = xr.concat(
+                        member_datasets,
+                        dim=xr.IndexVariable(
+                            "neural_member",
+                            np.arange(len(member_datasets)),
+                        ),
+                        coords="minimal",
+                        compat="equals",
+                        join="exact",
                     )
 
-                regional_datasets.append(
-                    open_zarr(path)
-                )
+                    combined_members = combined_members.assign_coords(
+                        neural_seed=(
+                            "neural_member",
+                            member_seeds,
+                        ),
+                        neural_repeat=(
+                            "neural_member",
+                            member_repeats,
+                        ),
+                    )
+
+                else:
+                    if len(member_datasets) != 1:
+                        raise ValueError(
+                            "Expected exactly one prediction dataset "
+                            "when neural ensemble mode is disabled."
+                        )
+
+                    combined_members = member_datasets[0]
+
+                regional_datasets.append(combined_members)
 
             if len(regional_datasets) == 1:
                 combined_regions = regional_datasets[0]
@@ -4301,13 +4489,15 @@ def make_regional_boxes(
 def experiment_stores(
     s: Settings,
     exp_name: str,
+    member: NeuralMember | None = None,
 ) -> tuple[Path, Path, Path]:
     exp_dir = s.exp_dir / exp_name
+    suffix = neural_member_suffix(member)
 
     return (
-        exp_dir / "train_preds.zarr",
-        exp_dir / "val_preds.zarr",
-        exp_dir / "test_preds.zarr",
+        exp_dir / f"train_preds{suffix}.zarr",
+        exp_dir / f"val_preds{suffix}.zarr",
+        exp_dir / f"test_preds{suffix}.zarr",
     )
 
 
@@ -4316,14 +4506,22 @@ def experiment_is_complete(
     exp_name: str,
     *,
     explicit_split: bool,
+    member: NeuralMember | None = None,
 ) -> bool:
     exp_dir = s.exp_dir / exp_name
-    weights_file = exp_dir / "weights" / "weights.ckpt"
-    training_complete_file = exp_dir / "training_complete"
+    suffix = neural_member_suffix(member)
+
+    weights_file = (
+        exp_dir / "weights" / f"weights{suffix}.ckpt"
+    )
+    training_complete_file = (
+        exp_dir / f"training_complete{suffix}"
+    )
 
     train_store, val_store, test_store = experiment_stores(
-        s,
-        exp_name,
+        s=s,
+        exp_name=exp_name,
+        member=member,
     )
 
     predictions_complete = (
