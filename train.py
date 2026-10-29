@@ -95,11 +95,13 @@ DETERMINISTIC = False
 
 # Only for weather
 EXPERIMENT_NAME = "weather_atmo"
+# EXPERIMENT_NAME = "weather_atmo_debug"
 # EXPERIMENT_NAME = "weather_atmo_seed"
 # EXPERIMENT_NAME = "weather_atmo_normalization"
 # EXPERIMENT_NAME = "weather_atmo_variables"
 # EXPERIMENT_NAME = "weather_atmo_normalization_ablation"
 # EXPERIMENT_NAME = "weather_atmo_one_year_test"
+# EXPERIMENT_NAME = "weather_atmo_encoding_short"
 # EXPERIMENT_NAME = "weather_atmo_encoding"
 # EXPERIMENT_NAME = "weather_atmo_ablation_fixed_val"
 # EXPERIMENT_NAME = "weather_atmo_short_zero_vs_replicate_padding"
@@ -289,13 +291,15 @@ def main() -> None:
 
                 normalization="full",
 
-                normalization_input_mean="sample",
-                normalization_input_std="sample",
-                normalization_target_mean="sample",
-                normalization_target_std="sample",
+                normalization_input_mean="channel",
+                normalization_input_std="channel",
+                normalization_target_mean="channel",
+                normalization_target_std="channel",
 
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
+
+                extra_input_variables=(),
 
                 climatology_encoding=False,
                 climatology_error_encoding=False,
@@ -321,6 +325,14 @@ def main() -> None:
                     # longitude_padding="zero", # creates artifacts near the border
                     # longitude_padding = "replicate", # regional (weather)
                 ),
+
+                # smaatunet_kwargs=dict(
+                #     reduction_ratio=8,
+                #     depth=2,
+                #     kernels_per_layer=1,
+                #     base_channels=16,
+                #     bilinear=True,
+                # ),
 
                 # net_name="ConvNeXtTransformerUNet",
                 # convnext_kwargs=dict(
@@ -516,6 +528,8 @@ def main() -> None:
 
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
+
+                extra_input_variables=(),
 
                 temporal_evolution_encoding=(),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
@@ -1014,9 +1028,20 @@ def train(
                 else None
             )
 
+            forecast_vars = [
+                s.var_fc,
+                *s.extra_input_variables,
+            ]
+
+            if len(forecast_vars) != len(set(forecast_vars)):
+                raise ValueError("Duplicate forecast input variables")
+
             dataset_d = make_train_test_datasets_for_leadtime(
-                forecast_ds_path=s.input_dir / f"{s.model_fc}_{s.var_fc}.zarr",
-                analysis_ds_path=s.input_dir / f"{s.model_an}_{s.var_an}.zarr",
+                forecast_ds_path=[
+                    s.input_fc,
+                    *s.extra_input_fc,
+                ],
+                analysis_ds_path=s.input_an,
                 leadtime=lt,
                 leadtime_unit=LeadtimeUnit(s.leadtime_unit),
                 train_start=s.train_start,
@@ -1027,7 +1052,7 @@ def train(
                 test_end=s.test_end,
                 target_mode=s.target_mode,
                 clim_period=s.clim_period,
-                forecast_vars=[s.var_fc],
+                forecast_vars=forecast_vars,
                 analysis_vars=[s.var_an],
                 # Build once for the complete requested domain. Individual
                 # regional boxes are selected below as cheap xarray views.
@@ -1364,13 +1389,13 @@ def train(
     )
 
     # DEBUG
-    if s.neural_ensemble:
-        with xr.open_zarr(s.output_mlfc_test) as ds:
-            print(ds.sizes)
-            print(ds.neural_seed.values)
-            print(ds.neural_repeat.values)
+    # if s.neural_ensemble:
+    #     with xr.open_zarr(s.output_mlfc_test) as ds:
+    #         print(ds.sizes)
+    #         print(ds.neural_seed.values)
+    #         print(ds.neural_repeat.values)
 
-            assert ds.sizes["neural_member"] == len(s.neural_members)
+    #         assert ds.sizes["neural_member"] == len(s.neural_members)
 
 # ==========================================================
 # Core train functionality
@@ -1735,7 +1760,7 @@ def _core_train(
         # Debug info
         # ----------------------------------------------------------
 
-        # # Debug dataset sample
+        # DEBUG dataset sample
         # dataset = train_datamodule.train_dataset
 
         # # Raw sample (before normalization)
@@ -2694,6 +2719,7 @@ def make_leadtime_pair(
     end: str,
     fc_clim: xr.Dataset | None,
     an_clim: xr.Dataset | None,
+    forecast_target_var: str | None = None,
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     temporal_evolution_encoding: tuple[int, ...] = (),
@@ -2765,12 +2791,8 @@ def make_leadtime_pair(
             if realization_dim is not None and realization_dim in forecast_clim.dims:
                 forecast_clim = forecast_clim.mean(realization_dim, skipna=True)
 
-            if len(fc_period_ds.data_vars) != 1 or len(an_period_ds.data_vars) != 1:
-                raise NotImplementedError(
-                    "Climatology encodings currently require one forecast and one analysis variable"
-                )
-            fc_name = next(iter(fc_period_ds.data_vars))
-            an_name = next(iter(an_period_ds.data_vars))
+            fc_name = forecast_target_var
+            an_name = analysis_target_var
             extra = {}
             if climatology_encoding:
                 extra[f"{an_name}_clim"] = analysis_clim[an_name]
@@ -2830,20 +2852,40 @@ def make_leadtime_pair(
             f"leadtime={leadtime} {leadtime_unit.value}"
         )
 
+    # Resolve target var
+    if forecast_target_var is None:
+        if len(fc_period_ds.data_vars) != 1:
+            raise ValueError(
+                "forecast_target_var is required for multivariable inputs"
+            )
+        forecast_target_var = next(iter(fc_period_ds.data_vars))
+
+    if len(an_period_ds.data_vars) != 1:
+        raise ValueError("Exactly one target variable is required")
+
+    analysis_target_var = next(iter(an_period_ds.data_vars))
+
     if target_mode == "analysis":
         return _finish(_encode_input(fc_period_ds), an_period_ds)
 
     if target_mode == "residual":
-        fc_base = (
-            fc_period_ds.mean("realization")
-            if "realization" in fc_period_ds.dims
-            else fc_period_ds
-        )
-        target_ds = an_period_ds - fc_base
+        fc_base = fc_period_ds[forecast_target_var]
+
+        if "realization" in fc_base.dims:
+            fc_base = fc_base.mean("realization")
+
+        target_ds = (
+            an_period_ds[analysis_target_var] - fc_base
+        ).to_dataset(name=analysis_target_var)
+
         return _finish(_encode_input(fc_period_ds), target_ds)
 
     if target_mode == "residual_realization":
-        target_ds = an_period_ds - fc_period_ds
+        target_ds = (
+            an_period_ds[analysis_target_var]
+            - fc_period_ds[forecast_target_var]
+        ).to_dataset(name=analysis_target_var)
+
         return _finish(_encode_input(fc_period_ds), target_ds)
 
     if fc_clim is None or an_clim is None:
@@ -2888,16 +2930,23 @@ def make_leadtime_pair(
         return _finish(_encode_input(fc_anom), an_anom)
 
     if target_mode == "anomaly_residual":
-        fc_anom_base = (
-            fc_anom.mean("realization")
-            if "realization" in fc_anom.dims
-            else fc_anom
-        )
-        target_anom_ds = an_anom - fc_anom_base
+        fc_anom_base = fc_anom[forecast_target_var]
+
+        if "realization" in fc_anom_base.dims:
+            fc_anom_base = fc_anom_base.mean("realization")
+
+        target_anom_ds = (
+            an_anom[analysis_target_var] - fc_anom_base
+        ).to_dataset(name=analysis_target_var)
+
         return _finish(_encode_input(fc_anom), target_anom_ds)
 
     if target_mode == "anomaly_residual_realization":
-        target_anom_ds = an_anom - fc_anom
+        target_anom_ds = (
+            an_anom[analysis_target_var]
+            - fc_anom[forecast_target_var]
+        ).to_dataset(name=analysis_target_var)
+
         return _finish(_encode_input(fc_anom), target_anom_ds)
 
     raise ValueError(f"Unsupported target_mode={target_mode!r}")
@@ -3002,7 +3051,7 @@ def make_region_dataset(
 
 
 def make_train_test_datasets_for_leadtime(
-    forecast_ds_path: str | Path,
+    forecast_ds_path: str | Path | Sequence[str | Path],
     analysis_ds_path: str | Path,
     leadtime: int | float,
     leadtime_unit: LeadtimeUnit,
@@ -3040,7 +3089,30 @@ def make_train_test_datasets_for_leadtime(
     lon = region["lon"] if region is not None else None
     lat = region["lat"] if region is not None else None
 
-    fc_ds = open_zarr(forecast_ds_path)
+    forecast_paths = (
+        [forecast_ds_path]
+        if isinstance(forecast_ds_path, (str, Path))
+        else list(forecast_ds_path)
+    )
+
+    if not forecast_paths:
+        raise ValueError("forecast_ds_path cannot be empty")
+
+    forecast_datasets = [
+        open_zarr(path)
+        for path in forecast_paths
+    ]
+
+    fc_ds = (
+        forecast_datasets[0]
+        if len(forecast_datasets) == 1
+        else xr.merge(
+            forecast_datasets,
+            compat="equals",
+            join="exact",
+        )
+    )
+
     an_ds = open_zarr(analysis_ds_path)
 
     if forecast_vars is not None:
@@ -3048,6 +3120,17 @@ def make_train_test_datasets_for_leadtime(
 
     if analysis_vars is not None:
         an_ds = an_ds[list(analysis_vars)]
+
+    if forecast_vars is None:
+        if len(fc_ds.data_vars) != 1:
+            raise ValueError(
+                "forecast_vars is required for multivariable forecasts"
+            )
+        forecast_target_var = next(iter(fc_ds.data_vars))
+    else:
+        if not forecast_vars:
+            raise ValueError("forecast_vars cannot be empty")
+        forecast_target_var = forecast_vars[0]
 
     # Select region
     if lat is not None:
@@ -3091,6 +3174,7 @@ def make_train_test_datasets_for_leadtime(
         end=train_end,
         fc_clim=fc_clim,
         an_clim=an_clim,
+        forecast_target_var=forecast_target_var,
         target_mode=target_mode,
         clim_period=clim_period,
         temporal_evolution_encoding=temporal_evolution_encoding,
@@ -3125,6 +3209,7 @@ def make_train_test_datasets_for_leadtime(
             end=val_end,
             fc_clim=fc_clim,
             an_clim=an_clim,
+            forecast_target_var=forecast_target_var,
             target_mode=target_mode,
             clim_period=clim_period,
             temporal_evolution_encoding=temporal_evolution_encoding,
@@ -3169,6 +3254,7 @@ def make_train_test_datasets_for_leadtime(
         end=test_end,
         fc_clim=fc_clim,
         an_clim=an_clim,
+        forecast_target_var=forecast_target_var,
         target_mode=target_mode,
         clim_period=clim_period,
         temporal_evolution_encoding=temporal_evolution_encoding,
