@@ -8,6 +8,7 @@ import numpy as np
 import xarray as xr
 
 import matplotlib
+import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 
 import warnings
@@ -272,7 +273,7 @@ METRICS = [
 ]
 
 # ==========================================================
-# Variables and regions
+# Experiment selection
 # ==========================================================
 
 VARIABLES = [
@@ -300,6 +301,41 @@ REGIONS = [
     "World",
     # None,
 ]
+
+FILTERS = dict(
+    var_fc=VARIABLES,
+    region_name=REGIONS,
+
+    # net_name="ConvNeXtTransformerUNet",
+    # net_name="SmaAt_UNet",
+
+    # target_mode="analysis",
+
+    # seasonal_encoding=True,
+    # ensemble_encoding=True,
+    # input_realization_avg=True,
+    # channel_representation="variable",
+
+    # normalization_input_mean="sample",
+    # normalization_input_std="sample",
+    # normalization_target_mean="sample",
+    # normalization_target_std="sample",
+    # sample_target_mean="input",
+    # sample_target_std="input",
+
+    loss_name="GeoMaskedMSELoss",
+    # loss_name="GeoMaskedMSEMultiScaleLoss",
+    # loss_name="SpatialDegradationMSELoss",
+
+    # train_start="2019-10-14",
+
+    # separate_training_by_init_period=None,
+    # separate_training_by_init_period=ClimPeriod.MONTH,
+
+    # extra_suffix_folder="264samples_consecutive",
+    # extra_suffix_folder="NOAA_copy",
+    # extra_suffix_folder="",
+)
 
 # ==========================================================
 # Spatial subset
@@ -484,6 +520,25 @@ VARIABLE_COLORS = {
 # ==========================================================
 
 COMBINED_PLOT_FOLDER = "profile_comparison"
+COMPARISON_NAME = "encoding"
+
+COMPARISON_LABELS = None
+COMPARISON_COLORS = None
+
+COMPARISON_LABEL_FIELDS = [
+    "target_mode",
+    "net_name",
+    "climatology_encoding",
+    "climatology_error_encoding",
+    "temporal_evolution_encoding",
+    "seasonal_encoding",
+    "spatial_encoding",
+    "orography_encoding",
+    "normalization_input_mean",
+    "normalization_input_std",
+    "normalization_target_mean",
+    "normalization_target_std",
+]
 
 # COMPARISON_NAME = "ablation_fixed_val_samples"
 
@@ -524,35 +579,44 @@ COMBINED_PLOT_FOLDER = "profile_comparison"
 #     r"Channel $\mu/\sigma$ 44 seed",
 # ]
 
-COMPARISON_NAME = "encoding"
+# COMPARISON_NAME = "encoding"
 
-COMPARISON_LABELS = [
-    r"Sample $\mu/\sigma$ no encoding",
-    r"Sample $\mu/\sigma$ oro encoding",
-    r"Sample $\mu/\sigma$ seasonal encoding",
-    r"Sample $\mu/\sigma$ spatial encoding",
-    r"Sample $\mu/\sigma$ oro, seasonal, spatial, temp encoding",
-    r"Sample $\mu/\sigma$ spatial, temp encoding",
+# COMPARISON_LABELS = [
+#     r"Sample $\mu/\sigma$ all encoding ConvNeXt",
+#     r"Sample $\mu/\sigma$ clim and clim err encoding",
+#     r"Sample $\mu/\sigma$ clim encoding",
+#     # r"Sample $\mu/\sigma$ clim err encoding",
+#     r"Sample $\mu/\sigma$ no encoding ConvNeXt",
+#     r"Sample $\mu/\sigma$ no encoding",
+#     # r"Sample $\mu/\sigma$ oro encoding",
+#     r"Sample $\mu/\sigma$ seasonal encoding",
+#     r"Sample $\mu/\sigma$ spatial encoding",
+#     # r"Sample $\mu/\sigma$ oro, seasonal, spatial, temp -1,+1 encoding",
+#     # r"Sample $\mu/\sigma$ spatial, temp -1,+1 encoding",
+#     # r"Channel $\mu/\sigma$ temp -4,-3,-2,-1 encoding",
+#     r"Sample $\mu/\sigma$ temp -4,-3,-2,-1 encoding",
+#     r"Sample $\mu/\sigma$ oro, seasonal, spatial, temp -4,-3,-2,-1 encoding",
+#     r"Residual sample $\mu/\sigma$, channel target all encoding",
+#     r"Residual sample $\mu/\sigma$, channel target no encoding",
+#     r"Residual sample $\mu/\sigma$, channel target no encoding ConvNeXt",
+# ]
 
-]
-
-COMPARISON_COLORS = {
-    "fc": "tab:blue",
-    "clim-fc": "tab:orange",
-    COMPARISON_LABELS[0]: "darkviolet",
-    COMPARISON_LABELS[1]: "forestgreen",
-    COMPARISON_LABELS[2]: "deeppink",
-    COMPARISON_LABELS[3]: "firebrick",
-    COMPARISON_LABELS[4]: "dimgray",
-    COMPARISON_LABELS[5]: "teal",
-    # comparison_labels[6]: "darkgoldenrod",
-    # comparison_labels[7]: "navy",
-}
-
-COMPARISON_LINESTYLES = {
-    model: "--" if model in {"fc", "clim-fc"} else "-"
-    for model in COMPARISON_COLORS
-}
+# COMPARISON_COLORS = {
+#     "fc": "tab:blue",
+#     "clim-fc": "tab:orange",
+#     COMPARISON_LABELS[0]: "darkviolet",
+#     COMPARISON_LABELS[1]: "forestgreen",
+#     COMPARISON_LABELS[2]: "deeppink",
+#     COMPARISON_LABELS[3]: "firebrick",
+#     COMPARISON_LABELS[4]: "dimgray",
+#     COMPARISON_LABELS[5]: "teal",
+#     COMPARISON_LABELS[6]: "darkgoldenrod",
+#     COMPARISON_LABELS[7]: "navy",
+#     COMPARISON_LABELS[8]: "orchid",
+#     COMPARISON_LABELS[9]: "lime",
+#     COMPARISON_LABELS[10]: "red",
+#     COMPARISON_LABELS[11]: "blue",
+# }
 
 # ==========================================================
 # Combined-experiment climatological profiles
@@ -652,41 +716,14 @@ def main() -> None:
 
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
-        var_fc=VARIABLES,
-        region_name=REGIONS,
-
-        # net_name="ConvNeXtTransformerUNet",
-        net_name="SmaAt_UNet",
-
-        target_mode="analysis",
-
-        # seasonal_encoding=True,
-        # ensemble_encoding=True,
-        # input_realization_avg=True,
-        # channel_representation="variable",
-
-        # normalization_input_mean="sample",
-        # normalization_input_std="sample",
-        # normalization_target_mean="sample",
-        # normalization_target_std="sample",
-        # sample_target_mean="input",
-        # sample_target_std="input",
-
-        loss_name="GeoMaskedMSELoss",
-        # loss_name="GeoMaskedMSEMultiScaleLoss",
-        # loss_name="SpatialDegradationMSELoss",
-
-        # train_start="2019-10-14",
-
-        # separate_training_by_init_period=None,
-        # separate_training_by_init_period=ClimPeriod.MONTH,
-
-        # extra_suffix_folder="264samples_consecutive",
-        # extra_suffix_folder="NOAA_copy",
-        # extra_suffix_folder="",
+        **FILTERS,
     )
 
-    settings = sorted(settings, key=lambda s: s.exp_dir.name)
+    print(f"Found {len(settings)} matching experiment(s)")
+
+    # ==========================================================
+    # Generate combined profile labels, colors and linestyles
+    # ==========================================================
 
     plot_combined_experiments = (
         PLOT_COMBINED_EXPERIMENT_LEADTIME_PROFILES
@@ -695,43 +732,77 @@ def main() -> None:
     )
 
     if plot_combined_experiments:
-        if len(settings) != len(COMPARISON_LABELS):
+        if COMPARISON_LABELS is None:
+            fields = [
+                name
+                for name in COMPARISON_LABEL_FIELDS
+                if len({str(getattr(s, name)) for s in settings}) > 1
+            ]
+
+            comparison_labels = [
+                ", ".join(
+                    f"{name.removesuffix('_encoding').replace('_', ' ')}={getattr(s, name)}"
+                    for name in fields
+                ) or "Default"
+                for s in settings
+            ]
+        else:
+            comparison_labels = COMPARISON_LABELS
+
+        if len(settings) != len(comparison_labels):
             raise ValueError("Number of experiments and labels differ")
+
+        if len(set(comparison_labels)) != len(comparison_labels):
+            raise ValueError("Comparison labels are not unique")
 
         comparison_labels_by_experiment = {
             s.exp_dir.name: label
-            for s, label in zip(settings, COMPARISON_LABELS, strict=True)
+            for s, label in zip(settings, comparison_labels, strict=True)
         }
 
-    print(f"Found {len(settings)} matching experiment(s)")
+        colors = plt.get_cmap("tab20").resampled(len(comparison_labels))
 
-    # ----------------------------------------------------------
+        comparison_colors = (
+            COMPARISON_COLORS
+            if COMPARISON_COLORS is not None
+            else {
+                **{"fc": "tab:blue", "clim-fc": "tab:orange"},
+                **{
+                    label: colors(i)
+                    for i, label in enumerate(comparison_labels)
+                },
+            }
+        )
+
+        comparison_linestyles = {
+            model: "--" if model in {"fc", "clim-fc"} else "-"
+            for model in comparison_colors
+        }
+
+    # ==========================================================
     # Skip experiments without completed forecast outputs
-    # ----------------------------------------------------------
+    # ==========================================================
+
+    # Skip unfinished experiments
+    split_paths = {
+        "train": "output_mlfc_train",
+        "val": "output_mlfc_val",
+        "test": "output_mlfc_test",
+    }
 
     available_settings = []
 
     for s in settings:
-        if INFERENCE_PERIOD is None:
-            paths = [
-                getattr(s, f"output_mlfc_{split}")
-                for split in SPLIT_RANGE
-            ]
-        else:
-            inference_start, inference_end = INFERENCE_PERIOD
-            paths = [
-                s.exp_dir
-                / "inference"
-                / f"{inference_start}_{inference_end}"
-                / "test_corrected.zarr"
-            ]
+        missing = [
+            split
+            for split in SPLIT_RANGE
+            if not getattr(s, split_paths[split]).exists()
+        ]
 
-        missing_paths = [path for path in paths if not path.exists()]
-
-        if missing_paths:
+        if missing:
             print(
-                f"Skipping incomplete experiment {s.exp_dir.name}: "
-                f"missing {', '.join(path.name for path in missing_paths)}"
+                f"Skipping unfinished experiment: {s.output_name} "
+                f"(missing MLFC: {', '.join(missing)})"
             )
             continue
 
@@ -740,9 +811,10 @@ def main() -> None:
     settings = available_settings
 
     if not settings:
-        raise ValueError("No experiments with available corrected forecasts.")
+        print("No completed experiments available")
+        return
 
-    print(f"Processing {len(settings)} completed experiment(s)")
+    print(f"Found {len(settings)} matching experiment(s)")
 
     # ==========================================================
     # Common evaluation timestamps across experiments
@@ -2873,7 +2945,7 @@ def main() -> None:
                                     }
                                     if combined or has_references else True
                                 ),
-                                profile_point_colors=None if combined else COMPARISON_COLORS,
+                                profile_point_colors=None if combined else comparison_colors,
                                 model_colors=plot_colors if combined or has_references else None,
                                 model_linestyles=plot_linestyles if has_references else None,
                                 profile_connect=COMBINED_EXPERIMENT_AXIS_CONNECT,
@@ -2949,8 +3021,8 @@ def main() -> None:
                         select_unit=CLIM_PERIOD.value,
                         plot_single_members=PLOT_MEMBERS,
                         plot_legend=PLOT_LEGEND,
-                        model_colors=COMPARISON_COLORS,
-                        model_linestyles=COMPARISON_LINESTYLES,
+                        model_colors=comparison_colors,
+                        model_linestyles=comparison_linestyles,
                         ylim=get_profile_ylim(
                             PROFILE_YLIMS,
                             metric,
@@ -3051,8 +3123,8 @@ def main() -> None:
                             for model in available_models
                         )
                         plot_das_member = climatological_das_member
-                        plot_colors = COMPARISON_COLORS
-                        plot_linestyles = COMPARISON_LINESTYLES
+                        plot_colors = comparison_colors
+                        plot_linestyles = comparison_linestyles
                         plot_select_dim = leadtime_agg_coord
                         plot_select_value = lead_values[0]
                         plot_select_unit = LEADTIME_UNITS.value
@@ -3075,8 +3147,8 @@ def main() -> None:
                                 shade_range=COMBINED_EXPERIMENT_CLIMATOLOGICAL_LEADTIME_SHADE_RANGE,
                                 labels=plot_labels_current,
                                 das_member=climatological_das_member,
-                                model_colors=COMPARISON_COLORS,
-                                model_linestyles=COMPARISON_LINESTYLES,
+                                model_colors=comparison_colors,
+                                model_linestyles=comparison_linestyles,
                             )
 
                             plot_select_dim = None
@@ -3339,7 +3411,7 @@ def main() -> None:
                                             select_dim=None,
                                             select_value="all",
                                             profile_markers=True,
-                                            profile_point_colors=None if combined else COMPARISON_COLORS,
+                                            profile_point_colors=None if combined else comparison_colors,
                                             model_colors=plot_colors if combined else None,
                                             profile_connect=COMBINED_EXPERIMENT_AXIS_CONNECT,
                                             profile_tick_rotation=COMBINED_EXPERIMENT_AXIS_TICK_ROTATION,
@@ -3424,8 +3496,8 @@ def main() -> None:
                                     plot_single_members=False,
                                     plot_legend=PLOT_LEGEND,
                                     improvement_unit=improvement_unit,
-                                    model_colors=COMPARISON_COLORS,
-                                    model_linestyles=COMPARISON_LINESTYLES,
+                                    model_colors=comparison_colors,
+                                    model_linestyles=comparison_linestyles,
                                     ylim=get_profile_ylim(
                                         PROFILE_YLIMS,
                                         metric,
@@ -3517,8 +3589,8 @@ def main() -> None:
                                     plot_das = climatological_comparison_das
                                     plot_models_current = comparison_models
                                     plot_labels_current = comparison_models
-                                    plot_colors = COMPARISON_COLORS
-                                    plot_linestyles = COMPARISON_LINESTYLES
+                                    plot_colors = comparison_colors
+                                    plot_linestyles = comparison_linestyles
                                     plot_select_dim = leadtime_agg_coord
                                     plot_select_value = lead_values[0]
                                     plot_select_unit = LEADTIME_UNITS.value
@@ -3541,8 +3613,8 @@ def main() -> None:
                                                 COMBINED_EXPERIMENT_CLIMATOLOGICAL_LEADTIME_COLORS
                                             ),
                                             labels=plot_labels_current,
-                                            model_colors=COMPARISON_COLORS,
-                                            model_linestyles=COMPARISON_LINESTYLES,
+                                            model_colors=comparison_colors,
+                                            model_linestyles=comparison_linestyles,
                                         )
 
                                         plot_select_dim = None
