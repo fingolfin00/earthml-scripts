@@ -307,7 +307,7 @@ METRICS = [
 ]
 
 # ==========================================================
-# Variables and regions
+# Experiment selection
 # ==========================================================
 
 VARIABLES = [
@@ -334,6 +334,24 @@ REGIONS = [
     # "World",
     # None,
 ]
+
+FILTERS = dict(
+    var_fc=VARIABLES,
+    region_name=REGIONS,
+    # net_name="SmaAt_UNet",
+    # target_mode="residual",
+    loss_name="GeoMaskedMSELoss",
+    # train_start="2019-10-14",
+    # train_subsamples=1000,
+    # train_subsamples=None,
+    # normalization_input_mean="sample",
+    # normalization_input_std="sample",
+    # normalization_target_mean="sample",
+    # normalization_target_std="sample",
+    # sample_target_mean="input",
+    # sample_target_std="input",
+    # extra_suffix_folder="",
+)
 
 # ==========================================================
 # Spatial subset
@@ -364,24 +382,35 @@ def main() -> None:
 
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
-        var_fc=VARIABLES,
-        region_name=REGIONS,
-        net_name="SmaAt_UNet",
-        target_mode="analysis",
-        loss_name="GeoMaskedMSELoss",
-        # train_start="2019-10-14",
-        # train_subsamples=1000,
-        # train_subsamples=None,
-        # normalization_input_mean="sample",
-        # normalization_input_std="sample",
-        # normalization_target_mean="sample",
-        # normalization_target_std="sample",
-        # sample_target_mean="input",
-        # sample_target_std="input",
-        # extra_suffix_folder="",
+        **FILTERS,
     )
 
-    print(f"Found {len(settings)} matching experiment(s).")
+    # Skip unfinished experiments
+    split_paths = {
+        "train": "output_mlfc_train",
+        "val": "output_mlfc_val",
+        "test": "output_mlfc_test",
+    }
+
+    available_settings = []
+
+    for s in settings:
+        if not getattr(s, split_paths[TIME_RANGE]).exists():
+            print(
+                f"Skipping unfinished experiment: {s.output_name} "
+                f"(missing MLFC: {', '.join(missing)})"
+            )
+            continue
+
+        available_settings.append(s)
+
+    settings = available_settings
+
+    if not settings:
+        print("No completed experiments available")
+        return
+
+    print(f"Found {len(settings)} matching experiment(s)")
 
     # ==========================================================
     # Evaluation timestamps for each experiment
