@@ -45,6 +45,7 @@ from locations import CITY_LOCATIONS, SEA_LOCATIONS
 # ==========================================================
 
 EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
 # EXP_NAME = "weather_atmo_seed"
 # EXP_NAME = "weather_atmo_normalization"
@@ -398,7 +399,7 @@ def main() -> None:
         if not getattr(s, split_paths[TIME_RANGE]).exists():
             print(
                 f"Skipping unfinished experiment: {s.output_name} "
-                f"(missing MLFC: {', '.join(missing)})"
+                f"(missing MLFC: {', '.join(TIME_RANGE)})"
             )
             continue
 
