@@ -23,6 +23,7 @@ from earthml import (
     get_and_subset_datasets,
 )
 from earthml.metrics import (
+    STD_REFERENCE_METRICS,
     LeadtimeAgg,
     is_deterministic,
     is_probabilistic,
@@ -31,6 +32,7 @@ from earthml.metrics import (
     stack_hour_clim,
     groupby_period,
     build_metric_improvements,
+    metric_improved_indicator,
 )
 from earthml.plots import (
     safe_label,
@@ -1046,6 +1048,24 @@ def main() -> None:
                             improvement_units=IMPROVEMENT_UNITS,
                         )
 
+                        improved_percentage = None
+
+                        if TIMESERIES_IMPROVED_PERCENTAGE:
+                            indicator = metric_improved_indicator(
+                                baseline_ds[m],
+                                target_ds[m],
+                                m,
+                                reference=(
+                                    baseline_ds[STD_REFERENCE_METRICS[m]]
+                                    if m in STD_REFERENCE_METRICS
+                                    else None
+                                ),
+                            )
+
+                            improved_percentage = (
+                                100 * indicator.mean(dim="time")
+                            )
+
                         for comparison_model, comparison_da in improvements.items():
                             improvement_unit = get_improvement_unit(
                                 comparison_model
@@ -1102,17 +1122,16 @@ def main() -> None:
                                     lead_value=lead_value,
                                     out_file=out_file,
                                     ylim=METRIC_IMPROVEMENT_LIMITS[improvement_unit],
-
-
-
-
-
                                     timeseries_zero_line=TIMESERIES_ZERO_LINE,
-
-                                    timeseries_improved_percentage=TIMESERIES_IMPROVED_PERCENTAGE,
-                                    **common_plot_kwargs,
-
+                                    timeseries_improved_percentage=(
+                                        improved_percentage.sel({
+                                            leadtime_agg_coord: lead_value
+                                        }).item()
+                                        if improved_percentage is not None
+                                        else None
+                                    ),
                                     improvement_unit=improvement_unit,
+                                    **common_plot_kwargs,
                                 )
 
                                 n += 1
