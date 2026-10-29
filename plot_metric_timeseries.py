@@ -92,6 +92,11 @@ BUILD_ANALYSIS = True
 RECALCULATE_CLIMATOLOGY = False
 REGENERATE_PLOTS = True
 
+# Optional training-ensemble variability (only when neural_member exists)
+PLOT_NEURAL_SPREAD = True
+NEURAL_SPREAD = "std"  # "std" or "minmax"
+NEURAL_SPREAD_ALPHA = 0.18
+
 # ==========================================================
 # Plot settings
 # ==========================================================
@@ -953,6 +958,8 @@ def main() -> None:
                 label_size=LABEL_SIZE,
                 tick_size=TICK_SIZE,
                 dpi=DPI,
+                neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+                neural_spread_alpha=NEURAL_SPREAD_ALPHA,
             )
 
             # ==================================================
@@ -1065,6 +1072,14 @@ def main() -> None:
                             improved_percentage = (
                                 100 * indicator.mean(dim="time")
                             )
+
+                            # A single percentage is shown in the plot legend.
+                            # Aggregate memberwise percentages without discarding
+                            # the neural spread of the improvement timeseries.
+                            if "neural_member" in improved_percentage.dims:
+                                improved_percentage = improved_percentage.mean(
+                                    "neural_member", skipna=True
+                                )
 
                         for comparison_model, comparison_da in improvements.items():
                             improvement_unit = get_improvement_unit(
