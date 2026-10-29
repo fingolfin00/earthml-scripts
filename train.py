@@ -1638,6 +1638,35 @@ def _core_train(
         # Debug info
         # ----------------------------------------------------------
 
+        # # Debug dataset sample
+        # dataset = train_datamodule.train_dataset
+
+        # # Raw sample (before normalization)
+        # x_raw = dataset.x[0].clone()
+        # y_raw = dataset.y[0].clone()
+
+        # # Transformed sample (after normalization)
+        # x, y, mask, month = dataset[0]
+
+        # print(f"\nSample 0 | month={month} | valid={mask.float().mean():.2%}")
+        # print(f"Input: {tuple(x.shape)} | Target: {tuple(y.shape)}")
+
+        # for label, raw, transformed, channels in (
+        #     ("INPUT", x_raw, x, dataset.tensor_input_channels),
+        #     ("TARGET", y_raw, y, dataset.target_channels),
+        # ):
+        #     print(f"\n{label}")
+        #     for i, channel in enumerate(channels):
+        #         a = raw[i]
+        #         b = transformed[i]
+        #         print(
+        #             f"{i:2d} {channel.name:35s} "
+        #             f"normalize={str(channel.normalize):5s} "
+        #             f"raw={a.mean():8.3f} ± {a.std():7.3f} "
+        #             f"norm={b.mean():8.3f} ± {b.std():7.3f} "
+        #             f"Δ={(b - a).abs().mean():8.3f}"
+        #         )
+
         # Get indices for print info
         train_idx = train_datamodule.train_indices
         val_idx = train_datamodule.val_indices
