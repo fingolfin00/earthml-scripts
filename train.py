@@ -270,7 +270,7 @@ def main() -> None:
                 region_name=region_name,
                 region=region_location,
 
-                clim_period=ClimPeriod.DAYOFYEAR_HOUR,
+                clim_period=ClimPeriod.MONTH,
 
                 target_mode="analysis",
 
@@ -293,6 +293,8 @@ def main() -> None:
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
 
+                climatology_encoding=False,
+                climatology_error_encoding=False,
                 temporal_evolution_encoding=(),
                 # temporal_evolution_encoding=(-4, -3, -2, -1),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
@@ -1016,6 +1018,8 @@ def train(
                 region=s.region,
                 dataset_kwargs=dataset_kwargs,
                 temporal_evolution_encoding=s.temporal_evolution_encoding,
+                climatology_encoding=s.climatology_encoding,
+                climatology_error_encoding=s.climatology_error_encoding,
                 seasonal_encoding=(
                     s.seasonal_encoding
                     and s.channel_representation != "init_period"
@@ -2534,6 +2538,8 @@ def make_leadtime_pair(
     target_mode: TargetMode = "analysis",
     clim_period: ClimPeriod = ClimPeriod.MONTH,
     temporal_evolution_encoding: tuple[int, ...] = (),
+    climatology_encoding: bool = False,
+    climatology_error_encoding: bool = False,
     source_times_out: dict[str, np.ndarray] | None = None,
     source_split: str | None = None,
     seasonal_encoding: bool = False,
@@ -2581,6 +2587,49 @@ def make_leadtime_pair(
             if orography_ds is None:
                 raise ValueError("orography_ds is required when orography_encoding=True")
             ds = orography_encoder(ds, orography_ds)
+
+        # Climatological predictors: train-period statistics only.
+        # An analysis climatology is the expected verifying state; the error
+        # climatology is forecast-minus-analysis, matching the existing bias sign.
+        if climatology_encoding or climatology_error_encoding:
+            if fc_clim is None or an_clim is None:
+                raise ValueError("Climatology encoding requires training climatologies")
+
+            time_dim = ds.earthml.guessed_dims.time
+            times = ds[time_dim].values
+            analysis_clim = select_clim_for_time(an_clim, times, clim_period)
+            forecast_clim = select_clim_for_time(fc_clim, times, clim_period)
+
+            # For ensemble inputs, use mean forecast climatology; do not
+            # accidentally introduce realization-dependent bias channels.
+            realization_dim = forecast_clim.earthml.guessed_dims.realization
+            if realization_dim is not None and realization_dim in forecast_clim.dims:
+                forecast_clim = forecast_clim.mean(realization_dim, skipna=True)
+
+            if len(fc_period_ds.data_vars) != 1 or len(an_period_ds.data_vars) != 1:
+                raise NotImplementedError(
+                    "Climatology encodings currently require one forecast and one analysis variable"
+                )
+            fc_name = next(iter(fc_period_ds.data_vars))
+            an_name = next(iter(an_period_ds.data_vars))
+            extra = {}
+            if climatology_encoding:
+                extra[f"{an_name}_clim"] = analysis_clim[an_name]
+            if climatology_error_encoding:
+                extra[f"{fc_name}_error_clim"] = forecast_clim[fc_name] - analysis_clim[an_name]
+
+            # temporal_offset=None prevents the temporal encoder from treating
+            # climatology channels as historical forecast fields.
+            for name, channel in extra.items():
+                channel = channel.rename(name)
+                channel.attrs = {
+                    **channel.attrs,
+                    "channel_normalize": True,
+                    "channel_variable": fc_name,
+                    "channel_temporal_offset": None,
+                }
+                extra[name] = channel
+            ds = xr.merge([ds, xr.Dataset(extra)], compat="equals", join="exact")
 
         # Fixed encodings: deliberately left unnormalized
         if seasonal_encoding:
@@ -2811,6 +2860,8 @@ def make_train_test_datasets_for_leadtime(
     region: dict | None = None,
     dataset_kwargs: dict | None = None,
     temporal_evolution_encoding: tuple[int, ...] = (),
+    climatology_encoding: bool = False,
+    climatology_error_encoding: bool = False,
     seasonal_encoding: bool = False,
     ensemble_encoding: bool = False,
     spatial_encoding: bool = False,
@@ -2847,7 +2898,11 @@ def make_train_test_datasets_for_leadtime(
         fc_ds = fc_ds.sel(longitude=slice(*lon))
         an_ds = an_ds.sel(longitude=slice(*lon))
 
-    if target_mode in {"anomaly", "anomaly_residual", "anomaly_residual_realization"}:
+    if (
+        target_mode in {"anomaly", "anomaly_residual", "anomaly_residual_realization"}
+        or climatology_encoding
+        or climatology_error_encoding
+    ):
         fc_clim_ds, an_clim_ds = extract_period_from_ds(
             fc_ds=fc_ds,
             an_ds=an_ds,
@@ -2880,6 +2935,8 @@ def make_train_test_datasets_for_leadtime(
         target_mode=target_mode,
         clim_period=clim_period,
         temporal_evolution_encoding=temporal_evolution_encoding,
+        climatology_encoding=climatology_encoding,
+        climatology_error_encoding=climatology_error_encoding,
         source_times_out=source_initialization_times,
         source_split="train",
         seasonal_encoding=seasonal_encoding,
@@ -2912,6 +2969,8 @@ def make_train_test_datasets_for_leadtime(
             target_mode=target_mode,
             clim_period=clim_period,
             temporal_evolution_encoding=temporal_evolution_encoding,
+            climatology_encoding=climatology_encoding,
+            climatology_error_encoding=climatology_error_encoding,
             source_times_out=source_initialization_times,
             source_split="val",
             seasonal_encoding=seasonal_encoding,
@@ -2954,6 +3013,8 @@ def make_train_test_datasets_for_leadtime(
         target_mode=target_mode,
         clim_period=clim_period,
         temporal_evolution_encoding=temporal_evolution_encoding,
+        climatology_encoding=climatology_encoding,
+        climatology_error_encoding=climatology_error_encoding,
         source_times_out=source_initialization_times,
         source_split="test",
         seasonal_encoding=seasonal_encoding,
@@ -3671,6 +3732,8 @@ def print_training_recap(
 
         "training.sample_target_mean": s.sample_target_mean,
         "training.sample_target_std": s.sample_target_std,
+        "training.climatology_encoding": s.climatology_encoding,
+        "training.climatology_error_encoding": s.climatology_error_encoding,
         "training.temporal_evolution_encoding": s.temporal_evolution_encoding,
         "training.seasonal_encoding": (
             s.seasonal_encoding
