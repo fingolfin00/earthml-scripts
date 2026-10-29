@@ -99,8 +99,13 @@ REGENERATE_PLOTS = True
 # Compute metric datasets once before repeated plotting
 MATERIALIZE_ONCE = False
 
-# Plot individual ensemble members in addition to the aggregate
+# Physical forecast ensemble members
 PLOT_MEMBERS = False
+
+# Neural ensemble training variability
+PLOT_NEURAL_SPREAD = True
+NEURAL_SPREAD = "std"  # later: "minmax", "quantile"
+NEURAL_SPREAD_ALPHA = 0.18
 
 # ==========================================================
 # Plot generation
@@ -738,6 +743,8 @@ def main() -> None:
         title_size=TITLE_SIZE,
         profile_band_bounds=PROFILE_BAND_BOUNDS,
         profile_band_alpha=PROFILE_BAND_ALPHA,
+        neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+        neural_spread_alpha=NEURAL_SPREAD_ALPHA,
     )
 
     # Combined-variable and combined-experiment curves always display markers.
@@ -2943,7 +2950,10 @@ def main() -> None:
                                     reference_value = float(reference_value.compute().item())
                                     reference_key = f"{reference_model}_leadtime_{index}"
                                     plot_das.append(
-                                        xr.full_like(plot_das[index], reference_value)
+                                        xr.full_like(plot_das[index], reference_value).assign_coords(
+                                            neural_band_lower=("experiment", np.full(plot_das[index].sizes["experiment"], np.nan)),
+                                            neural_band_upper=("experiment", np.full(plot_das[index].sizes["experiment"], np.nan)),
+                                        )
                                     )
                                     plot_models.append(reference_key)
                                     plot_labels.append(
@@ -2996,6 +3006,8 @@ def main() -> None:
                                     f" · Lead time {lead_values[0]}{LEADTIME_UNITS.value}"
                                     if not combined else ""
                                 ),
+                                neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+                                neural_spread_alpha=NEURAL_SPREAD_ALPHA,
                                 profile_dim="experiment",
                                 legend_descriptions=comparison_descriptions_by_index,
                                 profile_label=(
@@ -3471,6 +3483,8 @@ def main() -> None:
                                                 f" · Lead time {lead_values[0]}{LEADTIME_UNITS.value}"
                                                 if not combined else ""
                                             ),
+                                            neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+                                            neural_spread_alpha=NEURAL_SPREAD_ALPHA,
                                             profile_dim="experiment",
                                             legend_descriptions=comparison_descriptions_by_index,
                                             profile_label=(
@@ -4401,12 +4415,31 @@ def build_experiment_axis_da(
             .squeeze(drop=True)
         )
 
+        if "neural_member" in current.dims:
+            if NEURAL_SPREAD == "std":
+                center = current.mean("neural_member", skipna=True)
+                variability = current.std("neural_member", skipna=True)
+                lower, upper = center - variability, center + variability
+            elif NEURAL_SPREAD == "minmax":
+                center = current.mean("neural_member", skipna=True)
+                lower = current.min("neural_member", skipna=True)
+                upper = current.max("neural_member", skipna=True)
+            else:
+                raise ValueError(f"Unsupported NEURAL_SPREAD={NEURAL_SPREAD!r}")
+            current = center
+        else:
+            lower = upper = xr.full_like(current, np.nan)
+
         if current.size != 1:
             raise ValueError(
                 f"Expected one scalar for experiment {label!r}, "
                 f"got dims={current.dims}, shape={current.shape}."
             )
 
+        current = current.assign_coords(
+            neural_band_lower=float(lower),
+            neural_band_upper=float(upper),
+        )
         selected.append((label, current))
 
     if sort_numeric:
