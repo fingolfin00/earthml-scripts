@@ -51,6 +51,7 @@ from earthml.plots import (
 # ==========================================================
 
 EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo_debug"
 # EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
 # EXP_NAME = "weather_atmo_seed"
@@ -96,16 +97,27 @@ BUILD_ANALYSIS = True
 
 RECALCULATE_CLIMATOLOGY = False
 REGENERATE_PLOTS = True
-# Compute metric datasets once before repeated plotting
-MATERIALIZE_ONCE = False
+MATERIALIZE_ONCE = False # compute metric datasets once before repeated plotting
 
-# Physical forecast ensemble members
-PLOT_MEMBERS = False
+# ==========================================================
+# Physical ensemble
+# ==========================================================
 
-# Neural ensemble training variability
-PLOT_NEURAL_SPREAD = True
-NEURAL_SPREAD = "std"  # later: "minmax", "quantile"
+PLOT_PHYSICAL_MEMBERS = False
+PLOT_PHYSICAL_SPREAD = False
+PHYSICAL_SPREAD = "std" # "std" or "minmax"
+
+# ==========================================================
+# Neural ensemble
+# ==========================================================
+
+PLOT_NEURAL_SPREAD = False
+NEURAL_SPREAD = "minmax" # "std" or "minmax"
 NEURAL_SPREAD_ALPHA = 0.18
+
+PLOT_NEURAL_MEMBERS = True
+NEURAL_MEMBER_ALPHA = 0.35
+NEURAL_MEMBER_LINEWIDTH = 0.7
 
 # ==========================================================
 # Plot generation
@@ -456,7 +468,8 @@ PROFILE_YLIMS = {
 # ==========================================================
 # Climatological profiles
 # ==========================================================
-# climatological period in x axis, e.g. month, curves correspond to selected leadtimes
+
+# Climatological period in x axis, e.g. month, curves correspond to selected leadtimes
 
 # If True, put all selected lead times in the same figure
 # If False, generate one figure per lead time
@@ -498,7 +511,7 @@ COMBINED_VARIABLE_PLOT_LEGEND = False
 #   x = climatological period
 #   color = variable
 #   shade = lead time
-#
+
 # If True, put all selected lead times in one figure
 # If False, generate one figure per lead time
 COMBINE_COMBINED_VARIABLE_CLIMATOLOGICAL_LEADTIMES = False
@@ -545,8 +558,8 @@ COMPARISON_NAME = "experiments"
 
 COMPARISON_LABELS = None
 COMPARISON_COLORS = None
-# Use numericla index for experiment curves and experiment-axis tick labels
-COMPARISON_LABEL_USE_INDEX = True
+
+COMPARISON_LABEL_USE_INDEX = True # use numerical index for experiment curves and experiment-axis tick labels
 
 COMPARISON_LABEL_FIELDS = {
     "seed": "seed",
@@ -652,7 +665,7 @@ COMPARISON_LABEL_FIELDS_PER_LINE = 3
 # x = climatological period, e.g. month
 # color = experiment
 # shade/style = lead time when stacked
-#
+
 # Applies to both absolute MLFC metrics and MLFC-vs-FC improvements
 # None -> use every available lead time
 # COMBINED_EXPERIMENT_CLIMATOLOGICAL_LEADTIMES = [72]
@@ -737,14 +750,20 @@ def main() -> None:
     # Common arguments for leadtime and climatological curves
     profile_kwargs = dict(
         **plot_kwargs,
+        # Physical ensemble
         realization_dim="realization",
-        spread="std",
+        physical_spread=PHYSICAL_SPREAD if PLOT_PHYSICAL_SPREAD else None,
+        # Neural ensemble
+        neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+        neural_spread_alpha=NEURAL_SPREAD_ALPHA,
+        plot_neural_members=PLOT_NEURAL_MEMBERS,
+        neural_member_alpha=NEURAL_MEMBER_ALPHA,
+        neural_member_linewidth=NEURAL_MEMBER_LINEWIDTH,
+        # Common styling
         title_strftime=TITLE_STRFTIME,
         title_size=TITLE_SIZE,
         profile_band_bounds=PROFILE_BAND_BOUNDS,
         profile_band_alpha=PROFILE_BAND_ALPHA,
-        neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
-        neural_spread_alpha=NEURAL_SPREAD_ALPHA,
     )
 
     # Combined-variable and combined-experiment curves always display markers.
@@ -1398,7 +1417,7 @@ def main() -> None:
             # --------------------------------------------------
 
             if (
-                PLOT_MEMBERS
+                (PLOT_PHYSICAL_MEMBERS or PLOT_PHYSICAL_SPREAD)
                 and deterministic_metrics
             ):
                 member_profiles, _ = get_scalar_metrics(
@@ -1608,7 +1627,7 @@ def main() -> None:
                         profile_label=LEADTIME_PROFILE_LABEL,
                         select_dim=period_dim,
                         select_unit=CLIM_PERIOD.value,
-                        plot_single_members=PLOT_MEMBERS,
+                        plot_single_members=PLOT_PHYSICAL_MEMBERS,
                         plot_legend=PLOT_LEGEND,
                         ylim=get_profile_ylim(
                             PROFILE_YLIMS,
@@ -1751,7 +1770,7 @@ def main() -> None:
                             select_dim=plot_select_dim,
                             select_value=plot_select_value,
                             select_unit=plot_select_unit,
-                            plot_single_members=PLOT_MEMBERS,
+                            plot_single_members=PLOT_PHYSICAL_MEMBERS,
                             plot_legend=PLOT_LEGEND,
                             model_colors=plot_colors,
                             model_linestyles=plot_linestyles,
@@ -3103,7 +3122,7 @@ def main() -> None:
                         select_value=period_value,
                         select_dim=period_dim,
                         select_unit=CLIM_PERIOD.value,
-                        plot_single_members=PLOT_MEMBERS,
+                        plot_single_members=PLOT_PHYSICAL_MEMBERS,
                         plot_legend=PLOT_LEGEND,
                         model_colors=comparison_colors,
                         model_linestyles=comparison_linestyles,
@@ -3253,7 +3272,7 @@ def main() -> None:
                             select_dim=plot_select_dim,
                             select_value=plot_select_value,
                             select_unit=plot_select_unit,
-                            plot_single_members=PLOT_MEMBERS,
+                            plot_single_members=PLOT_PHYSICAL_MEMBERS,
                             plot_legend=PLOT_LEGEND,
                             model_colors=plot_colors,
                             model_linestyles=plot_linestyles,
