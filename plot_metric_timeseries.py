@@ -92,10 +92,29 @@ BUILD_ANALYSIS = True
 RECALCULATE_CLIMATOLOGY = False
 REGENERATE_PLOTS = True
 
-# Optional training-ensemble variability (only when neural_member exists)
+# Neural ensemble
 PLOT_NEURAL_SPREAD = True
 NEURAL_SPREAD = "std"  # "std" or "minmax"
 NEURAL_SPREAD_ALPHA = 0.18
+
+# ==========================================================
+# Physical ensemble
+# ==========================================================
+
+PLOT_PHYSICAL_MEMBERS = False
+PLOT_PHYSICAL_SPREAD = False
+PHYSICAL_SPREAD = "std"
+
+# ==========================================================
+# Neural ensemble
+# ==========================================================
+
+PLOT_NEURAL_MEMBERS = True
+PLOT_NEURAL_SPREAD = True
+NEURAL_SPREAD = "minmax"
+NEURAL_SPREAD_ALPHA = 0.18
+NEURAL_MEMBER_ALPHA = 0.35
+NEURAL_MEMBER_LINEWIDTH = 0.7
 
 # ==========================================================
 # Plot settings
@@ -111,6 +130,7 @@ TIMESERIES_MEAN_LINE = True
 TITLE_SIZE = None
 LABEL_SIZE = None
 TICK_SIZE = None
+FIGSIZE = (16, 8)
 DPI = 300
 
 # ==========================================================
@@ -942,13 +962,25 @@ def main() -> None:
                 train_end=s.train_end,
                 val_end=s.val_end,
                 test_end=s.test_end,
+
+                physical_spread=PHYSICAL_SPREAD if PLOT_PHYSICAL_SPREAD else None,
+                plot_single_members=PLOT_PHYSICAL_MEMBERS,
+
+                neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
+                neural_spread_alpha=NEURAL_SPREAD_ALPHA,
+                plot_neural_members=PLOT_NEURAL_MEMBERS,
+                neural_member_alpha=NEURAL_MEMBER_ALPHA,
+                neural_member_linewidth=NEURAL_MEMBER_LINEWIDTH,
+
                 extrema_periods=EXTREMA_PERIODS,
                 extrema_n_min=EXTREMA_N_MIN,
                 extrema_n_max=EXTREMA_N_MAX,
                 extrema_annotate=EXTREMA_ANNOTATE,
                 extrema_print=EXTREMA_PRINT,
                 annotate_times=ANNOTATE_TIMES,
+
                 timeseries_mean_line=TIMESERIES_MEAN_LINE,
+
                 plot_title=PLOT_TITLE,
                 plot_labels=PLOT_LABELS,
                 plot_legend=PLOT_LEGEND,
@@ -957,9 +989,8 @@ def main() -> None:
                 title_size=TITLE_SIZE,
                 label_size=LABEL_SIZE,
                 tick_size=TICK_SIZE,
+                figsize=FIGSIZE,
                 dpi=DPI,
-                neural_spread=NEURAL_SPREAD if PLOT_NEURAL_SPREAD else None,
-                neural_spread_alpha=NEURAL_SPREAD_ALPHA,
             )
 
             # ==================================================
