@@ -226,8 +226,14 @@ def main() -> None:
                 lead_period_offset=0,
 
                 leadtime_unit=LeadtimeUnit.HOURS,
-                leadtimes=[12, 24, 36, 48, 60, 72],
-                # leadtimes=[72,],
+                leadtimes=[
+                    12,
+                    24,
+                    36,
+                    48,
+                    60,
+                    72,
+                ],
                 seasonal_window_size=1,
 
                 # short ECMWF experiment
@@ -275,10 +281,13 @@ def main() -> None:
                 region_name=region_name,
                 region=region_location,
 
-                clim_period=ClimPeriod.MONTH,
+                # clim_period=ClimPeriod.MONTH,
+                clim_period=ClimPeriod.MONTH_HOUR,
 
                 target_mode="analysis",
 
+                # seed=(41, 42),
+                # neural_repeats=2,
                 seed=42,
                 neural_repeats=1,
 
@@ -294,17 +303,28 @@ def main() -> None:
                 normalization_input_mean="channel",
                 normalization_input_std="channel",
                 normalization_target_mean="channel",
+                # normalization_target_mean=0, # residual
                 normalization_target_std="channel",
 
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
 
-                extra_input_variables=(),
+                extra_input_variables=(
+                  # "mslp",
+                  # "u10",
+                  # "v10",
+                  # "tcc",
+                  # "d2m",
+                ),
 
                 climatology_encoding=False,
                 climatology_error_encoding=False,
-                temporal_evolution_encoding=(),
-                # temporal_evolution_encoding=(-4, -3, -2, -1),
+                temporal_evolution_encoding=(
+                    # -4,
+                    # -3,
+                    # -2,
+                    # -1,
+                ),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
                 spatial_encoding=False,
@@ -321,9 +341,9 @@ def main() -> None:
                     kernels_per_layer=2,
                     base_channels=64,
                     bilinear=True,
-                    # longitude_padding = "circular", # global (seasonal)
+                    # longitude_padding="circular", # global (seasonal)
                     # longitude_padding="zero", # creates artifacts near the border
-                    # longitude_padding = "replicate", # regional (weather)
+                    # longitude_padding="replicate", # regional (weather)
                 ),
 
                 # smaatunet_kwargs=dict(
@@ -483,8 +503,14 @@ def main() -> None:
                 lead_period_offset=-1,
 
                 leadtime_unit=LeadtimeUnit.MONTHS,
-                # leadtimes=[4, 5, 6],
-                leadtimes=[1, 2, 3, 4, 5, 6],
+                leadtimes=[
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                ],
 
                 # SPS4 experiment
                 train_start="1993-01-01",
