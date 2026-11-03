@@ -1020,6 +1020,7 @@ def main() -> None:
 
                         common_path = (
                             Path("timeseries")
+                            / "metrics"
                             / "absolute"
                             / safe_label(period_dim)
                             / safe_label("all")
@@ -1140,6 +1141,7 @@ def main() -> None:
 
                                 common_path = (
                                     Path("timeseries")
+                                    / "metrics"
                                     / "comparisons"
                                     / safe_label(comparison_model)
                                     / safe_label(period_dim)
