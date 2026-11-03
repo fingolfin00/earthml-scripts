@@ -137,7 +137,7 @@ SIGNIFICANCE_ALPHA = 0.6
 # ==========================================================
 
 INTERPOLATE = True # seasonal
-# interpolate = False # weather
+# INTERPOLATE = False # weather
 BUILD_ANALYSIS = True
 
 RECALCULATE_CLIMATOLOGY = False
@@ -178,7 +178,7 @@ PLOT_LOCATIONS = [
     # "kuroshio",
     # "north_atlantic",
     # "equatorial_pacific",
-    "nino34",
+    # "nino34",
 ]
 
 # None / [] -> no boxes
@@ -201,8 +201,10 @@ HIGHLIGHTED_REGIONS = [
 TIME_RANGE: tuple[str, str] | Literal["train", "val", "test", "train_val", "full"] = "test"
 # TIME_RANGE = ("2018-01-01", "2022-12-31")
 
-CLIM_TIME_RANGE: tuple[str, str] | Literal["train", "val", "test", "train_val", "full"] = "train"
-# CLIM_TIME_RANGE = "train_val"
+CLIM_TIME_RANGE: tuple[str, str] | Literal["train", "val", "test", "train_val", "full"] = (
+    "train" # seasonal
+    # "train_val" # weather
+)
 
 INFERENCE_PERIOD = None
 # INFERENCE_PERIOD = ("2025-01-01", "2025-10-10")
