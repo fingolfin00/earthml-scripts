@@ -34,7 +34,6 @@ from earthml.metrics import (
 from earthml.plots import (
     safe_label,
     lead_label,
-    PlotMode,
     plot_map,
 )
 
@@ -488,6 +487,35 @@ def main() -> None:
             mlfc_path=mlfc_path,
         )
         mlfc = mlfc.assign_coords(leadtime=s.leadtimes) if mlfc is not None else None
+
+        # ======================================================
+        # Align evaluation timestamps
+        # ======================================================
+
+        if mlfc is not None:
+            time_dim = fc.earthml.guessed_dims.time
+
+            evaluation_times = mlfc.indexes[time_dim]
+
+            for name, ds in (("fc", fc), ("an", an)):
+                missing_times = evaluation_times.difference(
+                    ds.indexes[time_dim]
+                )
+
+                if len(missing_times):
+                    raise ValueError(
+                        f"{name} is missing {len(missing_times)} "
+                        f"MLFC evaluation timestamps; "
+                        f"first: {missing_times[0]}"
+                    )
+
+            fc = fc.sel({time_dim: evaluation_times})
+            an = an.sel({time_dim: evaluation_times})
+
+            print(
+                f"Aligned FC, AN, MLFC to "
+                f"{len(evaluation_times)} evaluation timestamps"
+            )
 
         fc_clim, an_clim, mlfc_clim = calculate_save_and_subset_climatologies(
             s,
