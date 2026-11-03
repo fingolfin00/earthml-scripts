@@ -93,8 +93,12 @@ DRY_RUN = False
 
 DETERMINISTIC = False
 
-# Only for weather
-EXPERIMENT_NAME = "weather_atmo"
+# Seasonal
+EXPERIMENT_NAME = "experiments"
+# EXPERIMENT_NAME = "experiment_new"
+
+# Weather
+# EXPERIMENT_NAME = "weather_atmo"
 # EXPERIMENT_NAME = "weather_atmo_debug"
 # EXPERIMENT_NAME = "weather_atmo_seed"
 # EXPERIMENT_NAME = "weather_atmo_normalization"
@@ -487,7 +491,7 @@ def main() -> None:
             seasonal_settings = Settings(
                 root_dir=Path("/Users/jacopodallaglio/ML/training/seasonal"),
                 data_root_dir=None,
-                exp_root_dir=None,
+                exp_root_dir=Path(f"/Users/jacopodallaglio/ML/training/seasonal/{EXPERIMENT_NAME}"),
                 plot_root_dir=None,
 
                 extra_suffix_folder="",
@@ -557,7 +561,10 @@ def main() -> None:
 
                 extra_input_variables=(),
 
-                temporal_evolution_encoding=(),
+                temporal_evolution_encoding=(
+                    # -2,
+                    # -1,
+                ),
                 seasonal_encoding=False, # automatically set to False if channel_representation="init_period"
                 ensemble_encoding=False,
                 spatial_encoding=False,
@@ -705,7 +712,7 @@ def main() -> None:
                 max_epochs=50,
                 early_stopping_patience=20,
 
-                torch_workers=4,
+                torch_workers=0,
                 trainer_precision="bf16-mixed" if accelerator == "gpu" else "32-true",
             )
 
@@ -2628,6 +2635,9 @@ def ensemble_encoder(ds: xr.Dataset) -> xr.Dataset:
 
     if not encoded:
         return ds
+
+    for channel in encoded.values():
+        channel.attrs["channel_temporal_offset"] = None
 
     return xr.merge(
         [ds, xr.Dataset(encoded)],
