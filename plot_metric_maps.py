@@ -374,16 +374,16 @@ REGIONS = [
 # ==========================================================
 
 # ConUS
-# lat_range = (50, 25)
-# lon_range = (-130, -60)
+# LAT_RANGE = (50, 25)
+# LON_RANGE = (-130, -60)
 
 # Europe
-# lat_range = (80, 30)
-# lon_range = (-30, 60)
+# LAT_RANGE = (80, 30)
+# LON_RANGE = (-30, 60)
 
 # Pacific
-# lat_range = (20, -20)
-# lon_range = (-195, -135)
+# LAT_RANGE = (20, -20)
+# LON_RANGE = (-195, -135)
 
 # Whole configured region
 LAT_RANGE = None
@@ -426,7 +426,10 @@ def resolve_time_range(s, value: tuple[str, str] | str) -> tuple[str, str]:
 
 
 def main() -> None:
-    settings = get_experiment_configs(EXPERIMENTS_ROOT, **FILTERS)
+    settings = get_experiment_configs(
+        EXPERIMENTS_ROOT,
+        **FILTERS,
+    )
 
     print(f"Found {len(settings)} matching experiment(s).")
 
