@@ -50,7 +50,12 @@ from earthml.plots import (
 # Paths
 # ==========================================================
 
-EXP_NAME = "weather_atmo"
+# Seasonal
+EXP_NAME = "experiments"
+# EXP_NAME = "experiment_new"
+
+# Weather
+# EXP_NAME = "weather_atmo"
 # EXP_NAME = "weather_atmo_debug"
 # EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
@@ -61,7 +66,7 @@ EXP_NAME = "weather_atmo"
 # EXP_NAME = "weather_atmo_short_zero_vs_replicate_padding"
 
 EXPERIMENTS_ROOT = Path(
-    "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}"
     # f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
 )
 
@@ -77,7 +82,7 @@ COMMON_PLOT_DIR = Path(
 PLOT_MODELS = (
     "fc",
     "mlfc",
-    "clim-fc",
+    # "clim-fc",
 )
 
 MODEL_COMPARISONS = (
@@ -103,8 +108,8 @@ MATERIALIZE_ONCE = False # compute metric datasets once before repeated plotting
 # Physical ensemble
 # ==========================================================
 
-PLOT_PHYSICAL_MEMBERS = False
-PLOT_PHYSICAL_SPREAD = False
+PLOT_PHYSICAL_MEMBERS = True
+PLOT_PHYSICAL_SPREAD = True
 PHYSICAL_SPREAD = "std" # "std" or "minmax"
 
 # ==========================================================
@@ -124,7 +129,7 @@ NEURAL_MEMBER_LINEWIDTH = 0.7
 # ==========================================================
 
 # Individual experiments
-PLOT_INDIVIDUAL_LEADTIME_PROFILES = False
+PLOT_INDIVIDUAL_LEADTIME_PROFILES = True
 PLOT_INDIVIDUAL_CLIMATOLOGICAL_PROFILES = False
 
 # Combined variables
@@ -134,7 +139,7 @@ PLOT_COMBINED_VARIABLE_CLIMATOLOGICAL_PROFILES = False
 # Combined experiments
 PLOT_COMBINED_EXPERIMENT_LEADTIME_PROFILES = False
 PLOT_COMBINED_EXPERIMENT_CLIMATOLOGICAL_PROFILES = False
-PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES = True
+PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES = False
 
 # ==========================================================
 # Time selection
@@ -187,7 +192,7 @@ PERIOD_REFERENCE = "init"
 # Metric aggregation
 # ==========================================================
 
-METRIC_AGG_MODE: MetricAgg = "spatial_avg"
+METRIC_AGG_MODE: MetricAgg = "timeseries_avg"
 # "timeseries_avg"
 # "spatial_avg"
 # "global"
