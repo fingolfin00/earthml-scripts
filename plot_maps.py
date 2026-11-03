@@ -1798,6 +1798,7 @@ def plot_fields(
         OUTPUT_ROOT
         / s.output_name
         / "maps"
+        / "fields"
         / space
         / f"leadtime_{leadtime}"
     )
