@@ -46,7 +46,12 @@ from locations import CITY_LOCATIONS, SEA_LOCATIONS
 # Paths
 # ==========================================================
 
-EXP_NAME = "weather_atmo"
+# Seasonal
+EXP_NAME = "experiments"
+# EXP_NAME = "experiment_new"
+
+# Weather
+# EXP_NAME = "weather_atmo"
 # EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
 # EXP_NAME = "weather_atmo_seed"
@@ -59,12 +64,12 @@ EXP_NAME = "weather_atmo"
 # EXP_NAME = "weather_atmo_short_zero_vs_replicate_padding"
 
 EXPERIMENTS_ROOT = Path(
-    "/Users/jacopodallaglio/ML/training/seasonal/experiments"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}"
     # f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
 )
 
 OUTPUT_ROOT = Path(
-    "/Users/jacopodallaglio/ML/training/seasonal/plots"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}"
     # f"/work/cmcc/jd19424/ML/MLBC/plots/{EXP_NAME}"
 )
 
@@ -92,11 +97,6 @@ BUILD_ANALYSIS = True
 RECALCULATE_CLIMATOLOGY = False
 REGENERATE_PLOTS = True
 
-# Neural ensemble
-PLOT_NEURAL_SPREAD = True
-NEURAL_SPREAD = "std"  # "std" or "minmax"
-NEURAL_SPREAD_ALPHA = 0.18
-
 # ==========================================================
 # Physical ensemble
 # ==========================================================
@@ -109,8 +109,8 @@ PHYSICAL_SPREAD = "std"
 # Neural ensemble
 # ==========================================================
 
-PLOT_NEURAL_MEMBERS = True
-PLOT_NEURAL_SPREAD = True
+PLOT_NEURAL_MEMBERS = False
+PLOT_NEURAL_SPREAD = False
 NEURAL_SPREAD = "minmax"
 NEURAL_SPREAD_ALPHA = 0.18
 NEURAL_MEMBER_ALPHA = 0.35
@@ -149,8 +149,8 @@ METRIC_LIMITS = None
 # ==========================================================
 
 METRIC_IMPROVEMENT_LIMITS = {
-    "Δ": (-0.5, 1.2),
-    # "Δ": None,
+    # "Δ": (-0.5, 1.2),
+    "Δ": None,
     "%": None,
     "normalized": None,
 }
@@ -167,7 +167,7 @@ TIMESERIES_IMPROVED_PERCENTAGE = True
 
 # Number of metric samples, not number of days.
 ROLLING_MEAN_WINDOW = None
-# rolling_mean_window = 30
+# ROLLING_MEAN_WINDOW = 30
 ROLLING_MEAN_CENTER = True
 ROLLING_MEAN_MIN_PERIODS = 1
 
@@ -356,10 +356,10 @@ VARIABLES = [
 ]
 
 REGIONS = [
-    "ConUS",
+    # "ConUS",
     # "Europe",
     # "Pacific",
-    # "World",
+    "World",
     # None,
 ]
 
@@ -1037,7 +1037,13 @@ def main() -> None:
                             f"_lead_{label}{rolling_filename}.png"
                         )
 
-                        out_file = OUTPUT_ROOT / s.output_name / common_path / filename
+                        out_file = (
+                            OUTPUT_ROOT
+                            / s.output_name
+                            / "plots"
+                            / common_path
+                            / filename
+                        )
                         if out_file.exists() and not REGENERATE_PLOTS:
                             continue
 
@@ -1152,7 +1158,13 @@ def main() -> None:
                                     f"lead_{label}{rolling_filename}.png"
                                 )
 
-                                out_file = OUTPUT_ROOT / s.output_name / common_path / filename
+                                out_file = (
+                                    OUTPUT_ROOT
+                                    / s.output_name
+                                    / "plots"
+                                    / common_path
+                                    / filename
+                                )
 
                                 if out_file.exists() and not REGENERATE_PLOTS:
                                     continue
@@ -1172,7 +1184,7 @@ def main() -> None:
                                     timeseries_improved_percentage=(
                                         improved_percentage.sel({
                                             leadtime_agg_coord: lead_value
-                                        }).item()
+                                        }).compute().item()
                                         if improved_percentage is not None
                                         else None
                                     ),
