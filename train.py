@@ -343,8 +343,12 @@ def main() -> None:
                     reduction_ratio=16,
                     depth=5,
                     kernels_per_layer=2,
+                    conv_kernel_size=3,
+                    cbam_kernel_size=7,
                     base_channels=64,
                     bilinear=True,
+                    use_cbam=True,
+                    use_unet_skip_connections=True,
                     # longitude_padding="circular", # global (seasonal)
                     # longitude_padding="zero", # creates artifacts near the border
                     # longitude_padding="replicate", # regional (weather)
@@ -356,6 +360,7 @@ def main() -> None:
                 #     kernels_per_layer=1,
                 #     base_channels=16,
                 #     bilinear=True,
+                #     use_cbam=False,
                 # ),
 
                 # net_name="ConvNeXtTransformerUNet",
