@@ -91,6 +91,8 @@ FORCE_RETRAIN = False
 FORCE_TEST = False
 DRY_RUN = False
 
+SAVE_NORMALIZED_FIELDS = True
+
 DETERMINISTIC = False
 
 # Seasonal
@@ -1426,14 +1428,47 @@ def train(
         pred_records=test_pred_paths,
     )
 
-    # DEBUG
-    # if s.neural_ensemble:
-    #     with xr.open_zarr(s.output_mlfc_test) as ds:
-    #         print(ds.sizes)
-    #         print(ds.neural_seed.values)
-    #         print(ds.neural_repeat.values)
+    # Combine normalized input, target and prediction
+    if SAVE_NORMALIZED_FIELDS:
+        for data_type, records in (
+            ("train", train_pred_paths),
+            ("val", val_pred_paths),
+            ("test", test_pred_paths),
+        ):
+            if not records:
+                continue
 
-    #         assert ds.sizes["neural_member"] == len(s.neural_members)
+            normalized_records = [
+                (
+                    leadtime,
+                    init_period,
+                    regional_name,
+                    member,
+                    path.with_name(
+                        f"{path.stem}_normalized.zarr"
+                    ),
+                )
+                for leadtime, init_period, regional_name, member, path in records
+            ]
+
+            missing = [
+                path
+                for _, _, _, _, path in normalized_records
+                if not path.exists()
+            ]
+
+            if missing:
+                raise FileNotFoundError(
+                    f"Missing normalized fields for {data_type}: "
+                    f"{missing}"
+                )
+
+            _combine_predictions(
+                s=s,
+                data_type=data_type,
+                pred_records=normalized_records,
+                output_suffix="normalized",
+            )
 
 # ==========================================================
 # Core train functionality
@@ -1584,6 +1619,15 @@ def _core_train(
             member=member,
         )
 
+        normalized_stores = [
+            path.with_name(f"{path.stem}_normalized.zarr")
+            for path in (
+                train_store,
+                test_store,
+                *([val_store] if val_dataset is not None else []),
+            )
+        ]
+
         # Logic flow
         training_complete_file = exp_dir / f"training_complete{suffix}" # state file name
 
@@ -1600,6 +1644,10 @@ def _core_train(
             or (
                 val_dataset is not None
                 and not val_store.exists()
+            )
+            or (
+                SAVE_NORMALIZED_FIELDS
+                and any(not path.exists() for path in normalized_stores)
             )
         )
 
@@ -2095,6 +2143,7 @@ def _core_train(
                 latitudes=latitudes,
                 an_clim=y_clim,
                 log_monthly=log_monthly,
+                save_normalized=SAVE_NORMALIZED_FIELDS,
             )
 
             if val_test_dataloader is not None and val_dataset is not None:
@@ -2110,6 +2159,7 @@ def _core_train(
                     latitudes=latitudes,
                     an_clim=y_clim,
                     log_monthly=log_monthly,
+                    save_normalized=SAVE_NORMALIZED_FIELDS,
                 )
 
             _test(
@@ -2124,6 +2174,7 @@ def _core_train(
                 latitudes=latitudes,
                 an_clim=y_clim,
                 log_monthly=log_monthly,
+                save_normalized=SAVE_NORMALIZED_FIELDS,
             )
         else:
             logger.print(
@@ -3710,6 +3761,112 @@ def convert_to_xarray(
     return pred_ds_raw
 
 
+
+def save_normalized_fields(
+    dataset: XarrayDataset,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    predictions: torch.Tensor,
+    filepath: Path,
+) -> None:
+    """Save normalized NN tensors with time, channel and spatial coordinates."""
+
+    if inputs.ndim != 4 or targets.ndim != 4 or predictions.ndim != 4:
+        raise ValueError("Expected normalized tensors with shape (N,C,H,W)")
+
+    if targets.shape != predictions.shape:
+        raise ValueError("Target/prediction shape mismatch")
+
+    if inputs.shape[0] != targets.shape[0]:
+        raise ValueError("Input/target sample count mismatch")
+
+    ref_ds = dataset.input_ds
+
+    time_dim = ref_ds.earthml.guessed_dims.time
+    lat_dim = ref_ds.earthml.guessed_dims.latitude
+    lon_dim = ref_ds.earthml.guessed_dims.longitude
+
+    if time_dim is None or lat_dim is None or lon_dim is None:
+        raise ValueError("Cannot determine input dataset dimensions")
+
+    times = np.asarray(ref_ds[time_dim].values)
+    n_times = len(times)
+    n_samples_per_init = dataset.samples_per_init
+
+    if inputs.shape[0] != n_times * n_samples_per_init:
+        raise ValueError(
+            "Cannot reshape normalized tensors into initialization times: "
+            f"{inputs.shape[0]} != {n_times} * {n_samples_per_init}"
+        )
+
+    if inputs.shape[-2:] != (
+        len(ref_ds[lat_dim]),
+        len(ref_ds[lon_dim]),
+    ):
+        raise ValueError("Input grid does not match dataset coordinates")
+
+    if targets.shape[-2:] != inputs.shape[-2:]:
+        raise ValueError("Input and target grids differ")
+
+    def reshape(tensor: torch.Tensor) -> np.ndarray:
+        values = tensor.detach().float().cpu().numpy()
+        return values.reshape(
+            n_times,
+            n_samples_per_init,
+            values.shape[1],
+            values.shape[2],
+            values.shape[3],
+        )
+
+    dims = (
+        time_dim,
+        "sample_within_init",
+        "input_channel",
+        lat_dim,
+        lon_dim,
+    )
+
+    target_dims = (
+        time_dim,
+        "sample_within_init",
+        "target_channel",
+        lat_dim,
+        lon_dim,
+    )
+
+    ds = xr.Dataset(
+        data_vars={
+            "input": (dims, reshape(inputs)),
+            "target": (target_dims, reshape(targets)),
+            "prediction": (target_dims, reshape(predictions)),
+        },
+        coords={
+            time_dim: times,
+            "sample_within_init": np.arange(n_samples_per_init),
+            "input_channel": np.arange(inputs.shape[1]),
+            "target_channel": np.arange(targets.shape[1]),
+            lat_dim: ref_ds[lat_dim].values,
+            lon_dim: ref_ds[lon_dim].values,
+        },
+        attrs={
+            "description": "Normalized neural-network input, target and prediction",
+        },
+    )
+
+    if n_samples_per_init == 1:
+        ds = ds.isel(sample_within_init=0, drop=True)
+
+    ds = ds.chunk(
+        safe_chunk_spec(ds, ref_ds)
+    ).unify_chunks()
+
+    save_zarr(
+        ds,
+        filepath,
+        safe_chunk_spec(ds, ref_ds),
+    )
+
+
 def print_training_recap(
     *,
     s: Settings,
@@ -4074,6 +4231,7 @@ def _combine_predictions(
     s: Settings,
     data_type: Literal["train", "val", "test"],
     pred_records: list[PredictionRecord],
+    output_suffix: str = "corrected",
 ) -> None:
     if not pred_records:
         return
@@ -4288,7 +4446,7 @@ def _combine_predictions(
     )
 
     output_store = (
-        s.output_dir / f"{data_type}_corrected.zarr"
+        s.output_dir / f"{data_type}_{output_suffix}.zarr"
     )
 
     save_zarr(
@@ -4324,6 +4482,7 @@ def _test(
     latitudes: torch.Tensor,
     an_clim: xr.Dataset | None = None,
     log_monthly: bool = False,
+    save_normalized: bool = False,
 ):
     logger = get_logger()
 
@@ -4490,6 +4649,45 @@ def _test(
         torch.cuda.empty_cache()
 
     months = test_months[:preds_norm.shape[0]]
+
+    # Save normalized datasets
+    if save_normalized:
+        normalized_store = preds_store.with_name(
+            f"{preds_store.stem}_normalized.zarr"
+        )
+
+        input_batches = []
+        target_batches = []
+
+        for batch in dataloader:
+            input_batches.append(
+                batch[0].detach().float().cpu()
+            )
+            target_batches.append(
+                batch[1].detach().float().cpu()
+            )
+
+        inputs_norm = torch.cat(input_batches, dim=0)
+        targets_check = torch.cat(target_batches, dim=0)
+
+        torch.testing.assert_close(
+            targets_check,
+            targets_norm,
+            rtol=1e-5,
+            atol=1e-5,
+            equal_nan=True,
+        )
+
+        save_normalized_fields(
+            dataset=dataset,
+            inputs=inputs_norm,
+            targets=targets_norm,
+            predictions=preds_norm,
+            filepath=normalized_store,
+        )
+
+        del inputs_norm, targets_check
+        del input_batches, target_batches
 
     preds = normalize_target.inverse_tensor(
         preds_norm,
