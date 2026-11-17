@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Literal
 
+import math, re
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -245,28 +247,20 @@ def summarize_feature_map(
     feature: torch.Tensor,
 ) -> dict[str, torch.Tensor | tuple[int, ...]]:
     """
-    Summarize a feature tensor with shape (C,H,W)
-    across channels.
+    Summarize a feature tensor with shape (C,H,W) across channels
     """
     if feature.ndim != 3:
-        raise ValueError(
-            f"Expected (C,H,W), got {tuple(feature.shape)}"
-        )
+        raise ValueError(f"Expected (C,H,W), got {tuple(feature.shape)}")
 
     return {
         "shape": tuple(feature.shape),
-
         "min": feature.amin(dim=0),
-
         "max": feature.amax(dim=0),
-
         "mean": feature.mean(dim=0),
-
         "std": feature.std(
             dim=0,
             unbiased=False,
         ),
-
         "rms": torch.sqrt(
             torch.mean(
                 feature**2,
@@ -281,10 +275,7 @@ def feature_similarity(
     b: torch.Tensor,
 ) -> dict[str, float]:
     if a.shape != b.shape:
-        raise ValueError(
-            f"Shape mismatch: "
-            f"{tuple(a.shape)} != {tuple(b.shape)}"
-        )
+        raise ValueError(f"Shape mismatch: {tuple(a.shape)} != {tuple(b.shape)}")
 
     a_flat = a.flatten().float()
     b_flat = b.flatten().float()
@@ -308,22 +299,18 @@ def feature_similarity(
 
     return {
         "cosine": cosine.item(),
-
         "correlation": correlation.item(),
-
         "mae": (
             difference
             .abs()
             .mean()
             .item()
         ),
-
         "rmse": torch.sqrt(
             torch.mean(
                 difference**2
             )
         ).item(),
-
         "normalized_distance": (
             normalized_feature_distance(
                 a,
@@ -352,10 +339,7 @@ def normalized_feature_distance(
         )
     )
 
-    return (
-        difference_rms
-        / reference_rms.clamp_min(1e-12)
-    ).item()
+    return (difference_rms / reference_rms.clamp_min(1e-12)).item()
 
 
 def channel_correlations(
@@ -363,7 +347,7 @@ def channel_correlations(
     b: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Spatial Pearson correlation for each feature channel.
+    Spatial Pearson correlation for each feature channel
 
     Input:
         a, b: (C,H,W)
@@ -372,14 +356,10 @@ def channel_correlations(
         (C,)
     """
     if a.shape != b.shape:
-        raise ValueError(
-            f"{tuple(a.shape)} != {tuple(b.shape)}"
-        )
+        raise ValueError(f"{tuple(a.shape)} != {tuple(b.shape)}")
 
     if a.ndim != 3:
-        raise ValueError(
-            f"Expected (C,H,W), got {tuple(a.shape)}"
-        )
+        raise ValueError(f"Expected (C,H,W), got {tuple(a.shape)}")
 
     a = a.flatten(1).float()
     b = b.flatten(1).float()
@@ -417,10 +397,7 @@ def channel_correlations(
         torch.nan,
     )
 
-    correlation[valid] = (
-        numerator[valid]
-        / denominator[valid]
-    )
+    correlation[valid] = numerator[valid] / denominator[valid]
 
     return correlation
 
@@ -430,7 +407,7 @@ def feature_difference_rms(
     b: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Spatial RMS difference across channels.
+    Spatial RMS difference across channels
 
     Input:
         (C,H,W)
@@ -487,10 +464,12 @@ def plot_spatial_field(
     sample: dict,
     **kwargs,
 ):
-    """Plot (H,W) with geographic coordinates, or a labeled pixel fallback."""
+    """Plot (H,W) with geographic coordinates, or a labeled pixel fallback"""
     if data.ndim != 2:
         raise ValueError(f"Expected a 2D spatial field, got {data.shape}")
+
     coords = _sample_plot_coords(sample, data.shape)
+
     if coords is not None:
         lon_edges, lat_edges = coords
         im = ax.pcolormesh(lon_edges, lat_edges, data, shading="flat", **kwargs)
@@ -501,6 +480,7 @@ def plot_spatial_field(
         im = ax.imshow(data, origin="lower", aspect="auto", **kwargs)
         ax.set_xlabel("Grid column (longitude index)")
         ax.set_ylabel("Grid row (latitude index)")
+
     return im
 
 
@@ -509,17 +489,11 @@ def feature_file_path(
     time: str,
     sample_within_init: int,
 ) -> Path:
-    time_label = (
-        pd.Timestamp(time)
-        .strftime("%Y%m%dT%H%M%S")
-    )
+    time_label = pd.Timestamp(time).strftime("%Y%m%dT%H%M%S")
 
     return (
         root
-        / (
-            f"features_init_{time_label}"
-            f"_sample_{sample_within_init}.pt"
-        )
+        / f"features_init_{time_label}_sample_{sample_within_init}.pt"
     )
 
 
@@ -578,10 +552,7 @@ def compare_feature_layers(
     features_b = sample_b["features"]
 
     if features_a.keys() != features_b.keys():
-        raise ValueError(
-            "Feature dictionaries contain "
-            "different layers."
-        )
+        raise ValueError("Feature dictionaries contain different layers")
 
     rows = []
 
@@ -660,12 +631,7 @@ def prediction_target_metrics(
         & torch.isfinite(target)
     )
 
-    mae = (
-        difference[valid]
-        .abs()
-        .mean()
-        .item()
-    )
+    mae = difference[valid].abs().mean().item()
 
     rmse = geo_weighted_rmse(
         prediction,
@@ -680,10 +646,7 @@ def prediction_target_metrics(
     p = p - p.mean()
     t = t - t.mean()
 
-    denominator = (
-        torch.linalg.vector_norm(p)
-        * torch.linalg.vector_norm(t)
-    )
+    denominator = torch.linalg.vector_norm(p) * torch.linalg.vector_norm(t)
 
     correlation = (
         (p * t).sum()
@@ -738,9 +701,7 @@ def plot_layer_similarity(
 
     ax.legend()
 
-    ax.set_title(
-        "Representation similarity through network"
-    )
+    ax.set_title("Representation similarity through network")
 
     fig.tight_layout()
 
@@ -781,9 +742,7 @@ def plot_layer_distance(
         ha="right",
     )
 
-    ax.set_ylabel(
-        "Normalized representation distance"
-    )
+    ax.set_ylabel("Normalized representation distance")
 
     ax.set_title(
         f"Sample {list(SAMPLE_A.keys())[0]} - sample {list(SAMPLE_B.keys())[0]} representation distance through network"
@@ -834,19 +793,15 @@ def build_encoder_cbam_comparison(
 
         rows.append({
             "level": level,
-
             "raw_correlation": float(
                 raw.iloc[0]["correlation"]
             ),
-
             "cbam_correlation": float(
                 cbam.iloc[0]["correlation"]
             ),
-
             "raw_cosine": float(
                 raw.iloc[0]["cosine"]
             ),
-
             "cbam_cosine": float(
                 cbam.iloc[0]["cosine"]
             ),
@@ -880,7 +835,9 @@ def plot_raw_vs_cbam(
     )
 
     ax.set_xlabel("Encoder level")
-    ax.set_ylabel(f"Sample {list(SAMPLE_A.keys())[0]} - sample {list(SAMPLE_B.keys())[0]} spatial-feature correlation")
+    ax.set_ylabel(
+        f"Sample {list(SAMPLE_A.keys())[0]} - sample {list(SAMPLE_B.keys())[0]} spatial-feature correlation"
+    )
 
     ax.set_xticks(
         encoder_df["level"]
@@ -890,9 +847,7 @@ def plot_raw_vs_cbam(
 
     ax.legend()
 
-    ax.set_title(
-        "Effect of CBAM on sample distinguishability"
-    )
+    ax.set_title("Effect of CBAM on sample distinguishability")
 
     fig.tight_layout()
 
@@ -919,12 +874,7 @@ def collect_channel_correlations(
             b,
         )
 
-        result[name] = (
-            corr
-            .detach()
-            .cpu()
-            .numpy()
-        )
+        result[name] = corr.detach().cpu().numpy()
 
     return result
 
@@ -963,9 +913,7 @@ def plot_channel_correlation_distributions(
 
     ax.set_ylim(-1.05, 1.05)
 
-    ax.set_ylabel(
-        "Per-channel spatial correlation"
-    )
+    ax.set_ylabel("Per-channel spatial correlation")
 
     ax.set_xticklabels(
         names,
@@ -973,9 +921,7 @@ def plot_channel_correlation_distributions(
         ha="right",
     )
 
-    ax.set_title(
-        "Distribution of sample A - sample B channel similarities"
-    )
+    ax.set_title("Distribution of sample A - sample B channel similarities")
 
     fig.tight_layout()
 
@@ -995,15 +941,7 @@ def plot_feature_difference_map(
     output_file: Path,
     sample: dict,
 ):
-    difference = (
-        feature_difference_rms(
-            a,
-            b,
-        )
-        .detach()
-        .cpu()
-        .numpy()
-    )
+    difference = feature_difference_rms(a,b).detach().cpu().numpy()
 
     fig, ax = plt.subplots(
         figsize=(10, 5)
@@ -1049,17 +987,14 @@ def plot_selected_feature_differences(
 
     for layer in layers:
         if layer not in features_a:
-            print(
-                f"WARNING: layer not found: {layer}"
-            )
+            print(f"WARNING: layer not found: {layer}")
             continue
 
         plot_feature_difference_map(
             features_a[layer],
             features_b[layer],
             layer,
-            output_dir
-            / f"difference_{layer}.png",
+            output_dir / f"difference_{layer}.png",
             sample_a,
         )
 
@@ -1072,13 +1007,9 @@ def plot_tensor_difference(
     sample: dict,
 ):
     if a.shape != b.shape:
-        raise ValueError(
-            f"{tuple(a.shape)} != {tuple(b.shape)}"
-        )
+        raise ValueError(f"{tuple(a.shape)} != {tuple(b.shape)}")
 
-    difference = (
-        a - b
-    )
+    difference = a - b
 
     if difference.ndim == 3:
         if difference.shape[0] == 1:
@@ -1091,12 +1022,7 @@ def plot_tensor_difference(
                 )
             )
 
-    data = (
-        difference
-        .detach()
-        .cpu()
-        .numpy()
-    )
+    data = difference.detach().cpu().numpy()
 
     fig, ax = plt.subplots(
         figsize=(10, 5)
@@ -1131,23 +1057,10 @@ def plot_feature_channel_pair(
     output_file: Path,
     sample: dict,
 ):
-    a_map = (
-        a[channel]
-        .detach()
-        .cpu()
-        .numpy()
-    )
+    a_map = a[channel].detach().cpu().numpy()
+    b_map = b[channel].detach().cpu().numpy()
 
-    b_map = (
-        b[channel]
-        .detach()
-        .cpu()
-        .numpy()
-    )
-
-    difference = (
-        a_map - b_map
-    )
+    difference = a_map - b_map
 
     fig, axes = plt.subplots(
         1,
@@ -1220,12 +1133,10 @@ def plot_discriminative_channels(
         a = sample_a["features"][layer]
         b = sample_b["features"][layer]
 
-        selected = (
-            most_discriminative_channels(
-                a,
-                b,
-                n=n_channels,
-            )
+        selected = most_discriminative_channels(
+            a,
+            b,
+            n=n_channels,
         )
 
         layer_dir = (
@@ -1245,8 +1156,7 @@ def plot_discriminative_channels(
                 channel,
                 layer,
                 correlation,
-                layer_dir
-                / f"channel_{channel:04d}.png",
+                layer_dir / f"channel_{channel:04d}.png",
                 sample_a,
             )
 
@@ -1256,30 +1166,15 @@ def most_discriminative_channels(
     b: torch.Tensor,
     n: int = 5,
 ) -> list[tuple[int, float]]:
-    correlations = channel_correlations(
-        a,
-        b,
-    )
+    correlations = channel_correlations(a, b)
 
-    valid = torch.isfinite(
-        correlations
-    )
-
-    indices = torch.arange(
-        correlations.shape[0]
-    )[valid]
-
+    valid = torch.isfinite(correlations)
+    indices = torch.arange(correlations.shape[0])[valid]
     values = correlations[valid]
 
-    order = torch.argsort(
-        values
-    )
+    order = torch.argsort(values)
 
-    n = min(
-        n,
-        len(order),
-    )
-
+    n = min(n, len(order))
     return [
         (
             int(indices[i]),
@@ -1297,7 +1192,7 @@ def geo_weighted_rmse(
     eps: float = 1e-12,
 ) -> float:
     """
-    Cosine-latitude weighted spatial RMSE.
+    Cosine-latitude weighted spatial RMSE
 
     Expected:
         prediction: (C,H,W)
@@ -1337,12 +1232,12 @@ def geo_weighted_rmse(
     mask = mask.bool()
     latitudes = latitudes.float()
 
-    # Area weighting for a regular lat/lon grid.
+    # Area weighting for a regular lat/lon grid
     latitude_weights = torch.cos(
         torch.deg2rad(latitudes)
     )
 
-    # (H,) -> (1,H,1), broadcasts over channels/lon.
+    # (H,) -> (1,H,1), broadcasts over channels/lon
     weights = latitude_weights[
         None,
         :,
@@ -1372,9 +1267,7 @@ def geo_weighted_rmse(
         / weights.sum().clamp_min(eps)
     )
 
-    return torch.sqrt(
-        weighted_mse
-    ).item()
+    return torch.sqrt(weighted_mse).item()
 
 
 def normalized_rmse_improvement(
@@ -1382,21 +1275,11 @@ def normalized_rmse_improvement(
 ) -> dict[str, float]:
     target = sample["target"].float()
     prediction = sample["prediction"].float()
+    baseline = sample["baseline_target_norm"].float()
 
-    baseline = (
-        sample["baseline_target_norm"]
-        .float()
-    )
+    mask = sample["target_mask"].bool()
 
-    mask = (
-        sample["target_mask"]
-        .bool()
-    )
-
-    latitudes = (
-        sample["latitudes"]
-        .float()
-    )
+    latitudes = sample["latitudes"].float()
 
     baseline_rmse = geo_weighted_rmse(
         baseline,
@@ -1412,23 +1295,15 @@ def normalized_rmse_improvement(
         latitudes,
     )
 
-    improvement = (
-        baseline_rmse
-        - ml_rmse
-    )
+    improvement = baseline_rmse - ml_rmse
 
-    relative_improvement = (
-        improvement
-        / max(baseline_rmse, 1e-12)
-    )
+    relative_improvement = improvement / max(baseline_rmse, 1e-12)
 
     return {
         "baseline_rmse": baseline_rmse,
         "ml_rmse": ml_rmse,
         "rmse_improvement": improvement,
-        "relative_improvement": (
-            relative_improvement
-        ),
+        "relative_improvement": relative_improvement,
     }
 
 
@@ -1499,13 +1374,12 @@ def plot_kernel_weights(
     output_dir: Path,
     max_filters: int = 16,
 ) -> None:
-    """Plot learned depthwise/spatial kernels and pointwise mixing matrices."""
-    import math
-    import re
+    """Plot learned depthwise/spatial kernels and pointwise mixing matrices"""
 
     if not kernel_file.exists():
         print(f"WARNING: no kernel snapshot at {kernel_file}")
         return
+
     payload = torch.load(kernel_file, map_location="cpu", weights_only=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -1515,10 +1389,13 @@ def plot_kernel_weights(
         out_channels, in_channels, kh, kw = w.shape
 
         rows.append({
-            "parameter": name, "output_filters": out_channels,
+            "parameter": name,
+            "output_filters": out_channels,
             "input_channels_per_group": in_channels,
-            "kernel_height": kh, "kernel_width": kw,
-            "mean": float(w.mean()), "std": float(w.std()),
+            "kernel_height": kh,
+            "kernel_width": kw,
+            "mean": float(w.mean()),
+            "std": float(w.std()),
             "rms": float(np.sqrt(np.mean(w**2))),
         })
 
@@ -1531,7 +1408,12 @@ def plot_kernel_weights(
             cols = min(4, count)
             nrows = math.ceil(count / cols)
 
-            fig, axes = plt.subplots(nrows, cols, figsize=(3 * cols, 3 * nrows), squeeze=False)
+            fig, axes = plt.subplots(
+                nrows,
+                cols,
+                figsize=(3 * cols, 3 * nrows),
+                squeeze=False,
+            )
 
             vmax = max(float(np.max(np.abs(w[:count, 0]))), 1e-12)
             for j, ax in enumerate(axes.ravel()):
@@ -1581,14 +1463,14 @@ def plot_attention_comparison(
     sample_b: dict,
     output_dir: Path,
 ) -> None:
-    """Compare per-channel and spatial CBAM gates for two forecast samples."""
+    """Compare per-channel and spatial CBAM gates for two forecast samples"""
     import re
 
     att_a = sample_a.get("attention", {})
     att_b = sample_b.get("attention", {})
 
     if not att_a or not att_b:
-        print("WARNING: missing CBAM masks. Regenerate samples with updated inference script.")
+        print("WARNING: missing CBAM masks. Regenerate samples with updated inference script")
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1610,10 +1492,13 @@ def plot_attention_comparison(
             raise ValueError(f"Attention shape mismatch at {name}")
 
         rows.append({
-            "level": name, "channels": ca.size,
-            "channel_mean_A": ca.mean(), "channel_mean_B": cb.mean(),
+            "level": name,
+            "channels": ca.size,
+            "channel_mean_A": ca.mean(),
+            "channel_mean_B": cb.mean(),
             "channel_mean_absolute_difference": np.abs(ca - cb).mean(),
-            "spatial_mean_A": sa.mean(), "spatial_mean_B": sb.mean(),
+            "spatial_mean_A": sa.mean(),
+            "spatial_mean_B": sb.mean(),
             "spatial_mean_absolute_difference": np.abs(sa - sb).mean(),
         })
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
@@ -1635,8 +1520,20 @@ def plot_attention_comparison(
         fig, ax = plt.subplots(figsize=(12, 4))
         idx = np.arange(ca.size)
 
-        ax.plot(idx, ca, linewidth=1, label="Sample A")
-        ax.plot(idx, cb, linewidth=1, label="Sample B", alpha=0.8)
+        ax.plot(
+            idx,
+            ca,
+            linewidth=1,
+            label="Sample A",
+        )
+
+        ax.plot(
+            idx
+            cb,
+            linewidth=1,
+            label="Sample B",
+            alpha=0.8,
+        )
 
         ax.set_ylim(0, 1)
         ax.set_xlabel("Learned feature-channel index")
@@ -1648,12 +1545,20 @@ def plot_attention_comparison(
         fig.savefig(output_dir / f"{safe_name}_channel.png", dpi=200)
         plt.close(fig)
 
-        pd.DataFrame({"channel": idx, "attention_A": ca, "attention_B": cb}).to_csv(
-            output_dir / f"{safe_name}_channel.csv", index=False
+        pd.DataFrame({
+            "channel": idx,
+            "attention_A": ca,
+            "attention_B": cb
+        }).to_csv(
+            output_dir / f"{safe_name}_channel.csv",
+            index=False
         )
 
     if rows:
-        pd.DataFrame(rows).to_csv(output_dir / "attention_summary.csv", index=False)
+        pd.DataFrame(rows).to_csv(
+            output_dir / "attention_summary.csv",
+            index=False,
+        )
 
 
 def resolve_inference_range(s) -> tuple[str, str]:
@@ -1665,6 +1570,7 @@ def resolve_inference_range(s) -> tuple[str, str]:
         "train_val": (s.train_start, s.val_end),
         "full": (s.train_start, s.test_end),
     }
+
     if isinstance(TIME_RANGE, tuple):
         if len(TIME_RANGE) != 2:
             raise ValueError("TIME_RANGE tuple must contain start and end")
@@ -3069,6 +2975,7 @@ def plot_batch_summary_panels(
                     ),
                     fontsize=12,
                 )
+
                 fig.subplots_adjust(
                     left=0.055,
                     right=0.88,
@@ -3267,6 +3174,7 @@ def calculate_library_metric_table(
             coord_rename_fc=None,
             coord_rename_an=None,
         )
+
         clim = {"fc": clim_fc, "an": clim_an, "mlfc": clim_mlfc}
         for model in ("fc", "an", "mlfc"):
             if clim[model] is not None:
