@@ -214,6 +214,7 @@ def resolve_time_range(s, selection):
 
 def main() -> None:
     settings = get_experiment_configs(EXPERIMENTS_ROOT, **FILTERS)
+
     print(f"Found {len(settings)} matching experiment(s).")
 
     n = 0
