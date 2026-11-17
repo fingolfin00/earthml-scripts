@@ -56,6 +56,8 @@ EXP_NAME = "experiments"
 
 # Weather
 # EXP_NAME = "weather_atmo"
+# EXP_NAME = "weather_atmo_architecture"
+# EXP_NAME = "weather_atmo_short"
 # EXP_NAME = "weather_atmo_debug"
 # EXP_NAME = "weather_atmo_encoding_short"
 # EXP_NAME = "weather_atmo_encoding"
@@ -108,15 +110,15 @@ MATERIALIZE_ONCE = False # compute metric datasets once before repeated plotting
 # Physical ensemble
 # ==========================================================
 
-PLOT_PHYSICAL_MEMBERS = True
-PLOT_PHYSICAL_SPREAD = True
+PLOT_PHYSICAL_MEMBERS = False
+PLOT_PHYSICAL_SPREAD = False
 PHYSICAL_SPREAD = "std" # "std" or "minmax"
 
 # ==========================================================
 # Neural ensemble
 # ==========================================================
 
-PLOT_NEURAL_SPREAD = False
+PLOT_NEURAL_SPREAD = True
 NEURAL_SPREAD = "minmax" # "std" or "minmax"
 NEURAL_SPREAD_ALPHA = 0.18
 
@@ -129,7 +131,7 @@ NEURAL_MEMBER_LINEWIDTH = 0.7
 # ==========================================================
 
 # Individual experiments
-PLOT_INDIVIDUAL_LEADTIME_PROFILES = True
+PLOT_INDIVIDUAL_LEADTIME_PROFILES = False
 PLOT_INDIVIDUAL_CLIMATOLOGICAL_PROFILES = False
 
 # Combined variables
@@ -139,7 +141,7 @@ PLOT_COMBINED_VARIABLE_CLIMATOLOGICAL_PROFILES = False
 # Combined experiments
 PLOT_COMBINED_EXPERIMENT_LEADTIME_PROFILES = False
 PLOT_COMBINED_EXPERIMENT_CLIMATOLOGICAL_PROFILES = False
-PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES = False
+PLOT_COMBINED_EXPERIMENT_AXIS_PROFILES = True
 
 # ==========================================================
 # Time selection
@@ -222,13 +224,13 @@ LEADTIME_PROFILE_LABEL = f"Lead time [{LEADTIME_UNITS.value}]"
 
 METRICS = [
     # Deterministic metrics - absolute fields
-    # "bias",
-    # "mae",
+    "bias",
+    "mae",
     # "mse",
     "rmse",
     # "nrmse",
     # "corr",
-    # "scc",
+    "scc",
     # "r2",
     # "fc_std",
     # "an_std",
@@ -453,11 +455,11 @@ PROFILE_YLIMS = {
 
     "difference": {
         # "bias": (0, 0.2), # temporal avg
-    #     "bias": (-0.1, 0.1), # spatial avg
-    #     "rmse": (0, 0.2),
-    #     "mae": (0, 0.2),
-    #     "scc": (0.0015, 0.0035),
-    #     "corr": (0.0005, 0.0035),
+        # "bias": (-0.1, 0.1), # spatial avg
+        # "rmse": (0, 0.3),
+        # "mae": (0, 0.2),
+        # "scc": (0.0015, 0.0035),
+        # "corr": (0.0005, 0.0035),
     },
 
     "normalized": {
@@ -574,6 +576,7 @@ COMPARISON_LABEL_FIELDS = {
     "climatology_encoding": "clim",
     "climatology_error_encoding": "clim-err",
     "temporal_evolution_encoding": "temp",
+    "extra_input_variables": "in-var",
     "seasonal_encoding": "seasonal",
     "spatial_encoding": "spatial",
     "orography_encoding": "oro",
@@ -581,6 +584,7 @@ COMPARISON_LABEL_FIELDS = {
     "normalization_input_std": "is",
     "normalization_target_mean": "tm",
     "normalization_target_std": "ts",
+    # "smaatunet_kwargs": "SmaAtUNet"
 }
 
 COMPARISON_LABEL_FIELDS_PER_LINE = 3
@@ -695,7 +699,7 @@ COMBINED_EXPERIMENT_CLIMATOLOGICAL_LEADTIME_SHADE_RANGE = (0.2, 1.0)
 # This is especially useful for ablation studies such as sample size
 
 # None -> use every available lead time
-# combined_experiment_axis_leadtimes = None
+# COMBINED_EXPERIMENT_AXIS_LEADTIMES = None
 COMBINED_EXPERIMENT_AXIS_LEADTIMES = [72]
 
 # Combine all selected lead times in one experiment-axis figure
@@ -4460,11 +4464,12 @@ def build_experiment_axis_da(
                 f"got dims={current.dims}, shape={current.shape}."
             )
 
-        current = current.assign_coords(
-            neural_band_lower=float(lower),
-            neural_band_upper=float(upper),
-        )
-        selected.append((label, current))
+        selected.append((
+            label,
+            current,
+            float(lower),
+            float(upper),
+        ))
 
     if sort_numeric:
         selected.sort(
@@ -4473,12 +4478,23 @@ def build_experiment_axis_da(
             )
         )
 
-    return xr.concat(
+    result = xr.concat(
         [
             da.expand_dims(experiment=[label])
-            for label, da in selected
+            for label, da, _, _ in selected
         ],
         dim="experiment",
+    )
+
+    return result.assign_coords(
+        neural_band_lower=(
+            "experiment",
+            [lower for _, _, lower, _ in selected],
+        ),
+        neural_band_upper=(
+            "experiment",
+            [upper for _, _, _, upper in selected],
+        ),
     )
 
 
