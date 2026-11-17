@@ -97,6 +97,8 @@ DETERMINISTIC = False
 
 # Seasonal
 EXPERIMENT_NAME = "experiments"
+# EXPERIMENT_NAME = "experiments_target"
+# EXPERIMENT_NAME = "experiments_short"
 # EXPERIMENT_NAME = "experiment_new"
 
 # Weather
@@ -558,15 +560,23 @@ def main() -> None:
 
                 normalization="full",
 
-                normalization_input_mean="channel",
-                normalization_input_std="channel",
-                normalization_target_mean="channel",
+                normalization_input_mean="sample",
+                normalization_input_std="sample",
+                normalization_target_mean=0,
                 normalization_target_std="channel",
 
                 sample_target_mean="input", # only for sample modes
                 sample_target_std="input", # only for sample modes
 
-                extra_input_variables=(),
+                extra_input_variables=(
+                #   "mslp",
+                #   # "t2m",
+                #   "u10",
+                #   "v10",
+                #   "tprate",
+                #   "d2m",
+                #   "sst",
+                ),
 
                 temporal_evolution_encoding=(
                     # -2,
@@ -2142,6 +2152,7 @@ def _core_train(
                 preds_store=test_store,
                 latitudes=latitudes,
                 an_clim=y_clim,
+                fc_clim=x_clim,
                 log_monthly=log_monthly,
                 save_normalized=SAVE_NORMALIZED_FIELDS,
             )
@@ -2158,6 +2169,7 @@ def _core_train(
                     preds_store=val_store,
                     latitudes=latitudes,
                     an_clim=y_clim,
+                    fc_clim=x_clim,
                     log_monthly=log_monthly,
                     save_normalized=SAVE_NORMALIZED_FIELDS,
                 )
@@ -2173,6 +2185,7 @@ def _core_train(
                 preds_store=train_store,
                 latitudes=latitudes,
                 an_clim=y_clim,
+                fc_clim=x_clim,
                 log_monthly=log_monthly,
                 save_normalized=SAVE_NORMALIZED_FIELDS,
             )
@@ -3767,6 +3780,7 @@ def save_normalized_fields(
     inputs: torch.Tensor,
     targets: torch.Tensor,
     predictions: torch.Tensor,
+    baseline: torch.Tensor,
     filepath: Path,
 ) -> None:
     """Save normalized NN tensors with time, channel and spatial coordinates."""
@@ -3779,6 +3793,9 @@ def save_normalized_fields(
 
     if inputs.shape[0] != targets.shape[0]:
         raise ValueError("Input/target sample count mismatch")
+
+    if baseline.shape != targets.shape:
+        raise ValueError(f"Baseline/target shape mismatch: {baseline.shape} != {targets.shape}")
 
     ref_ds = dataset.input_ds
 
@@ -3839,6 +3856,7 @@ def save_normalized_fields(
             "input": (dims, reshape(inputs)),
             "target": (target_dims, reshape(targets)),
             "prediction": (target_dims, reshape(predictions)),
+            "baseline": (target_dims, reshape(baseline)),
         },
         coords={
             time_dim: times,
@@ -3849,7 +3867,7 @@ def save_normalized_fields(
             lon_dim: ref_ds[lon_dim].values,
         },
         attrs={
-            "description": "Normalized neural-network input, target and prediction",
+            "description": "Normalized NN input, target, prediction and original-forecast baseline",
         },
     )
 
@@ -4470,6 +4488,218 @@ def _combine_predictions(
     gc.collect()
 
 
+def get_normalized_baseline(
+    s: Settings,
+    dataset: XarrayDataset,
+    normalize_target: Normalize | MonthlyNormalize,
+    target_sample_kwargs: dict,
+    months: torch.Tensor,
+    fc_clim: xr.Dataset | None,
+    an_clim: xr.Dataset | None,
+) -> torch.Tensor:
+    """Original forecast baseline expressed in normalized NN target space."""
+
+    target_raw = dataset.y.detach().float().cpu()
+    n_samples, n_channels, height, width = target_raw.shape
+
+    # ----------------------------------------------------------
+    # Original forecast in the raw NN input representation
+    # ----------------------------------------------------------
+
+    def central_forecast() -> torch.Tensor:
+        indices = list(dataset.target_to_input_channel_indices())
+
+        forecast = dataset.x.detach().float().cpu()[:, indices]
+
+        if forecast.shape != target_raw.shape:
+            raise ValueError(
+                "Forecast/target tensor shape mismatch: "
+                f"{tuple(forecast.shape)} != {tuple(target_raw.shape)}"
+            )
+
+        return forecast
+
+    # ----------------------------------------------------------
+    # Forecast minus analysis climatology in target layout
+    # ----------------------------------------------------------
+
+    def climatology_difference() -> torch.Tensor:
+        if fc_clim is None or an_clim is None:
+            raise ValueError(
+                f"Climatologies required for target_mode={s.target_mode!r}"
+            )
+
+        ref_ds = dataset.target_ds
+
+        time_dim = ref_ds.earthml.guessed_dims.time
+        lat_dim = ref_ds.earthml.guessed_dims.latitude
+        lon_dim = ref_ds.earthml.guessed_dims.longitude
+
+        if time_dim is None or lat_dim is None or lon_dim is None:
+            raise ValueError("Cannot determine target dimensions")
+
+        times = ref_ds[time_dim].values
+        n_times = len(times)
+
+        fc = select_clim_for_time(
+            fc_clim, times, s.clim_period,
+        )[s.var_fc]
+
+        an = select_clim_for_time(
+            an_clim, times, s.clim_period,
+        )[s.var_an]
+
+        fc = fc.sel({
+            lat_dim: ref_ds[lat_dim],
+            lon_dim: ref_ds[lon_dim],
+        })
+        an = an.sel({
+            lat_dim: ref_ds[lat_dim],
+            lon_dim: ref_ds[lon_dim],
+        })
+
+        realization_dim = fc.earthml.guessed_dims.realization
+
+        # Deterministic anomaly-residual targets use the
+        # ensemble-mean forecast anomaly.
+        if (
+            s.target_mode == "anomaly_residual"
+            and realization_dim is not None
+            and realization_dim in fc.dims
+        ):
+            fc = fc.mean(realization_dim, skipna=True)
+
+        delta = fc - an
+
+        if realization_dim is None or realization_dim not in delta.dims:
+            values = np.asarray(
+                delta.transpose(time_dim, lat_dim, lon_dim).values
+            ).copy()
+
+            # (T, H, W) -> (T, 1, H, W)
+            tensor = torch.as_tensor(
+                values, dtype=target_raw.dtype
+            ).unsqueeze(1)
+
+            # Repeat across realizations-as-samples.
+            samples_per_init = dataset.samples_per_init
+
+            if n_samples != n_times * samples_per_init:
+                raise ValueError(
+                    "Cannot align climatology with samples: "
+                    f"{n_samples} != {n_times} * {samples_per_init}"
+                )
+
+            tensor = tensor.repeat_interleave(
+                samples_per_init, dim=0
+            )
+
+            # Repeat across output channels when the
+            # climatology has no realization dependence.
+            if n_channels > 1:
+                tensor = tensor.expand(
+                    -1, n_channels, -1, -1
+                )
+
+        else:
+            values = np.asarray(
+                delta.transpose(
+                    time_dim, realization_dim, lat_dim, lon_dim
+                ).values
+            ).copy()
+
+            # (T, R, H, W)
+            n_realizations = values.shape[1]
+
+            tensor = torch.as_tensor(
+                values, dtype=target_raw.dtype
+            )
+
+            if (
+                n_samples == n_times * n_realizations
+                and n_channels == 1
+            ):
+                # Realizations flattened into samples.
+                tensor = tensor.reshape(
+                    n_samples, 1, height, width
+                )
+
+            elif (
+                n_samples == n_times
+                and n_channels == n_realizations
+            ):
+                # Realizations represented as channels.
+                pass
+
+            elif n_realizations == 1:
+                # Singleton realization: broadcast across samples
+                # and channels if required.
+                tensor = tensor.repeat_interleave(
+                    dataset.samples_per_init, dim=0
+                ).expand(-1, n_channels, -1, -1)
+
+            else:
+                raise ValueError(
+                    "Cannot align realization-dependent climatology "
+                    "with the NN target layout: "
+                    f"climatology={tuple(tensor.shape)}, "
+                    f"target={tuple(target_raw.shape)}"
+                )
+
+        if tensor.shape != target_raw.shape:
+            raise ValueError(
+                "Climatology/target shape mismatch: "
+                f"{tuple(tensor.shape)} != {tuple(target_raw.shape)}"
+            )
+
+        return tensor
+
+    # ----------------------------------------------------------
+    # Original-forecast baseline in raw target space
+    # ----------------------------------------------------------
+
+    if s.target_mode == "analysis":
+        baseline_raw = central_forecast()
+
+    elif s.target_mode in {
+        "residual",
+        "residual_realization",
+    }:
+        baseline_raw = torch.zeros_like(target_raw)
+
+    elif s.target_mode == "anomaly":
+        baseline_raw = central_forecast() + climatology_difference()
+
+    elif s.target_mode in {
+        "anomaly_residual",
+        "anomaly_residual_realization",
+    }:
+        baseline_raw = climatology_difference()
+
+    else:
+        raise ValueError(
+            f"Unsupported target_mode={s.target_mode!r}"
+        )
+
+    # ----------------------------------------------------------
+    # Apply the same normalization used for the NN target
+    # ----------------------------------------------------------
+
+    baseline_norm = normalize_target(
+        baseline_raw,
+        months=months,
+        **target_sample_kwargs,
+    )
+
+    if baseline_norm.shape != target_raw.shape:
+        raise ValueError(
+            "Normalized baseline shape mismatch: "
+            f"{tuple(baseline_norm.shape)} != {tuple(target_raw.shape)}"
+        )
+
+    return baseline_norm.detach().float().cpu()
+
+
 def _test(
     test_trainer: L.Trainer,
     s: Settings,
@@ -4480,6 +4710,7 @@ def _test(
     dataloader: DataLoader,
     preds_store: Path,
     latitudes: torch.Tensor,
+    fc_clim: xr.Dataset | None = None,
     an_clim: xr.Dataset | None = None,
     log_monthly: bool = False,
     save_normalized: bool = False,
@@ -4678,15 +4909,26 @@ def _test(
             equal_nan=True,
         )
 
+        baseline_normalized = get_normalized_baseline(
+            s=s,
+            dataset=dataset,
+            normalize_target=normalize_target,
+            target_sample_kwargs=target_sample_kwargs,
+            months=test_months,
+            fc_clim=fc_clim,
+            an_clim=an_clim,
+        )
+
         save_normalized_fields(
             dataset=dataset,
             inputs=inputs_norm,
             targets=targets_norm,
             predictions=preds_norm,
+            baseline=baseline_normalized,
             filepath=normalized_store,
         )
 
-        del inputs_norm, targets_check
+        del inputs_norm, targets_check, baseline_normalized
         del input_batches, target_batches
 
     preds = normalize_target.inverse_tensor(
