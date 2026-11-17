@@ -46,37 +46,36 @@ from train import convert_to_xarray, make_train_test_datasets_for_leadtime
 # Configuration
 # ============================================================================
 
+# Seasonal
+EXP_NAME = "experiments"
+# EXP_NAME = "experiment_new"
+
+# Weather
 # EXP_NAME = "weather_atmo"
-# EXP_NAME = "weather_atmo_variables"
-EXP_NAME = "weather_atmo_normalization_ablation"
-# EXP_NAME = "weather_atmo_normalization_ablation_72h"
-# EXP_NAME = "weather_atmo_one_year_test"
+# EXP_NAME = "weather_atmo_architecture"
+# EXP_NAME = "weather_atmo_ablation_fixed_val"
+# EXP_NAME = "weather_atmo_short_zero_vs_replicate_padding"
 
 EXPERIMENTS_ROOT = Path(
-    f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}"
+    # f"/work/cmcc/jd19424/ML/MLBC/experiments/{EXP_NAME}"
 )
 
 OUTPUT_ROOT = Path(
-    f"/work/cmcc/jd19424/ML/MLBC/plots/{EXP_NAME}"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}"
+    # f"/work/cmcc/jd19424/ML/MLBC/plots/{EXP_NAME}"
 )
-
 INTERPOLATE_ANALYSIS = False # weather
 
-PLOT_DISTRIBUTIONS = True
+PLOT_DISTRIBUTIONS = False
 PLOT_DIAGNOSTIC_SCATTERS = True
-PLOT_SPECTRAL_WAVENUMBER_CORRELATION = False
+PLOT_SPECTRAL_WAVENUMBER_CORRELATION = True
 
 DEBUG_TIMING = False
 
 # ----------------------------------------------------------------------------
 # Experiment selection
 # ----------------------------------------------------------------------------
-
-FILTERS = dict(
-    region_name="ConUS",
-    # normalization_mode="channel",
-    # normalization_mode="sample",
-)
 
 VARIABLES: list[str] | None = [
     # "mslp",
@@ -86,6 +85,28 @@ VARIABLES: list[str] | None = [
     # "v10",
     # "tcc",
 ]
+
+REGIONS = [
+    # "ConUS",
+    # "Europe",
+    # "Pacific",
+    "World",
+    # None,
+]
+
+FILTERS = dict(
+    net_name="SmaAt_UNet",
+    target_mode="residual",
+    # loss_name="GeoMaskedMSELoss",
+    # train_subsamples=264,
+    # normalization_input_mean="channel",
+    # normalization_input_std="channel",
+    # normalization_target_mean=0,
+    # normalization_target_std="channel",
+    # extra_suffix_folder="depth5_baseC64RR16_KS5_smaaunet",
+    # extra_suffix_folder="baseC64RR8_smaaunet",
+)
+
 
 # None -> all experiment leadtimes
 LEADTIMES: list[int] | None = None
@@ -365,15 +386,19 @@ SCATTER_MARKER_SIZE = 5.0
 
 # Diagnostic quantities computed from the same fields used for distributions
 DIAGNOSTIC_METRICS = (
-    "mean", "std", "skewness", "excess_kurtosis",
-    "mean_abs_zscore", "std_abs_zscore",
-    "skewness_abs_zscore", "excess_kurtosis_abs_zscore",
+    # "mean", "std", "skewness", "excess_kurtosis",
+    # "mean_abs_zscore", "std_abs_zscore",
+    # "skewness_abs_zscore", "excess_kurtosis_abs_zscore",
     # "correlation", "cosine", "rms_ratio", "orthogonal_rms",
-    "mean_product", "rms_laplacian", "mean_abs_laplacian",
-    # "spectral_centroid", "high_frequency_power_fraction",
+    # "mean_product", "rms_laplacian", "mean_abs_laplacian",
+    "spectral_centroid", "high_frequency_power_fraction",
 )
 
-DIAGNOSTIC_FIELDS = ("target",)
+DIAGNOSTIC_FIELDS = (
+    # "target",
+    "ideal_correction",
+    "ml_correction",
+)
 
 SHAPE_METRICS = {"mean", "std", "skewness", "excess_kurtosis"}
 
@@ -506,20 +531,21 @@ def make_normalizer(
         )
 
     kwargs = {
-        "mode": s.normalization_mode,
+        "mean": (
+            s.normalization_input_mean
+            if dim == "x"
+            else s.normalization_target_mean
+        ),
+        "std": (
+            s.normalization_input_std
+            if dim == "x"
+            else s.normalization_target_std
+        ),
         "exclude_channels": exclude_channels,
     }
 
-    if s.normalization_mode == "fixed":
-        if dim == "x":
-            kwargs["mean"] = s.fixed_input_mean
-            kwargs["std"] = s.fixed_input_std
-        else:
-            kwargs["mean"] = s.fixed_target_mean
-            kwargs["std"] = s.fixed_target_std
-
     return norm_class(
-        **kwargs,
+        **kwargs
     ).fit(
         dataset,
         dim=dim,
@@ -534,7 +560,8 @@ def dataset_kwargs_from_settings(s) -> dict:
         "output_realizations": s.output_realizations,
         "torch_mask": s.torch_mask,
         "fill_nan_value": s.fill_nan_value,
-        "sample_target_stats": s.sample_target_stats,
+        "sample_target_mean": s.sample_target_mean,
+        "sample_target_std": s.sample_target_std,
     }
 
 
@@ -794,7 +821,11 @@ def _normalized_target_tensor(
     target_dataset = XarrayDataset(
         input_ds=reference_dataset.input_ds,
         target_ds=target_ds,
-        **dataset_kwargs_from_settings(s),
+        **{
+            **dataset_kwargs_from_settings(s),
+            "sample_target_mean": reference_dataset.sample_target_mean,
+            "sample_target_std": reference_dataset.sample_target_std,
+        },
     )
 
     target_dataset.transform_x = normalize_input
@@ -824,7 +855,7 @@ def get_normalized_datasets(
     xr.Dataset,
 ]:
     # ------------------------------------------------------------
-    # Select split and reproduce training normalization
+    # Select split and reproduce inference-time normalization
     # ------------------------------------------------------------
 
     dataset = _select_split_dataset(
@@ -833,6 +864,9 @@ def get_normalized_datasets(
         test_dataset=test_dataset,
         time_range=time_range,
     )
+
+    dataset.sample_target_mean = "input"
+    dataset.sample_target_std = "input"
 
     dataset.transform_x = normalize_input
     dataset.transform_y = normalize_target
@@ -905,9 +939,17 @@ def get_normalized_datasets(
     # ------------------------------------------------------------
 
     if s.target_mode == "analysis":
-        # Exact normalized network input
-        baseline_norm = input_norm
+        baseline_norm = _normalized_target_tensor(
+            reference_dataset=dataset,
+            target_ds=_squeeze_single_leadtime(fc[[s.var_fc]]).rename(
+                {s.var_fc: s.var_an}
+            ),
+            normalize_input=normalize_input,
+            normalize_target=normalize_target,
+            s=s,
+        )
 
+    # TODO needs fixing
     elif s.target_mode in {
         "residual",
         "residual_realization",
@@ -1645,19 +1687,38 @@ def main() -> None:
         **FILTERS,
     )
 
-    if VARIABLES is not None:
-        settings = [
-            s for s in settings
-            if s.var_fc in VARIABLES
+    # Skip unfinished experiments
+    split_paths = {
+        "train": "output_mlfc_train",
+        "val": "output_mlfc_val",
+        "test": "output_mlfc_test",
+    }
+
+    available_settings = []
+
+    for s in settings:
+        missing = [
+            split
+            for split in DISTRIBUTION_SPLIT_RANGE
+            if not getattr(s, split_paths[split]).exists()
         ]
 
-    if not settings:
-        raise RuntimeError("No matching experiments found")
+        if missing:
+            print(
+                f"Skipping unfinished experiment: {s.output_name} "
+                f"(missing MLFC: {', '.join(missing)})"
+            )
+            continue
 
-    print(
-        f"Found {len(settings)} "
-        "matching experiment(s)."
-    )
+        available_settings.append(s)
+
+    settings = available_settings
+
+    if not settings:
+        print("No completed experiments available")
+        return
+
+    print(f"Found {len(settings)} matching experiment(s)")
 
     distribution_space = (
         "normalized"
