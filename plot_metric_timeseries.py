@@ -364,8 +364,6 @@ REGIONS = [
 ]
 
 FILTERS = dict(
-    var_fc=VARIABLES,
-    region_name=REGIONS,
     # net_name="SmaAt_UNet",
     # target_mode="residual",
     loss_name="GeoMaskedMSELoss",
@@ -376,6 +374,7 @@ FILTERS = dict(
     # normalization_input_std="sample",
     # normalization_target_mean="sample",
     # normalization_target_std="sample",
+    # extra_input_variables=(),
     # sample_target_mean="input",
     # sample_target_std="input",
     # extra_suffix_folder="",
@@ -410,6 +409,8 @@ def main() -> None:
 
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
         **FILTERS,
     )
 

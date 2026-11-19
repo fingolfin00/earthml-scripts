@@ -167,8 +167,6 @@ REGIONS = [
 ]
 
 FILTERS = dict(
-    var_fc=VARIABLES,
-    region_name=REGIONS,
     net_name="SmaAt_UNet",
     # net_name="ConvNeXtTransformerUNet",
     # target_mode="anomaly_residual",
@@ -213,7 +211,12 @@ def resolve_time_range(s, selection):
 
 
 def main() -> None:
-    settings = get_experiment_configs(EXPERIMENTS_ROOT, **FILTERS)
+    settings = get_experiment_configs(
+        EXPERIMENTS_ROOT,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
+        **FILTERS,
+    )
 
     print(f"Found {len(settings)} matching experiment(s).")
 

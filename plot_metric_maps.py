@@ -68,7 +68,7 @@ OUTPUT_ROOT = Path(
 )
 
 # Shared FC and clim-FC maps
-COMMON_PLOT_DIR = OUTPUT_ROOT / "common"
+COMMON_PLOT_DIR = OUTPUT_ROOT / "plots" / "common"
 
 OROGRAPHY_PATH = Path(
     "/Users/jacopodallaglio/ML/training/seasonal/data/input/era5_orography.zarr"
@@ -397,8 +397,6 @@ LON_RANGE = None
 # ==========================================================
 
 FILTERS = dict(
-    var_fc=VARIABLES,
-    region_name=REGIONS,
     # net_name="ConvNeXtTransformerUNet",
     net_name="SmaAt_UNet",
     # target_mode="analysis",
@@ -408,8 +406,11 @@ FILTERS = dict(
     # train_subsamples=1000,
     # seasonal_encoding=True,
     # ensemble_encoding=True,
+    # normalization_input_mean="sample",
+    # normalization_input_std="sample",
     # separate_training_by_init_period=ClimPeriod.MONTH,
     # extra_suffix_folder="",
+    # extra_input_variables=(),
 )
 
 def resolve_time_range(s, value: tuple[str, str] | str) -> tuple[str, str]:
@@ -430,6 +431,8 @@ def resolve_time_range(s, value: tuple[str, str] | str) -> tuple[str, str]:
 def main() -> None:
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
         **FILTERS,
     )
 
@@ -801,9 +804,7 @@ def main() -> None:
                 # ==========================================================
 
                 for baseline_model, target_model in MODEL_COMPARISONS:
-
-                    # Comparison is generated when its target model
-                    # is the model currently being processed.
+                    # Comparison is generated when its target model is the model currently being processed
                     if target_model != model:
                         continue
 
@@ -840,7 +841,6 @@ def main() -> None:
                         comparison_target,
                     ),
                 ) in dataarrays_to_plot.items():
-
                     is_improvement = (
                         comparison_baseline is not None
                         and comparison_target is not None
@@ -1015,15 +1015,9 @@ def main() -> None:
                                         dpi=DPI,
                                         title_strftime=TITLE_STRFTIME,
                                         significance=significance,
-                                        significance_stride=(
-                                            SIGNIFICANCE_STRIDE
-                                        ),
-                                        significance_size=(
-                                            SIGNIFICANCE_SIZE
-                                        ),
-                                        significance_alpha=(
-                                            SIGNIFICANCE_ALPHA
-                                        ),
+                                        significance_stride=SIGNIFICANCE_STRIDE,
+                                        significance_size=SIGNIFICANCE_SIZE,
+                                        significance_alpha=SIGNIFICANCE_ALPHA,
                                         regions=HIGHLIGHTED_REGIONS if METRIC_KIND == "maps" else None,
                                     )
 

@@ -73,7 +73,7 @@ EXPERIMENTS_ROOT = Path(
 )
 
 COMMON_PLOT_DIR = Path(
-    "/Users/jacopodallaglio/ML/training/seasonal/plots"
+    f"/Users/jacopodallaglio/ML/training/seasonal/{EXP_NAME}/plots"
     # f"/work/cmcc/jd19424/ML/MLBC/plots/{EXP_NAME}/common"
 )
 
@@ -333,9 +333,6 @@ REGIONS = [
 ]
 
 FILTERS = dict(
-    var_fc=VARIABLES,
-    region_name=REGIONS,
-
     # net_name="ConvNeXtTransformerUNet",
     # net_name="SmaAt_UNet",
 
@@ -409,7 +406,7 @@ TITLE_STRFTIME = "%Y" # seasonal
 MODEL_LABELS = {
     "fc": "FC",
     "mlfc": "MLFC",
-    "clim-fc": "Clim-corrected FC",
+    # "clim-fc": "Clim-corrected FC",
 }
 
 COMPARISON_LABELS_MAP = {
@@ -562,7 +559,7 @@ VARIABLE_COLORS = {
 # ==========================================================
 
 COMBINED_PLOT_FOLDER = "profile_comparison"
-COMPARISON_NAME = "experiments"
+COMPARISON_NAME = EXP_NAME
 
 COMPARISON_LABELS = None
 COMPARISON_COLORS = None
@@ -789,6 +786,8 @@ def main() -> None:
 
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
         **FILTERS,
     )
 
