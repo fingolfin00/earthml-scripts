@@ -4497,193 +4497,123 @@ def get_normalized_baseline(
     fc_clim: xr.Dataset | None,
     an_clim: xr.Dataset | None,
 ) -> torch.Tensor:
-    """Original forecast baseline expressed in normalized NN target space."""
+    """
+    Original forecast expressed in the NN's normalized target space
+    Supports all target modes and both realization-as-sample and realization-as-channel output layouts
+    """
+    raw_target = dataset.y.detach().float().cpu()
+    n_samples, n_channels, height, width = raw_target.shape
 
-    target_raw = dataset.y.detach().float().cpu()
-    n_samples, n_channels, height, width = target_raw.shape
-
-    # ----------------------------------------------------------
-    # Original forecast in the raw NN input representation
-    # ----------------------------------------------------------
-
-    def central_forecast() -> torch.Tensor:
+    # Forecast values in the same raw representation as the input data
+    def forecast_tensor() -> torch.Tensor:
         indices = list(dataset.target_to_input_channel_indices())
-
-        forecast = dataset.x.detach().float().cpu()[:, indices]
-
-        if forecast.shape != target_raw.shape:
+        result = dataset.x.detach().float().cpu()[:, indices]
+        if result.shape != raw_target.shape:
             raise ValueError(
-                "Forecast/target tensor shape mismatch: "
-                f"{tuple(forecast.shape)} != {tuple(target_raw.shape)}"
+                "Cannot align central forecast channels with target: "
+                f"{tuple(result.shape)} != {tuple(raw_target.shape)}"
             )
+        return result
 
-        return forecast
-
-    # ----------------------------------------------------------
-    # Forecast minus analysis climatology in target layout
-    # ----------------------------------------------------------
-
+    # C_F - C_A, aligned with precisely the same time/member/channel layout as dataset.y
+    # For deterministic anomaly-residual mode, the target uses the ensemble-mean forecast anomaly
     def climatology_difference() -> torch.Tensor:
         if fc_clim is None or an_clim is None:
             raise ValueError(
-                f"Climatologies required for target_mode={s.target_mode!r}"
+                f"Climatologies are required for target_mode={s.target_mode!r}"
             )
 
-        ref_ds = dataset.target_ds
+        ref = dataset.target_ds
+        time_dim = ref.earthml.guessed_dims.time
+        lat_dim = ref.earthml.guessed_dims.latitude
+        lon_dim = ref.earthml.guessed_dims.longitude
+        if any(dim is None for dim in (time_dim, lat_dim, lon_dim)):
+            raise ValueError("Cannot identify target time/latitude/longitude dims")
 
-        time_dim = ref_ds.earthml.guessed_dims.time
-        lat_dim = ref_ds.earthml.guessed_dims.latitude
-        lon_dim = ref_ds.earthml.guessed_dims.longitude
-
-        if time_dim is None or lat_dim is None or lon_dim is None:
-            raise ValueError("Cannot determine target dimensions")
-
-        times = ref_ds[time_dim].values
+        times = ref[time_dim].values
         n_times = len(times)
+        n_per_init = dataset.samples_per_init
+        if n_samples != n_times * n_per_init:
+            raise ValueError(
+                f"Sample/time mismatch: {n_samples} != {n_times} * {n_per_init}"
+            )
 
-        fc = select_clim_for_time(
-            fc_clim, times, s.clim_period,
-        )[s.var_fc]
+        fc = select_clim_for_time(fc_clim, times, s.clim_period)[s.var_fc]
+        an = select_clim_for_time(an_clim, times, s.clim_period)[s.var_an]
 
-        an = select_clim_for_time(
-            an_clim, times, s.clim_period,
-        )[s.var_an]
+        # The deterministic residual anomaly is defined using an ensemble mean of forecast anomalies
+        if s.target_mode == "anomaly_residual" and "realization" in fc.dims:
+            fc = fc.mean("realization", skipna=True)
 
-        fc = fc.sel({
-            lat_dim: ref_ds[lat_dim],
-            lon_dim: ref_ds[lon_dim],
+        delta = (fc - an).sel({
+            lat_dim: ref[lat_dim],
+            lon_dim: ref[lon_dim],
         })
-        an = an.sel({
-            lat_dim: ref_ds[lat_dim],
-            lon_dim: ref_ds[lon_dim],
-        })
 
-        realization_dim = fc.earthml.guessed_dims.realization
+        expected_grid = (height, width)
+        if (delta.sizes[lat_dim], delta.sizes[lon_dim]) != expected_grid:
+            raise ValueError("Climatology/target spatial dimensions differ")
 
-        # Deterministic anomaly-residual targets use the
-        # ensemble-mean forecast anomaly.
-        if (
-            s.target_mode == "anomaly_residual"
-            and realization_dim is not None
-            and realization_dim in fc.dims
-        ):
-            fc = fc.mean(realization_dim, skipna=True)
+        extra = set(delta.dims) - {time_dim, lat_dim, lon_dim, "realization"}
+        if extra:
+            raise ValueError(f"Unexpected climatology dimensions: {sorted(extra)}")
 
-        delta = fc - an
-
-        if realization_dim is None or realization_dim not in delta.dims:
+        if "realization" not in delta.dims:
             values = np.asarray(
                 delta.transpose(time_dim, lat_dim, lon_dim).values
             ).copy()
 
-            # (T, H, W) -> (T, 1, H, W)
-            tensor = torch.as_tensor(
-                values, dtype=target_raw.dtype
-            ).unsqueeze(1)
-
-            # Repeat across realizations-as-samples.
-            samples_per_init = dataset.samples_per_init
-
-            if n_samples != n_times * samples_per_init:
-                raise ValueError(
-                    "Cannot align climatology with samples: "
-                    f"{n_samples} != {n_times} * {samples_per_init}"
-                )
-
-            tensor = tensor.repeat_interleave(
-                samples_per_init, dim=0
-            )
-
-            # Repeat across output channels when the
-            # climatology has no realization dependence.
-            if n_channels > 1:
-                tensor = tensor.expand(
-                    -1, n_channels, -1, -1
-                )
+            result = torch.as_tensor(values, dtype=raw_target.dtype)
+            result = result[:, None, :, :].repeat_interleave(n_per_init, dim=0)
+            result = result.expand(-1, n_channels, -1, -1)
 
         else:
             values = np.asarray(
-                delta.transpose(
-                    time_dim, realization_dim, lat_dim, lon_dim
-                ).values
+                delta.transpose(time_dim, "realization", lat_dim, lon_dim).values
             ).copy()
 
-            # (T, R, H, W)
             n_realizations = values.shape[1]
+            result = torch.as_tensor(values, dtype=raw_target.dtype)
 
-            tensor = torch.as_tensor(
-                values, dtype=target_raw.dtype
-            )
-
-            if (
-                n_samples == n_times * n_realizations
-                and n_channels == 1
-            ):
-                # Realizations flattened into samples.
-                tensor = tensor.reshape(
-                    n_samples, 1, height, width
-                )
-
-            elif (
-                n_samples == n_times
-                and n_channels == n_realizations
-            ):
-                # Realizations represented as channels.
+            if n_realizations == n_per_init and n_channels == 1:
+                # Time-major samples: (T,R,H,W) -> (T*R,1,H,W)
+                result = result.reshape(n_samples, 1, height, width)
+            elif n_per_init == 1 and n_realizations == n_channels:
+                # Realizations packed as target channels: (T,R,H,W)
                 pass
-
             elif n_realizations == 1:
-                # Singleton realization: broadcast across samples
-                # and channels if required.
-                tensor = tensor.repeat_interleave(
-                    dataset.samples_per_init, dim=0
-                ).expand(-1, n_channels, -1, -1)
-
+                result = result.repeat_interleave(n_per_init, dim=0)
+                result = result.expand(-1, n_channels, -1, -1)
+            elif n_per_init == 1 and n_channels == 1:
+                # Deterministic target with ensemble climatology
+                result = result.mean(dim=1, keepdim=True)
             else:
                 raise ValueError(
-                    "Cannot align realization-dependent climatology "
-                    "with the NN target layout: "
-                    f"climatology={tuple(tensor.shape)}, "
-                    f"target={tuple(target_raw.shape)}"
+                    "Cannot align climatology realizations with target: "
+                    f"climatology={tuple(result.shape)}, "
+                    f"target={tuple(raw_target.shape)}, "
+                    f"samples_per_init={n_per_init}"
                 )
 
-        if tensor.shape != target_raw.shape:
+        if result.shape != raw_target.shape:
             raise ValueError(
                 "Climatology/target shape mismatch: "
-                f"{tuple(tensor.shape)} != {tuple(target_raw.shape)}"
+                f"{tuple(result.shape)} != {tuple(raw_target.shape)}"
             )
-
-        return tensor
-
-    # ----------------------------------------------------------
-    # Original-forecast baseline in raw target space
-    # ----------------------------------------------------------
+        return result
 
     if s.target_mode == "analysis":
-        baseline_raw = central_forecast()
-
-    elif s.target_mode in {
-        "residual",
-        "residual_realization",
-    }:
-        baseline_raw = torch.zeros_like(target_raw)
-
+        baseline_raw = forecast_tensor()
+    elif s.target_mode in {"residual", "residual_realization"}:
+        baseline_raw = torch.zeros_like(raw_target)
     elif s.target_mode == "anomaly":
-        baseline_raw = central_forecast() + climatology_difference()
-
+        baseline_raw = forecast_tensor() + climatology_difference()
     elif s.target_mode in {
-        "anomaly_residual",
-        "anomaly_residual_realization",
+        "anomaly_residual", "anomaly_residual_realization",
     }:
         baseline_raw = climatology_difference()
-
     else:
-        raise ValueError(
-            f"Unsupported target_mode={s.target_mode!r}"
-        )
-
-    # ----------------------------------------------------------
-    # Apply the same normalization used for the NN target
-    # ----------------------------------------------------------
+        raise ValueError(f"Unsupported target_mode={s.target_mode!r}")
 
     baseline_norm = normalize_target(
         baseline_raw,
@@ -4691,10 +4621,10 @@ def get_normalized_baseline(
         **target_sample_kwargs,
     )
 
-    if baseline_norm.shape != target_raw.shape:
+    if baseline_norm.shape != raw_target.shape:
         raise ValueError(
-            "Normalized baseline shape mismatch: "
-            f"{tuple(baseline_norm.shape)} != {tuple(target_raw.shape)}"
+            "Normalized baseline/target shape mismatch: "
+            f"{tuple(baseline_norm.shape)} != {tuple(raw_target.shape)}"
         )
 
     return baseline_norm.detach().float().cpu()
@@ -4789,34 +4719,22 @@ def _test(
     # Diagnostics
     # ----------------------------------------------------------
 
-    baseline_norm: torch.Tensor | None
+    baseline_norm: torch.Tensor | None = None
 
-    if s.target_mode == "analysis":
-        baseline = dataset.x.detach().float().cpu()
-
-        # Remove optional auxiliary input channels and keep only
-        # the forecast channels corresponding to the target
-        baseline = baseline[
-            :,
-            list(dataset.target_to_input_channel_indices()),
-        ]
-
-        baseline_norm = normalize_target(
-            baseline,
-            **target_sample_kwargs,
-        )
-
-    elif s.target_mode in {
-        "residual",
-        "residual_realization",
+    # Use one baseline definition for both diagnostics and saved tensors
+    # Preserve the previous behavior of skipping anomaly baselines in diagnostics when normalized saving is disabled
+    if save_normalized or s.target_mode in {
+        "analysis", "residual", "residual_realization",
     }:
-        baseline_norm = normalize_target(
-            torch.zeros_like(targets_norm),
-            **target_sample_kwargs,
+        baseline_norm = get_normalized_baseline(
+            s=s,
+            dataset=dataset,
+            normalize_target=normalize_target,
+            target_sample_kwargs=target_sample_kwargs,
+            months=test_months,
+            fc_clim=fc_clim,
+            an_clim=an_clim,
         )
-
-    else:
-        baseline_norm = None
 
     if (
         baseline_norm is not None
@@ -4866,7 +4784,7 @@ def _test(
 
             monthly_diag_table_to_print = Table(
                 month_diagnostics,
-                title=f"Normalized diagnostics — month {int(month):02d}",
+                title=f"Normalized diagnostics - month {int(month):02d}",
                 params_name="Metric",
                 nested_rows=True,
             ).table
@@ -4909,26 +4827,19 @@ def _test(
             equal_nan=True,
         )
 
-        baseline_normalized = get_normalized_baseline(
-            s=s,
-            dataset=dataset,
-            normalize_target=normalize_target,
-            target_sample_kwargs=target_sample_kwargs,
-            months=test_months,
-            fc_clim=fc_clim,
-            an_clim=an_clim,
-        )
+        if baseline_norm is None:
+            raise RuntimeError("Normalized baseline was not computed")
 
         save_normalized_fields(
             dataset=dataset,
             inputs=inputs_norm,
             targets=targets_norm,
             predictions=preds_norm,
-            baseline=baseline_normalized,
+            baseline=baseline_norm,
             filepath=normalized_store,
         )
 
-        del inputs_norm, targets_check, baseline_normalized
+        del inputs_norm, targets_check
         del input_batches, target_batches
 
     preds = normalize_target.inverse_tensor(
