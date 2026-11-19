@@ -596,8 +596,12 @@ def main() -> None:
                     reduction_ratio=16,
                     depth=5,
                     kernels_per_layer=2,
+                    conv_kernel_size=5,
+                    cbam_kernel_size=7,
                     base_channels=64,
                     bilinear=True,
+                    use_cbam=True,
+                    use_unet_skip_connections=True,
                     # longitude_padding = "circular", # global (seasonal)
                     # longitude_padding="zero", # creates artifacts near the border
                     # longitude_padding = "replicate", # regional (weather)
@@ -3780,7 +3784,6 @@ def convert_to_xarray(
     return pred_ds_raw
 
 
-
 def save_normalized_fields(
     dataset: XarrayDataset,
     inputs: torch.Tensor,
@@ -3788,6 +3791,7 @@ def save_normalized_fields(
     predictions: torch.Tensor,
     baseline: torch.Tensor,
     filepath: Path,
+    baseline_zero_correction: torch.Tensor | None = None,
 ) -> None:
     """Save normalized NN tensors with time, channel and spatial coordinates."""
 
@@ -3802,6 +3806,12 @@ def save_normalized_fields(
 
     if baseline.shape != targets.shape:
         raise ValueError(f"Baseline/target shape mismatch: {baseline.shape} != {targets.shape}")
+
+    if (
+        baseline_zero_correction is not None
+        and baseline_zero_correction.shape != targets.shape
+    ):
+        raise ValueError("Zero-correction baseline/target shape mismatch")
 
     ref_ds = dataset.input_ds
 
@@ -3863,6 +3873,7 @@ def save_normalized_fields(
             "target": (target_dims, reshape(targets)),
             "prediction": (target_dims, reshape(predictions)),
             "baseline": (target_dims, reshape(baseline)),
+            "baseline_zero_correction": (target_dims, reshape(baseline_zero_correction)),
         },
         coords={
             time_dim: times,
@@ -4493,6 +4504,9 @@ def _combine_predictions(
     del leadtime_datasets, combined_preds
     gc.collect()
 
+# ==========================================================
+# Baselines
+# ==========================================================
 
 def get_normalized_baseline(
     s: Settings,
@@ -4636,6 +4650,30 @@ def get_normalized_baseline(
     return baseline_norm.detach().float().cpu()
 
 
+def get_normalized_zero_correction_baseline(
+    dataset: XarrayDataset,
+    normalize_target: Normalize | MonthlyNormalize,
+    target_sample_kwargs: dict,
+    months: torch.Tensor,
+) -> torch.Tensor:
+    """Zero physical correction expressed in normalized target space."""
+
+    baseline_raw = torch.zeros_like(
+        dataset.y.detach().float().cpu()
+    )
+
+    baseline_norm = normalize_target(
+        baseline_raw,
+        months=months,
+        **target_sample_kwargs,
+    )
+
+    return baseline_norm.detach().float().cpu()
+
+# ==========================================================
+# Test
+# ==========================================================
+
 def _test(
     test_trainer: L.Trainer,
     s: Settings,
@@ -4760,6 +4798,48 @@ def _test(
         baseline=baseline_norm,
     )
 
+    # ----------------------------------------------------------
+    # No ML correction baseline
+    # ----------------------------------------------------------
+
+    zero_correction_norm = None
+
+    if s.target_mode in {
+        "residual",
+        "residual_realization",
+        "anomaly_residual",
+        "anomaly_residual_realization",
+    }:
+        zero_correction_norm = get_normalized_zero_correction_baseline(
+            dataset=dataset,
+            normalize_target=normalize_target,
+            target_sample_kwargs=target_sample_kwargs,
+            months=test_months,
+        )
+
+        zero_diagnostics = diagnostics(
+            preds=preds_norm,
+            target=targets_norm,
+            mask=masks,
+            latitudes=latitudes,
+            baseline=zero_correction_norm,
+        )
+
+        zero_table = Table(
+            zero_diagnostics,
+            title="Normalized diagnostics - ML contribution",
+            params_name="Metric",
+            nested_rows=True,
+        ).table
+
+        log_renderable(
+            zero_table,
+            logger=logger,
+        )
+
+        if zero_correction_norm.shape != targets_norm.shape:
+            raise ValueError("Zero-correction baseline shape mismatch")
+
     diag_table_to_print = Table(
         diagnostic_table,
         title="Normalized tensor diagnostics",
@@ -4843,6 +4923,7 @@ def _test(
             predictions=preds_norm,
             baseline=baseline_norm,
             filepath=normalized_store,
+            baseline_zero_correction=zero_correction_norm,
         )
 
         del inputs_norm, targets_check
