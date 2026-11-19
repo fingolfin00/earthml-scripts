@@ -6,18 +6,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-import torch
-
 import earthml
 from earthml import (
     Settings,
     Leadtime,
     LeadtimeUnit,
     ClimPeriod,
-    MonthlyNormalize,
-    Normalize,
-    XarrayDataset,
-    SplitDataModule,
     get_experiment_configs,
     get_and_subset_datasets,
     open_zarr,
@@ -38,7 +32,6 @@ from earthml.plots import (
 
 from locations import CITY_LOCATIONS, SEA_LOCATIONS
 
-from train import make_train_test_datasets_for_leadtime
 
 # ============================================================================
 # Definitions
@@ -49,15 +42,15 @@ FieldName = Literal[
     "input",                        # actual model input (normalized: ALL x channels)
     "baseline",                     # baseline expressed in target space
     "target",                       # actual model target (normalized: y)
-    "corrected",                    # model-corrected field expressed in target space
+    "corrected",                    # normalized NN prediction or physical corrected forecast
     # Derived fields
-    "input_error",                  # fc - an
+    "input_error",                  # baseline - an
     "corrected_error",              # mlfc - an
-    "ideal_correction",             # an - fc
-    "correction",                   # mlfc - fc = (mlfc - an) - (fc - an)
-    "input_squared_error",          # (fc - an)^2
+    "ideal_correction",             # an - baseline
+    "correction",                   # mlfc - baseline = (mlfc - an) - (baseline - an)
+    "input_squared_error",          # (baseline - an)^2
     "corrected_squared_error",      # (mlfc - an)^2
-    "squared_error_improvement",    # (mlfc - an)^2 - (fc - an)^2  (negative sign mean improvement)
+    "squared_error_improvement",    # (mlfc - an)^2 - (baseline - an)^2  (negative sign mean improvement)
 ]
 
 AggFieldName = Literal[
@@ -116,19 +109,19 @@ INTERPOLATE = False # weather
 NORMALIZED = True
 
 PLOT_FIELDS: tuple[FieldName, ...] = (
-    # Errors and corrections
+    # Full fields
     "input",                        # network input in normalized mode
     "baseline",                     # baseline in target space
     "target",                       # training target in normalized mode
-    "corrected",                    # reconstructed model prediction in target space
+    "corrected",                    # saved normalized NN prediction, or physical ML forecast
     # Errors and corrections
-    "input_error",                  # fc - an
+    "input_error",                  # baseline - an
     "corrected_error",              # mlfc - an
-    "ideal_correction",             # an - fc
-    "correction",                   # mlfc - fc = (mlfc - an) - (fc - an)
-    "input_squared_error",          # (fc - an)^2
+    "ideal_correction",             # an - baseline
+    "correction",                   # mlfc - baseline = (mlfc - an) - (baseline - an)
+    "input_squared_error",          # (baseline - an)^2
     "corrected_squared_error",      # (mlfc - an)^2
-    "squared_error_improvement",    # (mlfc - an)^2 - (fc - an)^2  (negative sign mean improvement)
+    "squared_error_improvement",    # (mlfc - an)^2 - (baseline - an)^2  (negative sign mean improvement)
 
     # # Anomalies
     # "input_anomaly",                # fc - fc_clim
@@ -144,8 +137,8 @@ AGGREGATED_FIELDS: tuple[AggFieldName, ...] = (
 
 PHYSICAL_ANOMALIES = False
 
-# CLIM_TIME_RANGE: TimeRangeSplit | tuple[str, str] = "train"
-CLIM_TIME_RANGE: TimeRangeSplit | tuple[str, str] = "train_val"
+CLIM_TIME_RANGE: TimeRangeSplit | tuple[str, str] = "train"
+# CLIM_TIME_RANGE: TimeRangeSplit | tuple[str, str] = "train_val"
 CLIM_PERIOD: ClimPeriod = ClimPeriod.MONTH
 # CLIM_PERIOD: ClimPeriod = ClimPeriod.HOUR
 CLIM_ROLLING_WINDOW: int | None = None
@@ -185,10 +178,11 @@ FILTERS = dict(
     target_mode="residual",
     # loss_name="GeoMaskedMSELoss",
     # train_subsamples=264,
-    # normalization_input_mean="channel",
-    # normalization_input_std="channel",
+    # normalization_input_mean="sample",
+    # normalization_input_std="sample",
     # normalization_target_mean=0,
     # normalization_target_std="channel",
+    # extra_input_variables=(),
     # extra_suffix_folder="depth5_baseC64RR16_KS5_smaaunet",
     # extra_suffix_folder="baseC64RR8_smaaunet",
 )
@@ -204,16 +198,13 @@ TIME_SPLIT: TimeRangeSplit = "test"
 # "train", "val", "test", "train_val", "full"
 
 INFERENCE_PERIOD: TimeRangeSplit | tuple[str, str] | None = None
-# None -> use the experiment default MLFC; "test" -> use inference/<saved test dates>/test_corrected.zarr
+# None -> default split stores; otherwise use inference/<start>_<end>/test_{corrected,normalized}.zarr
 # INFERENCE_PERIOD = ("2025-01-01", "2025-05-12")
 # INFERENCE_PERIOD = ("2025-01-01T00:00:00", "2025-01-01T00:00:00")
 
 # Initialization times to plot. None -> all times in the selected split
 WANTED_TIMES: list[str] | None = [
-    # "2025-03-08T00:00:00",
-    # "2025-01-17T00:00:00",
-    "2025-02-13T00:00:00", # W3
-    "2025-02-02T00:00:00", # B6
+    "2023-04-01T00:00:00",
 ]
 # WANTED_TIMES: list[str] | None = None
 
@@ -468,8 +459,8 @@ class Fields:
 def main() -> None:
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
-        var_fc=VARIABLES,
-        region_name=REGIONS,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
         **FILTERS,
     )
 
@@ -528,205 +519,6 @@ def main() -> None:
             )
 
     print(f"Done. Saved {n_saved} map(s).")
-
-# ============================================================================
-# Normalization
-# ============================================================================
-
-def make_normalizers(
-    s: Settings,
-    train_dataset: XarrayDataset,
-    val_dataset: XarrayDataset | None,
-) -> tuple[Normalize, Normalize]:
-    """Fit exactly as inference.py, on the selected training subset."""
-    if s.normalization != "full":
-        raise NotImplementedError(
-            "Monthly normalization is not supported by the current inference.py"
-        )
-
-    member_seed = s.seed if isinstance(s.seed, int) else s.seed[0]
-    datamodule = SplitDataModule(
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        train_fraction=s.train_fraction,
-        batch_size=s.batch_size,
-        seed=member_seed,
-        num_workers=0,
-        split_strategy=s.split_strategy,
-        shuffle_train=s.shuffle_train_batch,
-        pin_memory=None,
-        persistent_workers=None,
-        drop_last_train=False,
-        group_batches_by_month=False,
-        train_subsamples=s.train_subsamples,
-        val_subsamples=s.val_subsamples,
-    )
-    datamodule.setup("fit")
-
-    normalize_input = Normalize(
-        mean=s.normalization_input_mean,
-        std=s.normalization_input_std,
-    ).fit(datamodule.train_dataset, dim="x")
-
-    normalize_target = Normalize(
-        mean=s.normalization_target_mean,
-        std=s.normalization_target_std,
-    ).fit(datamodule.train_dataset, dim="y")
-
-    return normalize_input, normalize_target
-
-
-# ============================================================================
-# Dataset helpers
-# ============================================================================
-
-def dataset_kwargs_from_settings(s) -> dict:
-    return {
-        "target_realization_avg": s.target_realization_avg,
-        "channel_representation": s.channel_representation,
-        "init_period_dim": s.init_period_dim,
-        "output_realizations": s.output_realizations,
-        "torch_mask": s.torch_mask,
-        "fill_nan_value": s.fill_nan_value,
-        "sample_target_mean": s.sample_target_mean,
-        "sample_target_std": s.sample_target_std,
-    }
-
-
-def get_sample_times(dataset: XarrayDataset) -> np.ndarray:
-    """Return one initialization time for every dataset sample."""
-    time_dim = dataset.input_ds.earthml.guessed_dims.time
-
-    if time_dim is None:
-        raise ValueError("Could not determine input time dimension.")
-
-    init_times = dataset.input_ds[time_dim].values
-    sample_times = np.repeat(init_times, dataset.samples_per_init)
-
-    if len(sample_times) != len(dataset):
-        raise RuntimeError(
-            "Cannot align initialization times with dataset samples: "
-            f"{len(sample_times)=}, {len(dataset)=}"
-        )
-
-    return sample_times
-
-
-def make_normalized_datasets_for_leadtime(
-    s: Settings,
-    leadtime: int,
-) -> tuple[dict[str, XarrayDataset | None], Normalize, Normalize]:
-    """Reproduce the input channels, datasets, and training normalizers used by inference.py."""
-    if s.regional_training or s.separate_training_by_init_period is not None:
-        raise NotImplementedError(
-            "These training modes are also unsupported by the current inference.py"
-        )
-
-    explicit_split = s.split_strategy == "explicit"
-    train_end = s.train_end if explicit_split else s.val_end
-
-    forecast_vars = [s.var_fc, *s.extra_input_variables]
-    if len(forecast_vars) != len(set(forecast_vars)):
-        raise ValueError("Duplicate forecast input variables")
-
-    orography_ds = (
-        xr.open_zarr(s.orography_path)
-        if s.orography_encoding and s.orography_path is not None
-        else None
-    )
-
-    datasets = make_train_test_datasets_for_leadtime(
-        forecast_ds_path=[s.input_fc, *s.extra_input_fc],
-        analysis_ds_path=s.input_an,
-        leadtime=leadtime,
-        leadtime_unit=s.leadtime_unit,
-        train_start=s.train_start,
-        train_end=train_end,
-        val_start=s.val_start if explicit_split else None,
-        val_end=s.val_end if explicit_split else None,
-        test_start=s.test_start,
-        test_end=s.test_end,
-        target_mode=s.target_mode,
-        clim_period=s.clim_period,
-        forecast_vars=forecast_vars,
-        analysis_vars=[s.var_an],
-        region=s.region,
-        dataset_kwargs=dataset_kwargs_from_settings(s),
-        temporal_evolution_encoding=s.temporal_evolution_encoding,
-        climatology_encoding=s.climatology_encoding,
-        climatology_error_encoding=s.climatology_error_encoding,
-        seasonal_encoding=s.seasonal_encoding and s.channel_representation != "init_period",
-        ensemble_encoding=s.ensemble_encoding,
-        spatial_encoding=s.spatial_encoding,
-        orography_encoding=s.orography_encoding,
-        orography_ds=orography_ds,
-        input_realization_avg=s.input_realization_avg,
-        interpolate_analysis=INTERPOLATE,
-        materialize=False,
-        separate_training_by_init_period=None,
-        defer_dataset_creation=False,
-    )
-
-    train_dataset = datasets["train"]
-    val_dataset = datasets["val"]
-    test_dataset = datasets["test"]
-
-    if not isinstance(train_dataset, XarrayDataset):
-        raise TypeError("Expected XarrayDataset for training data")
-    if val_dataset is not None and not isinstance(val_dataset, XarrayDataset):
-        raise TypeError("Expected XarrayDataset for validation data")
-    if not isinstance(test_dataset, XarrayDataset):
-        raise TypeError("Expected XarrayDataset for test data")
-
-    normalize_input, normalize_target = make_normalizers(
-        s, train_dataset, val_dataset,
-    )
-
-    # Mirror inference.py's dataset normalization configuration
-    train_dataset.sample_target_mean = s.sample_target_mean
-    train_dataset.sample_target_std = s.sample_target_std
-    test_dataset.sample_target_mean = "input"
-    test_dataset.sample_target_std = "input"
-
-    train_dataset.transform_x = normalize_input
-    train_dataset.transform_y = normalize_target
-    test_dataset.transform_x = normalize_input
-    test_dataset.transform_y = normalize_target
-
-    if val_dataset is not None:
-        val_dataset.transform_x = normalize_input
-        val_dataset.transform_y = normalize_target
-
-    return (
-        {"train": train_dataset, "val": val_dataset, "test": test_dataset},
-        normalize_input,
-        normalize_target,
-    )
-
-
-def get_split_for_time(
-    s: Settings,
-    time: pd.Timestamp,
-) -> Literal["train", "val", "test"]:
-    splits = {
-        "train": (s.train_start, s.train_end),
-        "val": (s.val_start, s.val_end),
-        "test": (s.test_start, s.test_end),
-    }
-
-    matching = [
-        split
-        for split, (start, end) in splits.items()
-        if pd.Timestamp(start) <= time < pd.Timestamp(end)
-    ]
-
-    if len(matching) != 1:
-        raise ValueError(
-            f"Expected exactly one split for {time}, "
-            f"found {matching}"
-        )
-
-    return matching[0]
 
 # ======================================================
 # Load dataset helpers
@@ -1111,148 +903,98 @@ def get_physical_anomaly_fields(
     )
 
 # ============================================================================
-# Normalized fields
+# Normalized fields (read from training outputs, never reconstructed)
 # ============================================================================
 
-def get_normalized_fields(
+def get_normalized_dataset(
     s: Settings,
-    dataset: XarrayDataset,
+    split: Literal["train", "val", "test"],
     leadtime: int,
-    init_time: pd.Timestamp,
-    forecast_da: xr.DataArray,
-    analysis_da: xr.DataArray,
-    corrected_da: xr.DataArray | None,
-    sample_index: int,
-    normalize_input: Normalize,
-    normalize_target: Normalize,
-) -> Fields:
-    """Plot exactly the input/target tensors seen by the model.
-
-    Error and correction maps use separate *target-space* baseline/ML prediction.
-    The physical fields serve only to map the reconstructed ML forecast back
-    into training-target space; they are not used as the displayed NN input.
-    """
-    x, y, _, month = dataset[sample_index]
-    input_tensor = x.detach().float().cpu()
-    target_tensor = y.detach().float().cpu()
-    raw_input = dataset.x[sample_index].detach().float().cpu()
-    raw_target = dataset.y[sample_index].detach().float().cpu()
-    input_mask = dataset.x_mask[sample_index].detach().bool().cpu()
-    target_mask = dataset.y_mask[sample_index].detach().bool().cpu()
-
-    corrected_kwargs: dict[str, torch.Tensor] = {}
-    if normalize_target.uses_sample_stats:
-        input_mean, input_std = normalize_input.resolve_sample_mean_or_std(
-            tensor=raw_input.unsqueeze(0),
-            mask=dataset.x_mask[sample_index:sample_index + 1],
+    inference_period: TimeRangeSplit | tuple[str, str] | None = None,
+) -> xr.Dataset:
+    if inference_period is None:
+        path = s.output_dir / f"{split}_normalized.zarr"
+    else:
+        if split != "test":
+            raise ValueError("Custom inference normalized datasets use the test split")
+        start, end = _select_range(s, inference_period)
+        path = (
+            s.exp_dir
+            / "inference"
+            / f"{start}_{end}"
+            / "test_normalized.zarr"
         )
-        included = normalize_input.included_channels
-        if included is None:
-            raise ValueError("Input normalizer has no included_channels")
-        positions = {channel: pos for pos, channel in enumerate(included)}
-        selected = [positions[i] for i in dataset.target_to_input_channel_indices()]
-        if normalize_target.mean_spec == "sample":
-            corrected_kwargs["mean"] = input_mean[:, selected][0]
-        if normalize_target.std_spec == "sample":
-            corrected_kwargs["std"] = input_std[:, selected][0]
+    if not path.exists():
+        raise FileNotFoundError(f"Normalized fields not found: {path}")
 
-    ref_ds = dataset.input_ds
-    lat_dim = ref_ds.earthml.guessed_dims.latitude
-    lon_dim = ref_ds.earthml.guessed_dims.longitude
-    if lat_dim is None or lon_dim is None:
-        raise ValueError("Could not determine latitude/longitude dimensions")
-    latitude = np.asarray(ref_ds[lat_dim].values)
-    longitude = np.asarray(ref_ds[lon_dim].values)
+    ds = open_zarr(path)
+    required = {"input", "target", "prediction", "baseline"}
+    missing = required - set(ds.data_vars)
+    if missing:
+        raise ValueError(f"Missing fields in {path}: {sorted(missing)}")
 
-    def physical_sample(da: xr.DataArray) -> torch.Tensor:
-        time_dim = da.earthml.guessed_dims.time
-        lead_dim = da.earthml.guessed_dims.leadtime
-        if time_dim is not None and time_dim in da.dims:
-            da = da.sel({time_dim: np.datetime64(init_time)})
-        if lead_dim is not None and lead_dim in da.dims:
-            da = da.sel({lead_dim: leadtime})
-        da = da.sel({lat_dim: ref_ds[lat_dim], lon_dim: ref_ds[lon_dim]})
-        realization_dim = da.earthml.guessed_dims.realization
-        if realization_dim is not None and realization_dim in da.dims:
-            n_realizations = da.sizes[realization_dim]
-            if dataset.samples_per_init > 1 and n_realizations == dataset.samples_per_init:
-                da = da.isel({realization_dim: sample_index % dataset.samples_per_init}, drop=True)
-            elif raw_target.shape[0] == n_realizations:
-                da = da.transpose(realization_dim, lat_dim, lon_dim)
-            else:
-                da = da.mean(realization_dim, skipna=True)
-        da = da.squeeze(drop=True)
-        if da.ndim == 2:
-            da = da.transpose(lat_dim, lon_dim).expand_dims(channel=[0])
-        elif da.ndim == 3:
-            nonspatial = [d for d in da.dims if d not in (lat_dim, lon_dim)]
-            if len(nonspatial) != 1:
-                raise ValueError(f"Unexpected physical dimensions: {da.dims}")
-            da = da.transpose(nonspatial[0], lat_dim, lon_dim)
-        else:
-            raise ValueError(f"Unexpected physical dimensions: {da.dims}")
-        result = torch.as_tensor(np.asarray(da.values).copy(), dtype=raw_target.dtype)
-        if result.shape != raw_target.shape:
-            raise ValueError(f"Physical shape {result.shape} != target shape {raw_target.shape}")
-        return result
+    if "leadtime" not in ds.dims:
+        raise ValueError(f"Missing leadtime dimension in {path}")
+    available_leadtimes = ds["leadtime"].values
+    if leadtime not in available_leadtimes:
+        raise ValueError(
+            f"Leadtime {leadtime} is missing from {path}; "
+            f"available: {available_leadtimes.tolist()}"
+        )
 
-    # Target transformations in these modes are additive (analysis, residual,
-    # anomaly, anomaly_residual and their realization variants). Consequently
-    # adding a physical forecast-minus-analysis difference in unnormalized
-    # target space maps the physical forecast into the same training target space.
-    supported_modes = {
-        "analysis", "residual", "residual_realization", "anomaly",
-        "anomaly_residual", "anomaly_residual_realization",
-    }
-    if s.target_mode not in supported_modes:
-        raise ValueError(f"Unsupported target mode for normalized plots: {s.target_mode!r}")
+    ds = ds.sel(leadtime=leadtime, drop=True)
 
-    forecast_phys = physical_sample(forecast_da)
-    analysis_phys = physical_sample(analysis_da)
-    baseline_raw = raw_target + (forecast_phys - analysis_phys)
-    baseline_tensor = normalize_target(
-        baseline_raw, months=int(month), **corrected_kwargs,
-    ).detach().float().cpu()
+    # Neural ensembles need an explicit member-selection policy;
+    # do not silently average independently normalized predictions.
+    if "neural_member" in ds.dims:
+        raise NotImplementedError(
+            "Select a neural member explicitly before plotting normalized fields"
+        )
 
-    corrected_tensor: torch.Tensor | None = None
-    if corrected_da is not None:
-        corrected_phys = physical_sample(corrected_da)
-        corrected_raw = raw_target + (corrected_phys - analysis_phys)
-        corrected_tensor = normalize_target(
-            corrected_raw, months=int(month), **corrected_kwargs,
-        ).detach().float().cpu()
+    return ds
 
-    def to_dataarray(name: str, tensor: torch.Tensor, mask: torch.Tensor) -> xr.DataArray:
-        if tensor.ndim != 3 or tensor.shape != mask.shape:
-            raise ValueError(
-                f"{name}: expected equal (C,H,W) tensor/mask, "
-                f"got {tuple(tensor.shape)} and {tuple(mask.shape)}"
-            )
-        if tensor.shape[-2:] != (len(latitude), len(longitude)):
-            raise ValueError(f"{name}: spatial shape does not match lat/lon coordinates")
-        values = tensor.numpy().astype(float, copy=True)
-        values[~mask.numpy()] = np.nan
-        return xr.DataArray(
-            values,
-            dims=("channel", lat_dim, lon_dim),
-            coords={
-                "channel": np.arange(tensor.shape[0]),
-                lat_dim: latitude,
-                lon_dim: longitude,
-            },
-            name=name,
-            attrs={"units": "normalized", "long_name": f"normalized {name}"},
+
+def get_normalized_fields(
+    ds: xr.Dataset,
+    init_time: pd.Timestamp,
+    sample_within_init: int,
+) -> Fields:
+    sample = ds.sel(time=np.datetime64(init_time))
+
+    if "sample_within_init" in sample.dims:
+        sample = sample.sel(sample_within_init=sample_within_init, drop=True)
+    elif sample_within_init != 0:
+        raise ValueError(
+            "Cannot select a nonzero sample from a single-sample dataset"
+        )
+
+    def get_field(name: str) -> xr.DataArray:
+        da = sample[name]
+        channel_dim = "input_channel" if name == "input" else "target_channel"
+        if channel_dim not in da.dims:
+            raise ValueError(f"Missing {channel_dim!r} in normalized {name}")
+        da = da.rename({channel_dim: "channel"})
+
+        # Apply saved validity masks when present. Older normalized stores
+        # may lack masks; filled invalid zeros cannot be recovered from them.
+        mask_name = "input_mask" if name == "input" else "target_mask"
+        if mask_name in sample:
+            mask = sample[mask_name]
+            if channel_dim in mask.dims:
+                mask = mask.rename({channel_dim: "channel"})
+            da = da.where(mask.astype(bool))
+
+        return da.assign_attrs(
+            units="normalized", long_name=f"normalized {name}"
         )
 
     return Fields(
-        input=to_dataarray("input", input_tensor, input_mask),
-        baseline=to_dataarray("baseline", baseline_tensor, target_mask),
-        target=to_dataarray("target", target_tensor, target_mask),
-        corrected=(
-            to_dataarray("corrected", corrected_tensor, target_mask)
-            if corrected_tensor is not None else None
-        ),
+        input=get_field("input"),
+        target=get_field("target"),
+        baseline=get_field("baseline"),
+        corrected=get_field("prediction"),  # Saved normalized NN output.
     )
+
 
 # ============================================================================
 # Subset helpers
@@ -1367,67 +1109,23 @@ def get_selected_samples(
     normalized: bool,
     leadtime: int,
 ) -> list[tuple[int, pd.Timestamp, int, Fields]]:
-    if WANTED_TIMES is None:
-        requested_times = None
-    else:
-        requested_times = pd.DatetimeIndex(
-            pd.to_datetime(WANTED_TIMES)
-        ).unique().sort_values()
-
-        if requested_times.empty:
-            return []
-
-    time_range = TIME_SPLIT
-
-    # ----------------------------------------------------------
-    # Load physical fields
-    # ----------------------------------------------------------
-
-    physical_fields = get_physical_fields(
-        s=s,
-        time_range=time_range,
-        wanted_leadtimes=[leadtime],
-        wanted_times=(
-            None
-            if requested_times is None
-            else [str(t) for t in requested_times]
-        ),
-        inference_period=INFERENCE_PERIOD,
-        interpolate=INTERPOLATE,
+    requested_times = (
+        None if WANTED_TIMES is None
+        else pd.DatetimeIndex(pd.to_datetime(WANTED_TIMES)).unique().sort_values()
     )
+    if requested_times is not None and requested_times.empty:
+        return []
+
+    selected_samples: list[tuple[int, pd.Timestamp, int, Fields]] = []
 
     # ----------------------------------------------------------
-    # Select available initialization times
+    # Normalized: select saved training/evaluation tensors only.
     # ----------------------------------------------------------
-
-    time_dim = physical_fields.input.earthml.guessed_dims.time
-
-    if time_dim is None:
-        raise ValueError(
-            "Could not determine physical initialization-time dimension."
-        )
-
-    available_times = pd.DatetimeIndex(
-        physical_fields.input[time_dim].values
-    )
-
-    if requested_times is None:
-        requested_times = available_times.unique().sort_values()
-
-    # ----------------------------------------------------------
-    # Determine available samples per split
-    # ----------------------------------------------------------
-
-    times_by_split: dict[str, list[pd.Timestamp]] = {
-        "train": [],
-        "val": [],
-        "test": [],
-    }
-
     if normalized:
-        datasets, normalize_input, normalize_target = (
-            make_normalized_datasets_for_leadtime(s, leadtime)
-        )
+        if INFERENCE_PERIOD is not None and TIME_SPLIT != "test":
+            raise ValueError(
+                "Set TIME_SPLIT='test' when plotting a custom inference period"
+            )
 
         selected_splits = {
             "train": ("train",),
@@ -1438,26 +1136,67 @@ def get_selected_samples(
         }[TIME_SPLIT]
 
         for split in selected_splits:
-            dataset = datasets[split]
-            if dataset is None:
-                continue
+            ds = get_normalized_dataset(
+                s, split, leadtime, inference_period=INFERENCE_PERIOD
+            )
+            available_times = pd.DatetimeIndex(ds.time.values)
 
-            sample_times = pd.DatetimeIndex(
-                get_sample_times(dataset)
-            ).unique().sort_values()
-
-            times_by_split[split] = list(
-                sample_times[
-                    sample_times.isin(requested_times)
-                    & sample_times.isin(available_times)
-                ]
+            times = (
+                available_times if requested_times is None
+                else requested_times[requested_times.isin(available_times)]
             )
 
-    # ----------------------------------------------------------
-    # Physical anomalies
-    # ----------------------------------------------------------
+            n_per_init = int(ds.sizes.get("sample_within_init", 1))
+            if SAMPLE_WITHIN_INIT is not None and not (0 <= SAMPLE_WITHIN_INIT < n_per_init):
+                raise ValueError(
+                    f"SAMPLE_WITHIN_INIT={SAMPLE_WITHIN_INIT} outside "
+                    f"[0, {n_per_init - 1}] for {split}"
+                )
 
-    if not normalized and PHYSICAL_ANOMALIES:
+            sample_indices = (
+                range(n_per_init) if SAMPLE_WITHIN_INIT is None
+                else (SAMPLE_WITHIN_INIT,)
+            )
+
+            for init_time in times:
+                time_index = int(available_times.get_loc(init_time))
+                for sample_within_init in sample_indices:
+                    fields = get_normalized_fields(
+                        ds, pd.Timestamp(init_time), sample_within_init
+                    )
+                    selected_samples.append((
+                        time_index * n_per_init + sample_within_init,
+                        pd.Timestamp(init_time),
+                        sample_within_init,
+                        fields,
+                    ))
+
+        return selected_samples
+
+    # ----------------------------------------------------------
+    # Physical: preserve original forecast/analysis/MLFC behavior.
+    # ----------------------------------------------------------
+    physical_fields = get_physical_fields(
+        s=s,
+        time_range=TIME_SPLIT,
+        wanted_leadtimes=[leadtime],
+        wanted_times=(
+            None if requested_times is None
+            else [str(t) for t in requested_times]
+        ),
+        inference_period=INFERENCE_PERIOD,
+        interpolate=INTERPOLATE,
+    )
+
+    time_dim = physical_fields.input.earthml.guessed_dims.time
+    if time_dim is None:
+        raise ValueError("Could not determine physical initialization-time dimension")
+
+    available_times = pd.DatetimeIndex(physical_fields.input[time_dim].values)
+    if requested_times is None:
+        requested_times = available_times.unique().sort_values()
+
+    if PHYSICAL_ANOMALIES:
         physical_fields = get_physical_anomaly_fields(
             s=s,
             fields=physical_fields,
@@ -1469,128 +1208,91 @@ def get_selected_samples(
             build_analysis=BUILD_ANALYSIS,
         )
 
-    selected_samples = []
+    leadtime_dim = physical_fields.input.earthml.guessed_dims.leadtime
+    if leadtime_dim is None:
+        raise ValueError("Could not determine physical leadtime dimension")
 
-    # ----------------------------------------------------------
-    # Normalized samples
-    # ----------------------------------------------------------
+    realization_dim = "realization"
 
-    if normalized:
-        for split in selected_splits:
-            wanted_times = times_by_split[split]
-            if not wanted_times:
-                continue
+    n_per_init = int(
+        physical_fields.input.sizes.get(realization_dim, 1)
+    )
 
-            dataset = datasets[split]
+    if SAMPLE_WITHIN_INIT is not None and not (
+        0 <= SAMPLE_WITHIN_INIT < n_per_init
+    ):
+        raise ValueError(
+            f"SAMPLE_WITHIN_INIT={SAMPLE_WITHIN_INIT} outside "
+            f"[0, {n_per_init - 1}]"
+        )
 
-            if dataset is None:
-                raise ValueError(
-                    f"Dataset for split {split!r} is unavailable."
-                )
+    sample_indices = (
+        range(n_per_init)
+        if SAMPLE_WITHIN_INIT is None
+        else (SAMPLE_WITHIN_INIT,)
+    )
 
-            sample_times = pd.DatetimeIndex(
-                get_sample_times(dataset)
-            )
+    for init_time in requested_times:
+        matching = np.flatnonzero(available_times == init_time)
 
-            for init_time in wanted_times:
-                matching = np.flatnonzero(
-                    sample_times == init_time
-                )
+        if len(matching) == 0:
+            print(f"WARNING: physical fields unavailable for {init_time}")
+            continue
 
-                indices = (
-                    matching
-                    if SAMPLE_WITHIN_INIT is None
-                    else matching[
-                        SAMPLE_WITHIN_INIT:SAMPLE_WITHIN_INIT + 1
-                    ]
-                )
+        time_index = int(matching[0])
 
-                for sample_within_init, sample_index in enumerate(indices):
-                    fields = get_normalized_fields(
-                        s=s,
-                        dataset=dataset,
-                        leadtime=leadtime,
-                        forecast_da=physical_fields.input,
-                        analysis_da=physical_fields.target,
-                        corrected_da=physical_fields.corrected,
-                        sample_index=int(sample_index),
-                        init_time=init_time,
-                        normalize_input=normalize_input,
-                        normalize_target=normalize_target,
-                    )
-
-                    selected_samples.append((
-                        int(sample_index),
-                        init_time,
-                        (
-                            sample_within_init
-                            if SAMPLE_WITHIN_INIT is None
-                            else SAMPLE_WITHIN_INIT
-                        ),
-                        fields,
-                    ))
-
-    # ----------------------------------------------------------
-    # Physical samples
-    # ----------------------------------------------------------
-
-    else:
-        leadtime_dim = physical_fields.input.earthml.guessed_dims.leadtime
-
-        if leadtime_dim is None:
-            raise ValueError(
-                "Could not determine physical leadtime dimension."
-            )
-
-        for init_time in requested_times:
-            matching = np.flatnonzero(
-                available_times == init_time
-            )
-
-            if len(matching) == 0:
-                print(
-                    f"WARNING: physical fields unavailable for {init_time}"
-                )
-                continue
-
-            sample_index = int(matching[0])
-
+        for sample_within_init in sample_indices:
             fields = physical_fields.isel(
-                **{
-                    time_dim: sample_index,
-                    leadtime_dim: 0,
-                }
+                **{time_dim: time_index, leadtime_dim: 0}
             )
 
-            # Convert to Celsius if necessary
+            # Select the same realization wherever it exists.
+            fields = Fields(
+                input=fields.input.isel(
+                    {realization_dim: sample_within_init},
+                    drop=True,
+                ) if realization_dim in fields.input.dims else fields.input,
+
+                target=fields.target.isel(
+                    {realization_dim: sample_within_init},
+                    drop=True,
+                ) if realization_dim in fields.target.dims else fields.target,
+
+                corrected=(
+                    fields.corrected.isel(
+                        {realization_dim: sample_within_init},
+                        drop=True,
+                    )
+                    if realization_dim in fields.corrected.dims
+                    else fields.corrected
+                ) if fields.corrected is not None else None,
+            )
+
             if not PHYSICAL_ANOMALIES:
                 fields = Fields(
                     input=_convert_kelvin_to_celsius(
-                        fields.input,
-                        var=s.var_fc,
+                        fields.input, var=s.var_fc
                     ),
                     target=_convert_kelvin_to_celsius(
-                        fields.target,
-                        var=s.var_an,
+                        fields.target, var=s.var_an
                     ),
                     corrected=(
                         _convert_kelvin_to_celsius(
-                            fields.corrected,
-                            var=s.var_fc,
+                            fields.corrected, var=s.var_fc
                         )
-                        if fields.corrected is not None
-                        else None
+                        if fields.corrected is not None else None
                     ),
                 )
 
             selected_samples.append((
-                sample_index,
-                init_time,
-                0,
+                time_index * n_per_init + sample_within_init,
+                pd.Timestamp(init_time),
+                sample_within_init,
                 fields,
             ))
 
     return selected_samples
+
 
 # ==========================================================
 # Plot selected fields for one leadtime
@@ -1648,6 +1350,7 @@ def plot_fields(
     output_dir = (
         OUTPUT_ROOT
         / s.output_name
+        / "plots"
         / "maps"
         / "fields"
         / space
@@ -1799,6 +1502,7 @@ def plot_aggregated(
     output_dir = (
         OUTPUT_ROOT
         / s.output_name
+        / "plots"
         / "maps"
         / "fields"
         / space
