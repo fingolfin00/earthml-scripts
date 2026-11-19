@@ -110,6 +110,7 @@ CHECKPOINT_OVERRIDES: dict[int, Path] = {
 }
 
 OVERWRITE = True
+SAVE_NORMALIZED_FIELDS = True
 
 LOG_MONTHLY = False
 
@@ -1103,8 +1104,13 @@ def infer_setting(s: Settings) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     combined_output = output_dir / "test_corrected.zarr"
+    combined_normalized_output = output_dir / "test_normalized.zarr"
 
-    if combined_output.exists() and not OVERWRITE:
+    required_outputs = [combined_output]
+    if SAVE_NORMALIZED_FIELDS:
+        required_outputs.append(combined_normalized_output)
+
+    if all(path.exists() for path in required_outputs) and not OVERWRITE:
         print(
             f"Skipping {s.output_name}: "
             f"{combined_output} already exists."
@@ -1112,6 +1118,7 @@ def infer_setting(s: Settings) -> None:
         return
 
     prediction_paths: list[tuple[int, Path]] = []
+    normalized_paths: list[tuple[int, Path]] = []
 
     for leadtime in s.leadtimes:
         leadtime = int(leadtime)
@@ -1304,9 +1311,15 @@ def infer_setting(s: Settings) -> None:
             / f"test_corrected_{leadtime}_{s.leadtime_unit}.zarr"
         )
 
-        if lead_output.exists() and OVERWRITE:
+        normalized_lead_output = lead_output.with_name(
+            f"{lead_output.stem}_normalized.zarr"
+        )
+
+        if OVERWRITE:
             import shutil
-            shutil.rmtree(lead_output)
+            for path in (lead_output, normalized_lead_output):
+                if path.exists():
+                    shutil.rmtree(path)
 
         _test(
             test_trainer=trainer,
@@ -1317,7 +1330,9 @@ def infer_setting(s: Settings) -> None:
             normalize_target=normalize_target,
             dataloader=dataloader,
             preds_store=lead_output,
+            fc_clim=datasets["x_clim"],
             an_clim=datasets["y_clim"],
+            save_normalized=SAVE_NORMALIZED_FIELDS,
             log_monthly=LOG_MONTHLY,
             latitudes=latitudes,
         )
@@ -1325,6 +1340,13 @@ def infer_setting(s: Settings) -> None:
         prediction_paths.append(
             (leadtime, lead_output)
         )
+
+        if SAVE_NORMALIZED_FIELDS:
+            if not normalized_lead_output.exists():
+                raise FileNotFoundError(
+                    f"Normalized inference output missing: {normalized_lead_output}"
+                )
+            normalized_paths.append((leadtime, normalized_lead_output))
 
         trainer.strategy.teardown()
 
@@ -1373,12 +1395,22 @@ def infer_setting(s: Settings) -> None:
         combined_output,
     )
 
+    if SAVE_NORMALIZED_FIELDS:
+        if combined_normalized_output.exists() and OVERWRITE:
+            import shutil
+            shutil.rmtree(combined_normalized_output)
+
+        combine_predictions(
+            normalized_paths,
+            combined_normalized_output,
+        )
+
 
 def main() -> None:
     settings = get_experiment_configs(
         EXPERIMENTS_ROOT,
-        var_fc=VARIABLES,
-        region_name=REGIONS,
+        var_fc=set(VARIABLES),
+        region_name=set(REGIONS),
         **FILTERS,
     )
 
