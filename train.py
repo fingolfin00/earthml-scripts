@@ -779,7 +779,11 @@ def main() -> None:
                 paths = [
                     replace(
                         s,
-                        extra_suffix_folder=name,
+                        extra_suffix_folder=(
+                            f"{s.extra_suffix_folder}_{name}".strip("_")
+                            if name
+                            else s.extra_suffix_folder
+                        ),
                     ).exp_dir
                     for name, s in ablation_settings
                 ]
@@ -806,7 +810,9 @@ def main() -> None:
                 s = replace(
                     s,
                     extra_suffix_folder=(
-                        ablation_name if ABLATIONS else s.extra_suffix_folder
+                        f"{s.extra_suffix_folder}_{ablation_name}".strip("_")
+                        if ablation_name
+                        else s.extra_suffix_folder
                     ),
                 )
 
@@ -5101,7 +5107,7 @@ def generate_ablation_settings(
 ) -> Iterator[tuple[str, Settings]]:
 
     if mode == "ofat":
-        yield "baseline", base
+        yield "", base
 
         for parameter, values in ablations.items():
             for value in values:
@@ -5146,7 +5152,7 @@ def generate_ablation_settings(
                     f"{format_ablation_value(value)}"
                 )
 
-            name = "__".join(name_parts) or "baseline"
+            name = "__".join(name_parts)
 
             yield name, s
 
